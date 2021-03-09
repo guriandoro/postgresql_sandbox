@@ -1,0 +1,173 @@
+#!/bin/bash
+
+read_variables_from_env_file() {
+  # First check if there is an env file in the pwd
+  [[ -f ./pg_sandbox.env ]] && source ./pg_sandbox.env
+  # Override with env file set by the following variable, if set
+  [[ -f ${PG_SBOX_ENV_FILE} ]] && source ${PG_SBOX_ENV_FILE}
+}
+
+set_environment_file() {
+  mkdir -p `dirname $PG_SBOX_ENV_FILE`
+  echo PG_SBOX_SANDBOX_HOME="${PG_SBOX_SANDBOX_HOME}" > $PG_SBOX_ENV_FILE
+  echo PG_SBOX_BIN="${PG_SBOX_BIN}" >> $PG_SBOX_ENV_FILE
+  echo PG_SBOX_DBNAME="${PG_SBOX_DBNAME}" >> $PG_SBOX_ENV_FILE
+  echo PG_SBOX_DIR="${PG_SBOX_DIR}" >> $PG_SBOX_ENV_FILE
+  echo PG_SBOX_DATADIR="${PG_SBOX_DATADIR}" >> $PG_SBOX_ENV_FILE
+  echo PG_SBOX_LOG="${PG_SBOX_LOG}" >> $PG_SBOX_ENV_FILE
+  echo PG_SBOX_HOST="${PG_SBOX_HOST}" >> $PG_SBOX_ENV_FILE
+  echo PG_SBOX_PORT="${PG_SBOX_PORT}" >> $PG_SBOX_ENV_FILE
+  echo PG_SBOX_USER="${PG_SBOX_USER}" >> $PG_SBOX_ENV_FILE
+}
+
+
+main() {
+  # Parse arguments and commands
+  while (( "$#" )); do
+    case "$1" in
+      -b|--bin)
+        PG_SBOX_BIN=$2
+        shift 2
+        ;;
+
+      -d|--dbname)
+        PG_SBOX_DBNAME=$2
+        shift 2
+        ;;
+
+      -D|--datadir)
+        PG_SBOX_DATADIR=$2
+        shift 2
+        ;;
+
+      -h|--host)
+        PG_SBOX_HOST=$2
+        shift 2
+        ;;
+
+      -l|--log)
+        PG_SBOX_LOG=$2
+        shift 2
+        ;;
+
+      -p|--port)
+        PG_SBOX_PORT=$2
+        shift 2
+        ;;
+
+      -U|--user)
+        PG_SBOX_USER=$2
+        shift 2
+        ;;
+
+  # Equal signs are not supported, instead use space to separate argument and value
+      *=*)
+        echo "Error: Equal sign is not supported in argument: $1" >&2
+        echo "       Separate arguments and values using a space instead." >&2
+        exit 1
+        ;;
+
+  # Print help output
+      -h|--help)
+        cat <<EOHELP
+  Usage:
+      $(basename "$0") [OPTIONS] COMMAND
+
+  Commands:
+      <TODO> -> start | stop | restart | use | init | create | destroy | setenv
+
+  Options:
+      <TODO>
+      -h, --help         print this message and exit
+  Examples:
+      <TODO>
+      
+EOHELP
+        shift 1
+        exit 0
+        ;;
+
+  # Parse commands
+      start | stop | restart | use | init | create | destroy | setenv)
+        PG_SBOX_COMMAND=$1
+        shift 1
+        break
+        ;;
+
+  # All other arguments are not valid
+      *)
+        echo "Error: Invalid argument: $1" >&2
+        exit 1
+        ;;
+
+    esac
+  done
+
+
+  if [[ "${PG_SBOX_COMMAND}" == "start" ]]; then
+    echo "Starting server..."
+    ${PG_SBOX_BIN}/pg_ctl start -D ${PG_SBOX_DATADIR} -o "-p ${PG_SBOX_PORT}" -l ${PG_SBOX_LOG}
+  fi
+
+  if [[ "${PG_SBOX_COMMAND}" == "stop" ]]; then
+    echo "Stopping server..."
+    ${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mf
+  fi
+
+  if [[ "${PG_SBOX_COMMAND}" == "restart" ]]; then
+    echo "Restarting server..."
+    ${PG_SBOX_BIN}/pg_ctl restart -D ${PG_SBOX_DATADIR} -mf
+  fi
+
+  if [[ "${PG_SBOX_COMMAND}" == "use" ]]; then
+    ${PG_SBOX_BIN}/psql -h ${PG_SBOX_HOST} -p ${PG_SBOX_PORT} -U ${PG_SBOX_USER} -d ${PG_SBOX_DBNAME} "$@"
+  fi
+
+  if [[ "${PG_SBOX_COMMAND}" == "init" ]] || [[ "${PG_SBOX_COMMAND}" == "create" ]]; then
+    echo "Creating directory..."
+    mkdir -p ${PG_SBOX_DATADIR}
+    echo "Initializing server..."
+    ${PG_SBOX_BIN}/initdb -D ${PG_SBOX_DATADIR} -U ${PG_SBOX_USER}
+  fi
+
+  if [[ "${PG_SBOX_COMMAND}" == "create" ]]; then
+    echo "Starting server..."
+    ${PG_SBOX_BIN}/pg_ctl start -D ${PG_SBOX_DATADIR} -o "-p ${PG_SBOX_PORT}" -l ${PG_SBOX_LOG}
+  fi
+
+  if [[ "${PG_SBOX_COMMAND}" == "destroy" ]]; then
+    echo "Stopping server..."
+    ${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mi
+    echo "Deleting sandbox directory..."
+    rm -rf ${PG_SBOX_DIR}
+  fi
+
+  if [[ "${PG_SBOX_COMMAND}" == "setenv" ]]; then
+    # This will create a file that has all the environment variables needed
+    # for pg_sandbox to work without having to manually set them
+    set_environment_file
+  fi
+}
+
+
+# Default values for variables
+PG_SBOX_SANDBOX_HOME="${PG_SBOX_SANDBOX_HOME:-"${HOME}/postgresql-sandboxes/"}"
+PG_SBOX_BIN="${PG_SBOX_BIN:-/usr/pgsql-13/bin/}"
+PG_SBOX_DBNAME="${PG_SBOX_DBNAME:-postgres}"
+PG_SBOX_DIR="${PG_SBOX_DIR:-"${PG_SBOX_SANDBOX_HOME}/pg13/"}"
+PG_SBOX_DATADIR="${PG_SBOX_DATADIR:-"${PG_SBOX_DIR}/data/"}"
+PG_SBOX_LOG="${PG_SBOX_LOG:-"${PG_SBOX_DATADIR}/server.log"}"
+PG_SBOX_HOST="${PG_SBOX_HOST:-127.0.0.1}"
+PG_SBOX_PORT="${PG_SBOX_PORT:-5432}"
+PG_SBOX_USER="${PG_SBOX_USER:-postgres}"
+
+# Other variables
+PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
+
+# Override default variables with variables from env file
+read_variables_from_env_file
+# Call main function
+main "$@"
+
+exit 0
+
