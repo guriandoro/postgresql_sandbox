@@ -20,6 +20,13 @@ set_environment_file() {
   echo PG_SBOX_USER="${PG_SBOX_USER}" >> $PG_SBOX_ENV_FILE
 }
 
+check_variables_defined() {
+  # At least PG_SBOX_BIN and PG_SBOX_DIR should be defined
+  [[ -z ${PG_SBOX_BIN} ]] || [[ -z ${PG_SBOX_DIR} ]] && {
+    echo "[ERROR]: At least PG_SBOX_BIN and PG_SBOX_DIR should be defined."
+    exit 1
+  }
+}
 
 main() {
   # Parse arguments and commands
@@ -55,6 +62,14 @@ main() {
         shift 2
         ;;
 
+      -s|--sandbox-dir)
+        PG_SBOX_DIR=$2
+        PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
+        PG_SBOX_DATADIR=${PG_SBOX_DIR}/data/
+        PG_SBOX_LOG=${PG_SBOX_DATADIR}/server.log
+        shift 2
+        ;;
+
       -U|--user)
         PG_SBOX_USER=$2
         shift 2
@@ -68,20 +83,46 @@ main() {
         ;;
 
   # Print help output
-      -h|--help)
+      -\?|--help)
         cat <<EOHELP
   Usage:
       $(basename "$0") [OPTIONS] COMMAND
 
   Commands:
-      <TODO> -> start | stop | restart | use | init | create | destroy | setenv
+      create             initialize the PostgreSQL instance, and start it
+      destroy            stop the PostgreSQL instance, and delete all directories
+      init               initialize the PostgreSQL instance (it does not start it)
+      run                runs the specified binary (as first argument after "run") with the other specified arguments
+      restart            restart the PostgreSQL instance
+      setenv             write variables to the environment variables file
+      start              start the PostgreSQL instance
+      stop               stop the PostgreSQL instance
+      use                run the psql client. All arguments after "use" are sent directly to psql
 
   Options:
-      <TODO>
-      -h, --help         print this message and exit
-  Examples:
-      <TODO>
-      
+      -b, --bin          PostgreSQL binary directory to use with the sandbox environment
+      -d, --dbname       database name (default: postgres)
+      -D, --datadir      data directory to use within the sandbox directory (default: \${PG_SBOX_DIR}/data)
+      -?, --help         print this message and exit
+      -h, --host         hostname or IP address to use with commands (default: 127.0.0.1)
+      -l, --log          PostgreSQL server log file (default: )
+      -p, --port         port to use with commands (default: 5432)
+      -s, --sandbox-dir  directory used as base for the needed files (including PostgreSQL data directory)
+      -U, --user         user name to use with commands (default: postgres)
+
+  Example #1:
+      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ create
+      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use
+      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use -e "SELECT 1"
+      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ destroy
+
+  Example #2:
+      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ setenv
+      cd ./pg_13/
+      $(basename "$0") create
+      $(basename "$0") use
+      $(basename "$0") destroy
+
 EOHELP
         shift 1
         exit 0
@@ -103,7 +144,10 @@ EOHELP
     esac
   done
 
+  # Check if minimum amount of defined variables is set
+  check_variables_defined
 
+  # Command execution
   if [[ "${PG_SBOX_COMMAND}" == "start" ]]; then
     echo "Starting server..."
     ${PG_SBOX_BIN}/pg_ctl start -D ${PG_SBOX_DATADIR} -o "-p ${PG_SBOX_PORT}" -l ${PG_SBOX_LOG}
@@ -152,9 +196,9 @@ EOHELP
 
 # Default values for variables
 PG_SBOX_SANDBOX_HOME="${PG_SBOX_SANDBOX_HOME:-"${HOME}/postgresql-sandboxes/"}"
-PG_SBOX_BIN="${PG_SBOX_BIN:-/usr/pgsql-13/bin/}"
+#PG_SBOX_BIN="${PG_SBOX_BIN:-/usr/pgsql-13/bin/}"
 PG_SBOX_DBNAME="${PG_SBOX_DBNAME:-postgres}"
-PG_SBOX_DIR="${PG_SBOX_DIR:-"${PG_SBOX_SANDBOX_HOME}/pg13/"}"
+#PG_SBOX_DIR="${PG_SBOX_DIR:-"${PG_SBOX_SANDBOX_HOME}/pgsb_13/"}"
 PG_SBOX_DATADIR="${PG_SBOX_DATADIR:-"${PG_SBOX_DIR}/data/"}"
 PG_SBOX_LOG="${PG_SBOX_LOG:-"${PG_SBOX_DATADIR}/server.log"}"
 PG_SBOX_HOST="${PG_SBOX_HOST:-127.0.0.1}"
@@ -166,8 +210,8 @@ PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
 
 # Override default variables with variables from env file
 read_variables_from_env_file
-# Call main function
+
+# Call main function to process arguments and run commands
 main "$@"
 
 exit 0
-
