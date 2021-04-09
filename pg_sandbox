@@ -1,12 +1,27 @@
 #!/bin/bash
 
+#######################################
+# Output arguments to STDERR.
+#######################################
+print_error() {
+  echo "[ERROR] $*" >&2
+}
+
+#######################################
+# Read default values for variables from an environment file.
+#   - If there is an environment file present in the current working directory, use it first.
+#   - If there is an environment file defined by $PG_SBOX_ENV_FILE, use it to override those values.
+#       $PG_SBOX_ENV_FILE is defined as ${PG_SBOX_DIR}/pg_sandbox.env by default.
+#######################################
 read_variables_from_env_file() {
-  # First check if there is an env file in the pwd
   [[ -f ./pg_sandbox.env ]] && source ./pg_sandbox.env
-  # Override with env file set by the following variable, if set
   [[ -f ${PG_SBOX_ENV_FILE} ]] && source ${PG_SBOX_ENV_FILE}
 }
 
+#######################################
+# Write values for variables to an environment file.
+#   $PG_SBOX_ENV_FILE is defined as ${PG_SBOX_DIR}/pg_sandbox.env by default.
+#######################################
 set_environment_file() {
   mkdir -p `dirname $PG_SBOX_ENV_FILE`
   echo PG_SBOX_SANDBOX_HOME="${PG_SBOX_SANDBOX_HOME}" > $PG_SBOX_ENV_FILE
@@ -20,130 +35,68 @@ set_environment_file() {
   echo PG_SBOX_USER="${PG_SBOX_USER}" >> $PG_SBOX_ENV_FILE
 }
 
+#######################################
+# Check if the minimum variables needed are defined, or exit with error.
+#######################################
 check_variables_defined() {
   # At least PG_SBOX_BIN and PG_SBOX_DIR should be defined
   [[ -z ${PG_SBOX_BIN} ]] || [[ -z ${PG_SBOX_DIR} ]] && {
-    echo "[ERROR]: At least PG_SBOX_BIN and PG_SBOX_DIR should be defined."
+    print_error "At least PG_SBOX_BIN (-b|--bin) and PG_SBOX_DIR (-s|--sandbox-dir) should be defined"
+    print_error "For usage see $(basename "$0") --help"
     exit 1
   }
 }
 
-main() {
-  # Parse arguments and commands
-  while (( "$#" )); do
-    case "$1" in
-      -b|--bin)
-        PG_SBOX_BIN=$2
-        shift 2
-        ;;
+#######################################
+# Print help message.
+#######################################
+print_help() {
+  cat <<EOHELP
+Usage:
+    $(basename "$0") [OPTIONS] COMMAND
 
-      -d|--dbname)
-        PG_SBOX_DBNAME=$2
-        shift 2
-        ;;
+Commands:
+    create             initialize the PostgreSQL instance, and start it
+    destroy            stop the PostgreSQL instance, and delete all directories
+    init               initialize the PostgreSQL instance (it does not start it)
+    run                runs the specified binary (as first argument after "run") with the other specified arguments
+    restart            restart the PostgreSQL instance
+    setenv             write variables to the environment variables file
+    start              start the PostgreSQL instance
+    stop               stop the PostgreSQL instance
+    use                run the psql client. All arguments after "use" are sent directly to psql
 
-      -D|--datadir)
-        PG_SBOX_DATADIR=$2
-        shift 2
-        ;;
+Options:
+    -b, --bin          PostgreSQL binary directory to use with the sandbox environment
+    -d, --dbname       database name (default: postgres)
+    -D, --datadir      data directory to use within the sandbox directory (default: \${PG_SBOX_DIR}/data)
+    -?, --help         print this message and exit
+    -h, --host         hostname or IP address to use with commands (default: 127.0.0.1)
+    -l, --log          PostgreSQL server log file (default: )
+    -p, --port         port to use with commands (default: 5432)
+    -s, --sandbox-dir  directory used as base for the needed files (including PostgreSQL data directory)
+    -U, --user         user name to use with commands (default: postgres)
 
-      -h|--host)
-        PG_SBOX_HOST=$2
-        shift 2
-        ;;
+Example #1:
+    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ create
+    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use
+    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use -e "SELECT 1"
+    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ destroy
 
-      -l|--log)
-        PG_SBOX_LOG=$2
-        shift 2
-        ;;
-
-      -p|--port)
-        PG_SBOX_PORT=$2
-        shift 2
-        ;;
-
-      -s|--sandbox-dir)
-        PG_SBOX_DIR=$2
-        PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
-        PG_SBOX_DATADIR=${PG_SBOX_DIR}/data/
-        PG_SBOX_LOG=${PG_SBOX_DATADIR}/server.log
-        shift 2
-        ;;
-
-      -U|--user)
-        PG_SBOX_USER=$2
-        shift 2
-        ;;
-
-  # Equal signs are not supported, instead use space to separate argument and value
-      *=*)
-        echo "Error: Equal sign is not supported in argument: $1" >&2
-        echo "       Separate arguments and values using a space instead." >&2
-        exit 1
-        ;;
-
-  # Print help output
-      -\?|--help)
-        cat <<EOHELP
-  Usage:
-      $(basename "$0") [OPTIONS] COMMAND
-
-  Commands:
-      create             initialize the PostgreSQL instance, and start it
-      destroy            stop the PostgreSQL instance, and delete all directories
-      init               initialize the PostgreSQL instance (it does not start it)
-      run                runs the specified binary (as first argument after "run") with the other specified arguments
-      restart            restart the PostgreSQL instance
-      setenv             write variables to the environment variables file
-      start              start the PostgreSQL instance
-      stop               stop the PostgreSQL instance
-      use                run the psql client. All arguments after "use" are sent directly to psql
-
-  Options:
-      -b, --bin          PostgreSQL binary directory to use with the sandbox environment
-      -d, --dbname       database name (default: postgres)
-      -D, --datadir      data directory to use within the sandbox directory (default: \${PG_SBOX_DIR}/data)
-      -?, --help         print this message and exit
-      -h, --host         hostname or IP address to use with commands (default: 127.0.0.1)
-      -l, --log          PostgreSQL server log file (default: )
-      -p, --port         port to use with commands (default: 5432)
-      -s, --sandbox-dir  directory used as base for the needed files (including PostgreSQL data directory)
-      -U, --user         user name to use with commands (default: postgres)
-
-  Example #1:
-      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ create
-      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use
-      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use -e "SELECT 1"
-      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ destroy
-
-  Example #2:
-      $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ setenv
-      cd ./pg_13/
-      $(basename "$0") create
-      $(basename "$0") use
-      $(basename "$0") destroy
+Example #2:
+    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ setenv
+    cd ./pg_13/
+    $(basename "$0") create
+    $(basename "$0") use
+    $(basename "$0") stop
 
 EOHELP
-        shift 1
-        exit 0
-        ;;
+}
 
-  # Parse commands
-      start | stop | restart | use | init | create | destroy | setenv)
-        PG_SBOX_COMMAND=$1
-        shift 1
-        break
-        ;;
-
-  # All other arguments are not valid
-      *)
-        echo "Error: Invalid argument: $1" >&2
-        exit 1
-        ;;
-
-    esac
-  done
-
+#######################################
+# Main function to run commands after being parsed.
+#######################################
+run_commands() {
   # Check if minimum amount of defined variables is set
   check_variables_defined
 
@@ -193,25 +146,93 @@ EOHELP
   fi
 }
 
+# Some needed defaults, that can be overridden
+PG_SBOX_DBNAME='postgres'
+PG_SBOX_HOST='127.0.0.1'
+PG_SBOX_PORT=5432
+PG_SBOX_USER='postgres'
 
-# Default values for variables
-PG_SBOX_SANDBOX_HOME="${PG_SBOX_SANDBOX_HOME:-"${HOME}/postgresql-sandboxes/"}"
-#PG_SBOX_BIN="${PG_SBOX_BIN:-/usr/pgsql-13/bin/}"
-PG_SBOX_DBNAME="${PG_SBOX_DBNAME:-postgres}"
-#PG_SBOX_DIR="${PG_SBOX_DIR:-"${PG_SBOX_SANDBOX_HOME}/pgsb_13/"}"
-PG_SBOX_DATADIR="${PG_SBOX_DATADIR:-"${PG_SBOX_DIR}/data/"}"
-PG_SBOX_LOG="${PG_SBOX_LOG:-"${PG_SBOX_DATADIR}/server.log"}"
-PG_SBOX_HOST="${PG_SBOX_HOST:-127.0.0.1}"
-PG_SBOX_PORT="${PG_SBOX_PORT:-5432}"
-PG_SBOX_USER="${PG_SBOX_USER:-postgres}"
-
-# Other variables
-PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
-
-# Override default variables with variables from env file
+# Use variable values from env file, if present
 read_variables_from_env_file
 
-# Call main function to process arguments and run commands
-main "$@"
+# Parse arguments and commands (this may override some values defined in env files!)
+while (( "$#" )); do
+  case "$1" in
+    -b|--bin)
+      PG_SBOX_BIN=$2
+      shift 2
+      ;;
+
+    -d|--dbname)
+      PG_SBOX_DBNAME=$2
+      shift 2
+      ;;
+
+    -D|--datadir)
+      PG_SBOX_DATADIR=$2
+      shift 2
+      ;;
+
+    -h|--host)
+      PG_SBOX_HOST=$2
+      shift 2
+      ;;
+
+    -l|--log)
+      PG_SBOX_LOG=$2
+      shift 2
+      ;;
+
+    -p|--port)
+      PG_SBOX_PORT=$2
+      shift 2
+      ;;
+
+    -s|--sandbox-dir)
+      PG_SBOX_DIR=$2
+      PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
+      PG_SBOX_DATADIR=${PG_SBOX_DIR}/data/
+      PG_SBOX_LOG=${PG_SBOX_DATADIR}/server.log
+      shift 2
+      ;;
+
+    -U|--user)
+      PG_SBOX_USER=$2
+      shift 2
+      ;;
+
+# Equal signs are not supported, instead use space to separate argument and value
+    *=*)
+      print_error "Equal sign is not supported in argument: $1"
+      print_error "Separate arguments and values using a space instead."
+      exit 1
+      ;;
+
+# Print help output
+    -\?|--help)
+      print_help
+      shift 1
+      exit 0
+      ;;
+
+# Parse commands
+    start | stop | restart | use | init | create | destroy | setenv)
+      PG_SBOX_COMMAND=$1
+      shift 1
+      break
+      ;;
+
+# All other arguments are not valid
+    *)
+      print_error "Invalid argument: $1"
+      exit 1
+      ;;
+
+  esac
+done
+
+# Call main function to run commands
+run_commands "$@"
 
 exit 0
+
