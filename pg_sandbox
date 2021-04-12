@@ -16,14 +16,25 @@ print_error() {
 read_variables_from_env_file() {
   [[ -f ./pg_sandbox.env ]] && source ./pg_sandbox.env
   [[ -f ${PG_SBOX_ENV_FILE} ]] && source ${PG_SBOX_ENV_FILE}
+
+  check_absolute_path
 }
 
 #######################################
 # Write values for variables to an environment file.
 #   $PG_SBOX_ENV_FILE is defined as ${PG_SBOX_DIR}/pg_sandbox.env by default.
+# There is one caveat when relative paths are used, since this file will be written to in the
+# $PG_SBOX_ENV_FILE top level directory, which is $PG_SBOX_DIR, and the relative path may not
+# apply anymore once these variables are read. To workaround this, we transform them to absolute
+# paths instead.
 #######################################
 set_environment_file() {
-  mkdir -p `dirname $PG_SBOX_ENV_FILE`
+  if [ -f "${PG_SBOX_ENV_FILE}" ]; then
+    print_error "There is already a pg_sandbox.env file in ""${PG_SBOX_DIR}"
+    print_error "To avoid potentially overriding a previous sandbox environment, we will now exit."
+    exit 1
+  fi
+  mkdir -p "${PG_SBOX_DIR}"
   echo PG_SBOX_BIN="${PG_SBOX_BIN}" >> $PG_SBOX_ENV_FILE
   echo PG_SBOX_DBNAME="${PG_SBOX_DBNAME}" >> $PG_SBOX_ENV_FILE
   echo PG_SBOX_DIR="${PG_SBOX_DIR}" >> $PG_SBOX_ENV_FILE
@@ -35,6 +46,19 @@ set_environment_file() {
 }
 
 #######################################
+# If $PG_SBOX_DIR is a relative path, change it to an absolute path.
+#######################################
+check_absolute_path() {
+  # If relative path is "./" or "."
+  if [[ ${PG_SBOX_DIR} == "./" ]] || [[ ${PG_SBOX_DIR} == "." ]]; then
+    PG_SBOX_DIR=`pwd`
+  # Else if relative path is "./path/to/dir" 
+  elif [[ ${PG_SBOX_DIR} =~ ^./(.*) ]]; then
+    PG_SBOX_DIR=`pwd`"/""${BASH_REMATCH[1]}"
+  fi
+}
+  
+#######################################
 # Check if the minimum variables needed are defined, or exit with error.
 #######################################
 check_variables_defined() {
@@ -44,6 +68,8 @@ check_variables_defined() {
     print_error "For usage see $(basename "$0") --help"
     exit 1
   }
+
+  check_absolute_path
 }
 
 #######################################
@@ -189,6 +215,7 @@ while (( "$#" )); do
 
     -s|--sandbox-dir)
       PG_SBOX_DIR=$2
+      check_absolute_path
       PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
       PG_SBOX_DATADIR=${PG_SBOX_DIR}/data/
       PG_SBOX_LOG=${PG_SBOX_DATADIR}/server.log
