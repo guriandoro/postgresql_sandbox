@@ -78,7 +78,7 @@ set_environment_file() {
 print_help() {
   cat <<EOHELP
 Usage:
-    $(basename "$0") [OPTIONS] COMMAND
+    $(basename "$0") [OPTIONS] COMMAND [OTHER_OPTIONS]
 
 Commands:
     create             initialize the PostgreSQL instance, and start it
@@ -92,9 +92,11 @@ Commands:
     use                run the psql client. All arguments after "use" are sent directly to psql
 
 Options:
+    -a, --add-dsn      Add DSN (host, port and user) to the binary used with the "run" command
     -b, --bin          PostgreSQL binary directory to use with the sandbox environment
     -d, --dbname       database name (default: postgres)
     -D, --datadir      data directory to use within the sandbox directory (default: \${PG_SBOX_DIR}/data)
+    -f, --force        don't ask when removing the sandbox directory
     -?, --help         print this message and exit
     -h, --host         hostname or IP address to use with commands (default: 127.0.0.1)
     -l, --log          PostgreSQL server log file (default: )
@@ -105,14 +107,15 @@ Options:
 Example #1:
     $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ create
     $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use
-    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use -e "SELECT 1"
+    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use -e "SELECT * FROM test.t1 LIMIT 10"
     $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ destroy
 
 Example #2:
     $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ setenv
     cd ./pg_13/
     $(basename "$0") create
-    $(basename "$0") use
+    $(basename "$0") -a run createdb test
+    $(basename "$0") use -d test
     $(basename "$0") stop
 
 EOHELP
@@ -122,7 +125,7 @@ EOHELP
 # Main function to run commands after being parsed.
 #######################################
 run_commands() {
-  # Check if minimum amount of defined variables is set
+  # Check if the minimum needed amount variables are set
   check_variables_defined
 
   # Command execution
@@ -160,8 +163,14 @@ run_commands() {
   if [[ "${PG_SBOX_COMMAND}" == "destroy" ]]; then
     echo "Stopping server..."
     ${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mi
-    echo "Deleting sandbox directory..."
-    rm -rf ${PG_SBOX_DIR}
+    echo -n "Do you want to remove ${PG_SBOX_DIR}? [y/N] "
+    read do_remove
+    if [[ "${do_remove}" == "y" ]] || [[ "${do_remove}" == "Y" ]]; then
+      echo "Deleting sandbox directory..."
+      rm -rf ${PG_SBOX_DIR}
+    else
+      echo "Skipping sandbox directory removal."
+    fi
   fi
 
   if [[ "${PG_SBOX_COMMAND}" == "setenv" ]]; then
@@ -169,9 +178,22 @@ run_commands() {
     # for pg_sandbox to work without having to manually set them
     set_environment_file
   fi
+
+  if [[ "${PG_SBOX_COMMAND}" == "run" ]]; then
+    # This will run the first argument as binary (under the defined PG_SBOX_BIN directory)
+    # It will pass all other arguments as arguments for that binary
+    PG_SBOX_EXEC="${1}"
+    shift 1
+    if [[ "${PG_SBOX_ADD_DSN}" -eq 1 ]]; then
+      "${PG_SBOX_BIN}"/"${PG_SBOX_EXEC}" -h "${PG_SBOX_HOST}" -p "${PG_SBOX_PORT}" -U "${PG_SBOX_USER}" $@
+    else
+      "${PG_SBOX_BIN}"/"${PG_SBOX_EXEC}" $@
+    fi
+  fi
 }
 
 # Some needed defaults, that can be overridden
+PG_SBOX_DATADIR='data'
 PG_SBOX_DBNAME='postgres'
 PG_SBOX_HOST='127.0.0.1'
 PG_SBOX_PORT=5432
@@ -183,6 +205,11 @@ read_variables_from_env_file
 # Parse arguments and commands (this may override some values defined in env files!)
 while (( "$#" )); do
   case "$1" in
+    -a|--add-dsn)
+      PG_SBOX_ADD_DSN=1
+      shift 1
+      ;;
+
     -b|--bin)
       PG_SBOX_BIN=$2
       shift 2
@@ -194,7 +221,7 @@ while (( "$#" )); do
       ;;
 
     -D|--datadir)
-      PG_SBOX_DATADIR=$2
+      PG_SBOX_DATADIR=${PG_SBOX_DIR}/$2
       shift 2
       ;;
 
@@ -204,6 +231,9 @@ while (( "$#" )); do
       ;;
 
     -l|--log)
+      #TODO: check bug with paths
+      #      this will happen with all, so we'll need to make it using variables for all
+      #      and make it so it is immutable, no matter the order in which they are used
       PG_SBOX_LOG=$2
       shift 2
       ;;
@@ -217,7 +247,7 @@ while (( "$#" )); do
       PG_SBOX_DIR=$2
       check_absolute_path
       PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
-      PG_SBOX_DATADIR=${PG_SBOX_DIR}/data/
+      PG_SBOX_DATADIR=${PG_SBOX_DIR}/${PG_SBOX_DATADIR}/
       PG_SBOX_LOG=${PG_SBOX_DATADIR}/server.log
       shift 2
       ;;
@@ -242,7 +272,7 @@ while (( "$#" )); do
       ;;
 
 # Parse commands
-    start | stop | restart | use | init | create | destroy | setenv)
+    start | stop | restart | run | use | init | create | destroy | setenv)
       PG_SBOX_COMMAND=$1
       shift 1
       break
