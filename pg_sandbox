@@ -99,7 +99,7 @@ Options:
     -f, --force        don't ask when removing the sandbox directory
     -?, --help         print this message and exit
     -h, --host         hostname or IP address to use with commands (default: 127.0.0.1)
-    -l, --log          PostgreSQL server log file (default: )
+    -l, --log          PostgreSQL server log file (default: \${PG_SBOX_DATADIR}/server.log)
     -p, --port         port to use with commands (default: 5432)
     -s, --sandbox-dir  directory used as base for the needed files (including PostgreSQL data directory)
     -U, --user         user name to use with commands (default: postgres)
