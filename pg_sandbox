@@ -167,7 +167,7 @@ run_commands() {
     ${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mi
     if [[ "${PG_SBOX_FORCE}" -eq 1 ]]; then
       echo "Deleting sandbox directory..."
-      rm -rf ${PG_SBOX_DIR}      
+      rm -rf ${PG_SBOX_DIR}
     else
       echo -n "Do you want to remove ${PG_SBOX_DIR}? [y/N] "
       read do_remove
