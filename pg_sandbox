@@ -81,6 +81,7 @@ Usage:
     $(basename "$0") [OPTIONS] COMMAND [OTHER_OPTIONS]
 
 Commands:
+    build              compile PostgreSQL for the given major.minor version (as first argument after "build")
     create             initialize the PostgreSQL instance, and start it
     destroy            stop the PostgreSQL instance, and delete all directories
     init               initialize the PostgreSQL instance (it does not start it)
@@ -125,6 +126,52 @@ EOHELP
 # Main function to run commands after being parsed.
 #######################################
 run_commands() {
+  # Build command execution (no arguments are checked)
+  # First argument should be major.minor version to be built
+  if [[ "${PG_SBOX_COMMAND}" == "build" ]]; then
+    echo "Building PostgreSQL..."
+    mkdir /tmp/pg_src/ && cd /tmp/pg_src/
+    mkdir -p /tmp/opt/postgresql/
+    PG_VER=$1
+    echo "Downloading source..."
+    curl -s -LO https://ftp.postgresql.org/pub/source/v${PG_VER}/postgresql-${PG_VER}.tar.gz
+    tar xzf postgresql-${PG_VER}.tar.gz
+    cd postgresql-${PG_VER}
+    echo "Running configure script..."
+    ./configure --prefix="/tmp/opt/postgresql/${PG_VER}/" > /tmp/pg_sandbox_build_configure.out
+    echo "Compiling source..."
+    make -j8 > /tmp/pg_sandbox_build_make.out
+    echo "Installing source..."
+    make install > /tmp/pg_sandbox_build_install.out
+    cd contrib
+    echo "Compiling contrib packages..."
+    make -j8 > /tmp/pg_sandbox_build_contrib_make.out
+    echo "Installing contrib packages..."
+    make install > /tmp/pg_sandbox_build_contrib_install.out
+    echo "Binaries installed in /tmp/opt/postgresql/${PG_VER}"
+    exit 0
+  fi
+
+  # Generate pg_gather report command execution (no arguments are checked)
+  # First argument should be binary to use, second should be out.txt filename in pwd
+  # It requires pg_gather project to be accesible in ~/src/
+  if [[ "${PG_SBOX_COMMAND}" == "report" ]]; then
+    echo "Creating temporary sandbox in port 23999..."
+    pg_sandbox -b ${1} -s ./gathertmp/ -p 23999 setenv
+    cd gathertmp/
+    pg_sandbox create
+    cp ../${2} ./out.txt
+    echo "Importing data from ${2}..."
+    sed -e '/^Pager/d; /^Tuples/d; /^Output/d; /^SELECT pg_sleep/d; /^PREPARE/d; /^\s*$/d' out.txt | pg_sandbox use -f ~/src/pg_gather/gather_schema.sql -f - > /tmp/pg_sandbox_report_gather.out
+    echo "Generating GatherReport.html..."
+    pg_sandbox use -X -f ~/src/pg_gather/gather_report.sql > ../GatherReport.html
+    #pwd
+    #ls -l
+    echo "Destroying temporary sandbox..."
+    pg_sandbox -f destroy
+    exit 0
+  fi
+
   # Check if the minimum needed amount variables are set
   check_variables_defined
 
@@ -284,7 +331,7 @@ while (( "$#" )); do
       ;;
 
 # Parse commands
-    start | stop | restart | run | use | init | create | destroy | setenv)
+    start | stop | restart | run | use | init | create | destroy | setenv | build | report)
       PG_SBOX_COMMAND=$1
       shift 1
       break
