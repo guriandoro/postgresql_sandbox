@@ -691,7 +691,7 @@ if __name__ == "__main__":
     pgs_command = args[1]
     pgserr.print_debug("Main command: ", pgs_command)
 
-    command_list = ['build','deploy','destroy','help', 'report', 'restart','run','setenv','start','status','stop','use']
+    command_list = ['build','deploy','destroy','help', '--help', '-h', 'report', 'restart','run','setenv','start','status','stop','use']
 
     if pgs_command not in command_list:
         pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND, pgserr.ERR_INCORRECT_COMMAND_MESSAGE)
@@ -737,7 +737,7 @@ if __name__ == "__main__":
     elif pgs_command == "destroy":
         pgserr.print_debug("Executing destroy")
         exec_destroy()
-    elif pgs_command == "help":
+    elif pgs_command == "help" or pgs_command == "--help" or pgs_command == "-h":
         pgserr.print_debug("Executing help")
         pgshlp.print_help()
     elif pgs_command == "report":
