@@ -1,353 +1,774 @@
-#!/bin/bash
+#!/usr/bin/python3
 
-#######################################
-# Output arguments to STDERR.
-#######################################
-print_error() {
-  echo "Error: $*" >&2
-}
+import sys
+import getopt
+import os
+import json
+import stat
+import shutil
+import urllib.request
+import socket
 
-#######################################
-# If $PG_SBOX_DIR is a relative path, change it to an absolute path.
-#######################################
-check_absolute_path() {
-  # If relative path is "./" or "."
-  if [[ ${PG_SBOX_DIR} == "./" ]] || [[ ${PG_SBOX_DIR} == "." ]]; then
-    PG_SBOX_DIR=`pwd`
-  # Else if relative path is "./path/to/dir"
-  elif [[ ${PG_SBOX_DIR} =~ ^./(.*) ]]; then
-    PG_SBOX_DIR=`pwd`"/""${BASH_REMATCH[1]}"
-  fi
-}
+import pg_sandbox_errors as pgserr
+import pg_sandbox_help as pgshlp
 
-#######################################
-# Check if the minimum variables needed are defined, or exit with error.
-#######################################
-check_variables_defined() {
-  # At least PG_SBOX_BIN and PG_SBOX_DIR should be defined
-  [[ -z ${PG_SBOX_BIN} ]] || [[ -z ${PG_SBOX_DIR} ]] && {
-    print_error "At least PG_SBOX_BIN (-b|--bin) and PG_SBOX_DIR (-s|--sandbox-dir) should be defined"
-    print_error "For usage see $(basename "$0") --help"
-    exit 1
-  }
+from subprocess import PIPE, run
 
-  check_absolute_path
-}
+# Global variables
+global pgs_bin, pgs_dbname, pgs_datadir, pgs_force, pgs_log, pgs_host, pgs_port, pgs_sandbox_dir, pgs_user
 
-#######################################
-# Read default values for variables from an environment file.
-#   - If there is an environment file present in the current working directory, use it first.
-#   - If there is an environment file defined by $PG_SBOX_ENV_FILE, use it to override those values.
-#       $PG_SBOX_ENV_FILE is defined as ${PG_SBOX_DIR}/pg_sandbox.env by default.
-#######################################
-read_variables_from_env_file() {
-  [[ -f ./pg_sandbox.env ]] && source ./pg_sandbox.env
-  [[ -f ${PG_SBOX_ENV_FILE} ]] && source ${PG_SBOX_ENV_FILE}
+# Constants
+PGS_ROOT_DIR = "~/postgresql-sandboxes/"
+PGS_BIN_DIR = "/opt/postgresql/"
+PGS_ENV_FILE = "pg_sandbox.env"
+PGS_PG_GATHER_DIR = "~/src/support-snippets/postgresql/pg_gather/"
+PGS_BUILD_DIR = "/tmp/postgresql-sandbox-build/"
 
-  check_absolute_path
-}
+# Functions
+def set_defaults():
+    globals()["pgs_no_dsn"] = 0
+    globals()["pgs_dbname"] = "postgres"
+    globals()["pgs_datadir"] = "data"
+    globals()["pgs_log"] = "server.log"
+    globals()["pgs_host"] = "127.0.0.1"
+    globals()["pgs_port"] = "65432"
+    globals()["pgs_user"] = "postgres"
+    globals()["pgs_help"] = 0
+    globals()["pgs_force"] = 0
 
-#######################################
-# Write values for variables to an environment file.
-#   $PG_SBOX_ENV_FILE is defined as ${PG_SBOX_DIR}/pg_sandbox.env by default.
-# There is one caveat when relative paths are used, since this file will be written to in the
-# $PG_SBOX_ENV_FILE top level directory, which is $PG_SBOX_DIR, and the relative path may not
-# apply anymore once these variables are read. To workaround this, we transform them to absolute
-# paths instead.
-#######################################
-set_environment_file() {
-  if [ -f "${PG_SBOX_ENV_FILE}" ]; then
-    print_error "There is already a pg_sandbox.env file in ""${PG_SBOX_DIR}"
-    print_error "To avoid potentially overriding a previous sandbox environment, we will now exit."
-    exit 1
-  fi
-  mkdir -p "${PG_SBOX_DIR}"
-  echo PG_SBOX_BIN="${PG_SBOX_BIN}" >> $PG_SBOX_ENV_FILE
-  echo PG_SBOX_DBNAME="${PG_SBOX_DBNAME}" >> $PG_SBOX_ENV_FILE
-  echo PG_SBOX_DIR="${PG_SBOX_DIR}" >> $PG_SBOX_ENV_FILE
-  echo PG_SBOX_DATADIR="${PG_SBOX_DATADIR}" >> $PG_SBOX_ENV_FILE
-  echo PG_SBOX_LOG="${PG_SBOX_LOG}" >> $PG_SBOX_ENV_FILE
-  echo PG_SBOX_HOST="${PG_SBOX_HOST}" >> $PG_SBOX_ENV_FILE
-  echo PG_SBOX_PORT="${PG_SBOX_PORT}" >> $PG_SBOX_ENV_FILE
-  echo PG_SBOX_USER="${PG_SBOX_USER}" >> $PG_SBOX_ENV_FILE
-}
 
-#######################################
-# Print help message.
-#######################################
-print_help() {
-  cat <<EOHELP
-Usage:
-    $(basename "$0") [OPTIONS] COMMAND [OTHER_OPTIONS]
+def read_env():
+    if os.path.isfile(PGS_ENV_FILE):
+        with open(PGS_ENV_FILE) as file:
+            data = json.load(file)
+            globals()["pgs_bin"] = data["PGS_BIN"]
+            globals()["pgs_dbname"] = data["PGS_DBNAME"]
+            globals()["pgs_datadir"] = data["PGS_DATADIR"]
+            globals()["pgs_log"] = data["PGS_LOG"]
+            globals()["pgs_host"] = data["PGS_HOST"]
+            globals()["pgs_port"] = data["PGS_PORT"]
+            globals()["pgs_sandbox_dir"] = data["PGS_SANDBOX_DIR"]
+            globals()["pgs_user"] = data["PGS_USER"]
+            file.close()
 
-Commands:
-    build              compile PostgreSQL for the given major.minor version (as first argument after "build")
-    create             initialize the PostgreSQL instance, and start it
-    destroy            stop the PostgreSQL instance, and delete all directories
-    init               initialize the PostgreSQL instance (it does not start it)
-    run                runs the specified binary (as first argument after "run") with the other specified arguments
-    restart            restart the PostgreSQL instance
-    setenv             write variables to the environment variables file
-    start              start the PostgreSQL instance
-    stop               stop the PostgreSQL instance
-    use                run the psql client. All arguments after "use" are sent directly to psql
 
-Options:
-    -a, --add-dsn      Add DSN (host, port and user) to the binary used with the "run" command
-    -b, --bin          PostgreSQL binary directory to use with the sandbox environment
-    -d, --dbname       database name (default: postgres)
-    -D, --datadir      data directory to use within the sandbox directory (default: \${PG_SBOX_DIR}/data)
-    -f, --force        don't ask when removing the sandbox directory
-    -?, --help         print this message and exit
-    -h, --host         hostname or IP address to use with commands (default: 127.0.0.1)
-    -l, --log          PostgreSQL server log file (default: \${PG_SBOX_DATADIR}/server.log)
-    -p, --port         port to use with commands (default: 5432)
-    -s, --sandbox-dir  directory used as base for the needed files (including PostgreSQL data directory)
-    -U, --user         user name to use with commands (default: postgres)
+def write_env(dest_file):
+    data = {
+        "PGS_BIN": globals()["pgs_bin"],
+        "PGS_DBNAME": globals()["pgs_dbname"],
+        "PGS_DATADIR": globals()["pgs_datadir"],
+        "PGS_LOG": globals()["pgs_log"],
+        "PGS_HOST": globals()["pgs_host"],
+        "PGS_PORT": globals()["pgs_port"],
+        "PGS_SANDBOX_DIR": globals()["pgs_sandbox_dir"],
+        "PGS_USER": globals()["pgs_user"]
+    }
 
-Example #1:
-    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ create
-    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use
-    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ use -e "SELECT * FROM test.t1 LIMIT 10"
-    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ destroy
+    try:
+        with open(dest_file, "w") as file:
+            json.dump(data, file, indent=0)
+    except Exception as e:
+        pgserr.print_and_exit(pgserr.ERR_GENERIC_ERROR, e.message)
 
-Example #2:
-    $(basename "$0") -b /opt/postgresql/13/bin -s ./pg_13/ setenv
-    cd ./pg_13/
-    $(basename "$0") create
-    $(basename "$0") -a run createdb test
-    $(basename "$0") use -d test
-    $(basename "$0") stop
 
-EOHELP
-}
+def check_compulsory_global_vars(vars):
+    for var in vars:
+        try: 
+            globals()[var]
+        except KeyError:
+            pgserr.print_error_and_exit(pgserr.ERR_VAR_NOT_DEFINED, var+" not defined. Please check usage with the 'help' command.")
 
-#######################################
-# Main function to run commands after being parsed.
-#######################################
-run_commands() {
-  # Build command execution (no arguments are checked)
-  # First argument should be major.minor version to be built
-  if [[ "${PG_SBOX_COMMAND}" == "build" ]]; then
-    echo "Building PostgreSQL..."
-    mkdir /tmp/pg_src/ && cd /tmp/pg_src/
-    mkdir -p /tmp/opt/postgresql/
-    PG_VER=$1
-    echo "Downloading source..."
-    curl -s -LO https://ftp.postgresql.org/pub/source/v${PG_VER}/postgresql-${PG_VER}.tar.gz
-    tar xzf postgresql-${PG_VER}.tar.gz
-    cd postgresql-${PG_VER}
-    echo "Running configure script..."
-    ./configure --prefix="/tmp/opt/postgresql/${PG_VER}/" > /tmp/pg_sandbox_build_configure.out
-    echo "Compiling source..."
-    make -j8 > /tmp/pg_sandbox_build_make.out
-    echo "Installing source..."
-    make install > /tmp/pg_sandbox_build_install.out
-    cd contrib
-    echo "Compiling contrib packages..."
-    make -j8 > /tmp/pg_sandbox_build_contrib_make.out
-    echo "Installing contrib packages..."
-    make install > /tmp/pg_sandbox_build_contrib_install.out
-    echo "Binaries installed in /tmp/opt/postgresql/${PG_VER}"
-    exit 0
-  fi
 
-  # Generate pg_gather report command execution (no arguments are checked)
-  # First argument should be binary to use, second should be out.txt filename in pwd
-  # It requires pg_gather project to be accesible in ~/src/
-  if [[ "${PG_SBOX_COMMAND}" == "report" ]]; then
-    echo "Creating temporary sandbox in port 23999..."
-    pg_sandbox -b ${1} -s ./gathertmp/ -p 23999 setenv
-    cd gathertmp/
-    pg_sandbox create
-    cp ../${2} ./out.txt
-    echo "Importing data from ${2}..."
-    sed -e '/^Pager/d; /^Tuples/d; /^Output/d; /^SELECT pg_sleep/d; /^PREPARE/d; /^\s*$/d' out.txt | pg_sandbox use -f ~/src/pg_gather/gather_schema.sql -f - > /tmp/pg_sandbox_report_gather.out
-    echo "Generating GatherReport.html..."
-    pg_sandbox use -X -f ~/src/pg_gather/gather_report.sql > ../GatherReport.html
-    #pwd
-    #ls -l
-    echo "Destroying temporary sandbox..."
-    pg_sandbox -f destroy
-    exit 0
-  fi
+def get_binary_path(bin_name, root_path):
+    # Searches root_path for a file named bin_name and returns root_path/.../bin_name
+    bin_path = ""
+    for root, dirs, files in os.walk(root_path):
+        for file in files:
+            if file == bin_name:
+                bin_path = os.path.join(root, file)
+                return bin_path
+    if bin_path == "":
+        pgserr.print_error(bin_name+" binary not found in '"+root_path+"' directory.")
+        return pgserr.ERR_GENERIC_ERROR
 
-  # Check if the minimum needed amount variables are set
-  check_variables_defined
+def get_latest_binary_from_default_path(bin_name, root_path):
+    # Searches root_path for a file named bin_name in the directory with greatest version possible
+    bin_path = ""
+    sorted_files = os.listdir(root_path)
+    sorted_files.sort(reverse=True)
+    for file in sorted_files:
+        if os.path.isdir(os.path.join(root_path,file)):
+            for root_j, dirs_j, files_j in os.walk(os.path.join(root_path,file)):
+                for file_j in files_j:
+                    if file_j == bin_name:
+                        bin_path = os.path.join(root_path,file)
+                        return bin_path
 
-  # Command execution
-  if [[ "${PG_SBOX_COMMAND}" == "start" ]]; then
-    echo "Starting server..."
-    ${PG_SBOX_BIN}/pg_ctl start -D ${PG_SBOX_DATADIR} -o "-p ${PG_SBOX_PORT}" -l ${PG_SBOX_LOG}
-  fi
+    if bin_path == "":
+        pgserr.print_error(bin_name+" binary not found in '"+root_path+"' directory. Use -b to point to a valid PostgreSQL binary directory.")
+        return pgserr.ERR_GENERIC_ERROR
 
-  if [[ "${PG_SBOX_COMMAND}" == "stop" ]]; then
-    echo "Stopping server..."
-    ${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mf
-  fi
 
-  if [[ "${PG_SBOX_COMMAND}" == "restart" ]]; then
-    echo "Restarting server..."
-    #${PG_SBOX_BIN}/pg_ctl restart -D ${PG_SBOX_DATADIR} -mf
-    ${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mf
-    ${PG_SBOX_BIN}/pg_ctl start -D ${PG_SBOX_DATADIR} -o "-p ${PG_SBOX_PORT}" -l ${PG_SBOX_LOG}
-  fi
+# Returns an array with all the positional arguments (unprocessed).
+def parse_opts():
+    try:
+        short_opts = "b:d:D:fh:l:np:s:U:?"
+        long_opts = ["bin=","dbname=","datadir=","force","host=","log=","no-dsn","port=","sandbox-dir=","user=","help"]
 
-  if [[ "${PG_SBOX_COMMAND}" == "use" ]]; then
-    ${PG_SBOX_BIN}/psql -h ${PG_SBOX_HOST} -p ${PG_SBOX_PORT} -U ${PG_SBOX_USER} -d ${PG_SBOX_DBNAME} "$@"
-  fi
+        opts, args = getopt.getopt(sys.argv[2:], short_opts, long_opts)
 
-  if [[ "${PG_SBOX_COMMAND}" == "init" ]] || [[ "${PG_SBOX_COMMAND}" == "create" ]]; then
-    echo "Creating directory..."
-    mkdir -p ${PG_SBOX_DATADIR}
-    echo "Initializing server..."
-    ${PG_SBOX_BIN}/initdb -D ${PG_SBOX_DATADIR} -U ${PG_SBOX_USER}
-  fi
+        pgserr.print_debug("Options: ", opts)
+        pgserr.print_debug("Positional arguments: ", args)
+    except getopt.GetoptError as error_msg:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS, error_msg)
+    
+    # TODO: (high prio) validate all args!
+    # TODO: (low low prio) strip paths from unneeded . and ..
+    for opt, arg in opts:
+        if opt in ['-b','--bin']:
+            globals()["pgs_bin"] = arg
+        elif opt in ['-d','--dbname']:
+            globals()["pgs_dbname"] = arg
+        elif opt in ['-D','--datadir']:
+            globals()["pgs_datadir"] = arg
+        elif opt in ['-f','--force']:
+            globals()["pgs_force"] = 1
+        elif opt in ['-l','--log']:
+            globals()["pgs_log"] = arg
+        elif opt in ['-h','--host']:
+            globals()["pgs_host"] = arg
+        elif opt in ['-n','--no-dsn']:
+            globals()["pgs_no_dsn"] = 1
+        elif opt in ['-p','--port']:
+            globals()["pgs_port"] = arg
+        elif opt in ['-s','--sandbox-dir']:
+            globals()["pgs_sandbox_dir"] = arg
+        elif opt in ['-U','--user']:
+            globals()["pgs_user"] = arg
+        elif opt in ['-?','--help']:
+            globals()["pgs_help"] = 1
+    
+    return args
 
-  if [[ "${PG_SBOX_COMMAND}" == "create" ]]; then
-    echo "Starting server..."
-    ${PG_SBOX_BIN}/pg_ctl start -D ${PG_SBOX_DATADIR} -o "-p ${PG_SBOX_PORT}" -l ${PG_SBOX_LOG}
-  fi
 
-  if [[ "${PG_SBOX_COMMAND}" == "destroy" ]]; then
-    echo "Stopping server..."
-    ${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mi
-    if [[ "${PG_SBOX_FORCE}" -eq 1 ]]; then
-      echo "Deleting sandbox directory..."
-      rm -rf ${PG_SBOX_DIR}
-    else
-      echo -n "Do you want to remove ${PG_SBOX_DIR}? [y/N] "
-      read do_remove
-      if [[ "${do_remove}" == "y" ]] || [[ "${do_remove}" == "Y" ]]; then
-        echo "Deleting sandbox directory..."
-        rm -rf ${PG_SBOX_DIR}
-      else
-        echo "Skipping sandbox directory removal."
-      fi
-    fi
-  fi
+def create_handy_scripts():
+    user_group_rwx=stat.S_IRWXU|stat.S_IRWXG
+    try:
+        with open("restart", "w") as file:
+            file.writelines(["#!/bin/bash\n", sys.argv[0]+" restart\n"])
+            os.chmod("restart",user_group_rwx)
+        with open("run", "w") as file:
+            file.writelines(["#!/bin/bash\n", sys.argv[0]+" run $@\n"])
+            os.chmod("run",user_group_rwx)
+        with open("start", "w") as file:
+            file.writelines(["#!/bin/bash\n", sys.argv[0]+" start\n"])
+            os.chmod("start",user_group_rwx)
+        with open("status", "w") as file:
+            file.writelines(["#!/bin/bash\n", sys.argv[0]+" status\n"])
+            os.chmod("status",user_group_rwx)
+        with open("stop", "w") as file:
+            file.writelines(["#!/bin/bash\n", sys.argv[0]+" stop\n"])
+            os.chmod("stop",user_group_rwx)
+        with open("use", "w") as file:
+            file.writelines(["#!/bin/bash\n", sys.argv[0]+" use $@\n"])
+            os.chmod("use",user_group_rwx)
+    except Exception as e:
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e.message)
+    
+    return 0
 
-  if [[ "${PG_SBOX_COMMAND}" == "setenv" ]]; then
-    # This will create a file that has all the environment variables needed
-    # for pg_sandbox to work without having to manually set them
-    set_environment_file
-  fi
 
-  if [[ "${PG_SBOX_COMMAND}" == "run" ]]; then
-    # This will run the first argument as binary (under the defined PG_SBOX_BIN directory)
-    # It will pass all other arguments as arguments for that binary
-    PG_SBOX_EXEC="${1}"
-    shift 1
-    if [[ "${PG_SBOX_ADD_DSN}" -eq 1 ]]; then
-      "${PG_SBOX_BIN}"/"${PG_SBOX_EXEC}" -h "${PG_SBOX_HOST}" -p "${PG_SBOX_PORT}" -U "${PG_SBOX_USER}" $@
-    else
-      "${PG_SBOX_BIN}"/"${PG_SBOX_EXEC}" $@
-    fi
-  fi
-}
+def exec_build(version):
+    # 0- Check if temporary directories have been created
+    src_dir = os.path.join(PGS_BUILD_DIR, "src")
 
-# Some needed defaults, that can be overridden
-PG_SBOX_DATADIR='data'
-PG_SBOX_DBNAME='postgres'
-PG_SBOX_HOST='127.0.0.1'
-PG_SBOX_PORT=5432
-PG_SBOX_USER='postgres'
+    if os.path.isdir(PGS_BUILD_DIR) == False:
+        os.makedirs(PGS_BUILD_DIR)
+    if os.path.isdir(src_dir) == False:
+        os.makedirs(src_dir)
+    
+    # 1- Get source code
+    os.chdir(src_dir)
+    url = "https://ftp.postgresql.org/pub/source/v"+version+"/postgresql-"+version+".tar.gz"
+    print("Downloading source code from: "+url)
+    try:
+        curl_out_file = "postgresql-"+version+".tar.gz"
+        curl_command = ["curl", "-o", curl_out_file, "-L", url]
+        run(curl_command, universal_newlines=True)
+        #(pg_src_path, headers) = urllib.request.urlretrieve(url, "postgresql-src.tar.gz")
+    except Exception as e:
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
+        #TODO return err_code
+    
+    # 2- Untar source code
+    try:
+        untar_command = ["tar", "xzf", curl_out_file]
+        run(untar_command, universal_newlines=True)
+    except Exception as e:
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
+        #TODO return err_code
 
-# Use variable values from env file, if present
-read_variables_from_env_file
+    # 3- Run configure
+    os.chdir("postgresql-"+version)
+    print("Running configure script.")
+    try:
+        configure_prefix = os.path.join(PGS_BIN_DIR,version)
+        configure_command = ["./configure", "--prefix="+configure_prefix]
+        pgserr.print_debug("configure command: ",configure_command)
+        configure_result = run(configure_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+        if configure_result.returncode == 0:
+            print(" ./configure command successful.")
+        else:
+            print(configure_result.stderr)
+            #TODO handle gracefully, delete files, etc
+            return -1
+    except Exception as e:
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
+        #TODO return err_code + handle gracefully
+    
+    # 4- Compile postgres source
+    print("Running make command.")
+    try:
+        make_command = ["make", "-j8"]
+        make_result = run(make_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+        if make_result.returncode == 0:
+            print(" make command successful.")
+        else:
+            print(make_result.stderr)
+            #TODO handle gracefully, delete files, etc
+            return -1
+    except Exception as e:
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
+        #TODO return err_code + handle gracefully
 
-# Parse arguments and commands (this may override some values defined in env files!)
-while (( "$#" )); do
-  case "$1" in
-    -a|--add-dsn)
-      PG_SBOX_ADD_DSN=1
-      shift 1
-      ;;
+    # 5- Install postgres source
+    print("Running make install command.")
+    try:
+        make_install_command = ["make", "install"]
+        make_install_result = run(make_install_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+        if make_install_result.returncode == 0:
+            print(" make install command successful.")
+        else:
+            print(make_install_result.stderr)
+            #TODO handle gracefully, delete files, etc
+            return -1
+    except Exception as e:
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
+        #TODO return err_code + handle gracefully
 
-    -b|--bin)
-      PG_SBOX_BIN=$2
-      shift 2
-      ;;
+    # 6- Compile contrib, if it exists
+    if os.path.isdir("contrib"):
+        os.chdir("contrib")
+        print("Running make command for contrib packages")
+        try:
+            make_contrib_command = ["make", "-j8"]
+            make_contrib_result = run(make_contrib_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+            if make_contrib_result.returncode == 0:
+                print(" make contrib command successful.")
+            else:
+                print(make_contrib_result.stderr)
+                #TODO handle gracefully, delete files, etc
+                return -1
+        except Exception as e:
+            pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
+            #TODO return err_code + handle gracefully
 
-    -d|--dbname)
-      PG_SBOX_DBNAME=$2
-      shift 2
-      ;;
+    # 7- Install contrib
+    print("Running make install command for contrib packages")
+    try:
+        make_install_contrib_command = ["make", "install"]
+        make_install_contrib_result = run(make_install_contrib_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+        if make_install_contrib_result.returncode == 0:
+            print(" make install contrib command successful.")
+        else:
+            print(make_install_contrib_result.stderr)
+            #TODO handle gracefully, delete files, etc
+            return -1
+    except Exception as e:
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
+        #TODO return err_code + handle gracefully
 
-    -D|--datadir)
-      PG_SBOX_DATADIR=${PG_SBOX_DIR}/$2
-      shift 2
-      ;;
+    print("Binaries installed in "+PGS_BIN_DIR)
 
-    -f|--force)
-      PG_SBOX_FORCE=1
-      shift 1
-      ;;
+    # 8- Remove src directory
+    os.chdir(os.path.join(src_dir,".."))
+    shutil.rmtree(src_dir)
 
-    -h|--host)
-      PG_SBOX_HOST=$2
-      shift 2
-      ;;
+    # TODO have stdout/stderr printed to files for each subprocess, in case troubleshooting is needed
+    return 0
 
-    -l|--log)
-      #TODO: check bug with paths
-      #      this will happen with all, so we'll need to make it using variables for all
-      #      and make it so it is immutable, no matter the order in which they are used
-      PG_SBOX_LOG=$2
-      shift 2
-      ;;
 
-    -p|--port)
-      PG_SBOX_PORT=$2
-      shift 2
-      ;;
+def exec_deploy():
+    # 0- Check for compulsory variables defined
+    check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir", "pgs_datadir", "pgs_user", "pgs_log", "pgs_port"])
 
-    -s|--sandbox-dir)
-      PG_SBOX_DIR=$2
-      check_absolute_path
-      PG_SBOX_ENV_FILE=${PG_SBOX_DIR}/pg_sandbox.env
-      PG_SBOX_DATADIR=${PG_SBOX_DIR}/${PG_SBOX_DATADIR}/
-      PG_SBOX_LOG=${PG_SBOX_DATADIR}/server.log
-      shift 2
-      ;;
+    # check if port is not already in use.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            pgs_port = globals()["pgs_port"]
+            if sock.connect_ex(('localhost', int(pgs_port))) == 0:
+                pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
+    except Exception as e:
+        print(e)
+        pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
 
-    -U|--user)
-      PG_SBOX_USER=$2
-      shift 2
-      ;;
+    # 1- Create directory or error out if it exists
+    if os.path.exists(globals()["pgs_sandbox_dir"]):
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_EXISTS, pgserr.ERR_SBOXDIR_EXISTS_MESSAGE)
 
-# Equal signs are not supported, instead use space to separate argument and value
-    *=*)
-      print_error "Equal sign is not supported in argument: $1"
-      print_error "Separate arguments and values using a space instead."
-      exit 1
-      ;;
+    os.makedirs(globals()["pgs_sandbox_dir"])
+    os.chdir(globals()["pgs_sandbox_dir"])
 
-# Print help output
-    -\?|--help)
-      print_help
-      shift 1
-      exit 0
-      ;;
+    # 2- create pg_sandbox.env file with vars
+    write_env(PGS_ENV_FILE)
 
-# Parse commands
-    start | stop | restart | run | use | init | create | destroy | setenv | build | report)
-      PG_SBOX_COMMAND=$1
-      shift 1
-      break
-      ;;
+    # 3- init postgres
+    initdb_bin_path = get_binary_path("initdb", globals()["pgs_bin"])
+    pgserr.print_debug("initdb bin path: ", initdb_bin_path)
 
-# All other arguments are not valid
-    *)
-      print_error "Invalid argument: $1"
-      exit 1
-      ;;
+    #${PG_SBOX_BIN}/initdb -D ${PG_SBOX_DATADIR} -U ${PG_SBOX_USER}
+    initdb_command = [initdb_bin_path, 
+                      "-D", globals()["pgs_datadir"], 
+                      "-U", globals()["pgs_user"]]
+    pgserr.print_debug("initdb command: ", initdb_command)
 
-  esac
-done
+    initdb_result = run(initdb_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
+    if initdb_result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, initdb_result.stderr)
 
-# Call main function to run commands
-run_commands "$@"
+    print("Database initialized in "+os.path.join(os.path.expanduser(PGS_ROOT_DIR),globals()["pgs_sandbox_dir"]))
 
-exit 0
+    # 4- create handy scripts in the sandbox directory like: ./use ./start ./stop etc
+    create_handy_scripts()
 
+    # 5- start postgres if init didn't fail
+    pgctl_bin_path = get_binary_path("pg_ctl",globals()["pgs_bin"])
+    pgserr.print_debug("pg_ctl bin path: ",pgctl_bin_path)
+
+    #${PG_SBOX_BIN}/pg_ctl start -D ${PG_SBOX_DATADIR} -o "-p ${PG_SBOX_PORT}" -l ${PG_SBOX_LOG}
+    start_command = [pgctl_bin_path, 
+                     "start", 
+                     "-D", globals()["pgs_datadir"], 
+                     "-l", globals()["pgs_log"], 
+                     "-o", "\"-p "+globals()["pgs_port"]+"\""]
+    pgserr.print_debug("start command: ", start_command)
+    
+    start_result = run(start_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
+    if start_result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, start_result.stderr)
+    
+    print("Database started. Listening on port "+globals()["pgs_port"])
+    return 0
+
+def exec_destroy():
+    # 0- stop the sandbox
+    if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
+        print("Database stopped.")
+    os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+
+    check_compulsory_global_vars(["pgs_sandbox_dir", "pgs_force"])
+    
+    # 1- check if sandbox directory exists
+    if not os.path.exists(globals()["pgs_sandbox_dir"]):
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    # 2- delete the sandbox directory
+    if globals()["pgs_force"]:
+        shutil.rmtree(globals()["pgs_sandbox_dir"])
+        print("Sandbox directory: "+os.path.abspath(globals()["pgs_sandbox_dir"]))
+        print("Detected -f or --force, the sandbox directory has been removed.")
+    else:
+        print("Sandbox directory: "+os.path.abspath(globals()["pgs_sandbox_dir"]))
+        remove_dir = input("Do you want to remove the sandbox directory and all of its contents? [y/N]: ")
+        if (remove_dir == "y") or (remove_dir == "Y"):
+            shutil.rmtree(globals()["pgs_sandbox_dir"])
+            print("The sandbox directory has been removed.")
+        else:
+            print("Skipping directory removal.")
+    return 0
+
+
+def exec_report(argv, pg_gather_out_absolute_path):
+    pg_gather_out = argv[0]
+    pgserr.print_debug("out.txt file: "+pg_gather_out)
+    pgserr.print_debug("out.txt file absolute path: "+pg_gather_out_absolute_path)
+
+    # In this case, we may want to try and guess defaults for -b and -s, to simplify the command
+
+    # 0- if -b was not specified, check PGS_BIN_DIR and use latest available.
+    #    if there are no binaries there, error out.
+    try:
+        pgs_bin = globals()["pgs_bin"]
+    except:
+        print("PostgreSQL binary directory not set. Scanning default directory: "+PGS_BIN_DIR)
+        pgs_bin = get_latest_binary_from_default_path("postgres", PGS_BIN_DIR)
+        print("Setting binary directory to: "+pgs_bin)
+
+    # 1- if -s was not specified, use pg_gather_temp as name, or error out if it exists
+    try:
+        pgs_sandbox_dir = globals()["pgs_sandbox_dir"]
+    except:
+        print("PostgreSQL Sandbox directory not set. Setting it to: pg_gather_temp.")
+        pgs_sandbox_dir = "pg_gather_temp"
+
+    # 2- create temporary sandbox
+    globals()["pgs_bin"] = pgs_bin
+    globals()["pgs_sandbox_dir"] = pgs_sandbox_dir
+    deploy_result = exec_deploy()
+    if deploy_result != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOX_NOT_RUNNING, "Sandbox deploy failed.")
+
+    # 3- import out.txt
+    try:
+        if os.path.isfile(os.path.expanduser(PGS_PG_GATHER_DIR+"gather_schema.sql")):
+            gather_schema_path = os.path.expanduser(PGS_PG_GATHER_DIR+"gather_schema.sql")
+        else:
+            url = "https://raw.githubusercontent.com/percona/support-snippets/master/postgresql/pg_gather/gather_schema.sql"
+            if globals()["pgs_force"]:
+                print("gather_schema.sql can't be found. Detected -f or --force, downloading it from: "+url)
+                (gather_schema_path, headers) = urllib.request.urlretrieve(url, "gather_schema.sql")
+            else:
+                download_gather_schema = input("gather_schema.sql can't be found. Would you like to download it? [y/N] ")
+                if (download_gather_schema == "y") or (download_gather_schema == "Y"):
+                    print("Downloading gather_schema.sql from: "+url)
+                    (gather_schema_path, headers) = urllib.request.urlretrieve(url, "gather_schema.sql")
+                else:
+                    os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+                    exec_destroy()
+    except:
+        os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+        exec_destroy()
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, "Make sure gather_schema.sql is available in "+PGS_PG_GATHER_DIR+" or that there is a working internet connection.")
+
+    # psql -f gather_schema.sql -f out.txt
+    os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+    exec_run(["psql","-f",gather_schema_path,"-f",pg_gather_out_absolute_path], False)
+
+    # 4- generate report
+    try:
+        if os.path.isfile(os.path.expanduser(PGS_PG_GATHER_DIR+"gather_report.sql")):
+            gather_report_path = os.path.expanduser(PGS_PG_GATHER_DIR+"gather_report.sql")
+        else:
+            url = "https://raw.githubusercontent.com/percona/support-snippets/master/postgresql/pg_gather/gather_report.sql"
+            if (globals()["pgs_force"]):
+                print("Downloading gather_report.sql from: "+url)
+                (gather_report_path, headers) = urllib.request.urlretrieve(url, "gather_report.sql")
+            else:
+                download_gather_report = input("gather_report.sql can't be found. Would you like to download it? [y/N] ")
+                if (download_gather_report == "y") or (download_gather_report == "Y"):
+                    print("Downloading gather_report.sql from: "+url)
+                    (gather_report_path, headers) = urllib.request.urlretrieve(url, "gather_report.sql")
+                else:
+                    os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+                    exec_destroy()
+    except:
+        os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+        exec_destroy()
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, "Make sure gather_report.sql is available in "+PGS_PG_GATHER_DIR+" or that there is a working internet connection.")
+    
+    # pg_sandbox use -X -f ~/src/pg_gather/gather_report.sql > ../GatherReport.html
+    os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+    (res_code, res_out) = exec_run(["psql","-X","-f",gather_report_path], True)
+
+    res_dir = os.path.dirname(pg_gather_out_absolute_path)
+    res_file = os.path.join(res_dir,"GatherReport.html")
+    pgserr.print_debug("resulting file path: "+res_file)
+    with open(res_file, 'w') as f:
+        f.writelines(res_out)
+
+    # 5- destroy temporary sandbox
+    os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+    exec_destroy()
+    return 0
+
+
+def exec_run(argv,return_stdout=False):
+    # 0- change to sandbox directory
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    try:
+        os.chdir(globals()["pgs_sandbox_dir"])
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    subcommand = argv[0]
+    subcommand_bin_path = get_binary_path(subcommand, globals()["pgs_bin"])
+    pgserr.print_debug("subcommand bin path: ", subcommand_bin_path)
+
+    if globals()["pgs_no_dsn"] == 1:
+        subcommand_command = [subcommand_bin_path]+argv[1:]
+    else:
+        subcommand_command = [subcommand_bin_path,
+                              "-h", globals()["pgs_host"],
+                              "-p", globals()["pgs_port"],
+                              "-U", globals()["pgs_user"]
+                              ]+argv[1:]
+    pgserr.print_debug("subcommand: ", subcommand_command)
+
+    if return_stdout:
+        subcommand_result = run(subcommand_command, stdout=PIPE, universal_newlines=True)
+        pgserr.print_debug("subcommand return code: ", subcommand_result.returncode)
+        return (subcommand_result.returncode, subcommand_result.stdout)
+    else:
+        subcommand_result = run(subcommand_command, universal_newlines=True)
+        pgserr.print_debug("subcommand return code: ", subcommand_result.returncode)
+        return (subcommand_result.returncode, None)
+    # We use interactive mode, to be as generic as possible, so there is no need to check return code
+    
+
+
+def exec_setenv():
+    # 0- change to sandbox directory
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    try:
+        os.chdir(globals()["pgs_sandbox_dir"])
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    # 1- write env file
+    write_env(PGS_ENV_FILE)
+    print("Environment file written.")
+    return 0
+
+
+def exec_start():
+    # 0- change to sandbox directory
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    try:
+        os.chdir(globals()["pgs_sandbox_dir"])
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    # 1- read env file, if any, and check for other compulsory variables defined
+    read_env()
+    check_compulsory_global_vars(["pgs_bin", "pgs_datadir"])
+
+    pgctl_bin_path = get_binary_path("pg_ctl", globals()["pgs_bin"])
+    pgserr.print_debug("pg_ctl bin path: ",pgctl_bin_path)
+
+    # 2- check if postgres is not already running
+    status_command = [pgctl_bin_path,
+                      "status",
+                      "-D", globals()["pgs_datadir"]]
+    pgserr.print_debug("status command: ", status_command)
+
+    status_result = run(status_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
+    pgserr.print_debug("status command return code: ", status_result.returncode)
+    if status_result.returncode == 0:
+        pgserr.print_and_exit("The database is already running.")
+
+    # 3- start postgres
+    #${PG_SBOX_BIN}/pg_ctl start -D ${PG_SBOX_DATADIR} -o "-p ${PG_SBOX_PORT}" -l ${PG_SBOX_LOG}
+    start_command = [pgctl_bin_path, 
+                     "start", 
+                     "-D", globals()["pgs_datadir"], 
+                     "-l", globals()["pgs_log"], 
+                     "-o", "\"-p "+globals()["pgs_port"]+"\""]
+    pgserr.print_debug("start command: ", start_command)
+    
+    start_result = run(start_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
+    if start_result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, start_result.stderr)
+    
+    return 0
+
+
+def exec_status():
+    # 0- change to sandbox directory
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    try:
+        os.chdir(globals()["pgs_sandbox_dir"])
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    # 1- read env file, if any, and check for other compulsory variables defined
+    read_env()
+    check_compulsory_global_vars(["pgs_bin", "pgs_datadir"])
+
+    pgctl_bin_path = get_binary_path("pg_ctl", globals()["pgs_bin"])
+    pgserr.print_debug("pg_ctl bin path: ",pgctl_bin_path)
+
+    # 2- check status of sandbox
+    status_command = [pgctl_bin_path,
+                      "status",
+                      "-D", globals()["pgs_datadir"]]
+    pgserr.print_debug("status command: ", status_command)
+
+    status_result = run(status_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
+    pgserr.print_debug("status command return code: ", status_result.returncode)
+    if status_result.stderr != '':
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, status_result.stderr)
+    else:
+        print(status_result.stdout)
+        return 0
+
+
+def exec_stop():
+    # 0- change to sandbox directory
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    try:
+        os.chdir(globals()["pgs_sandbox_dir"])
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    # 1- read env file, if any, and check for other compulsory variables defined
+    read_env()
+    check_compulsory_global_vars(["pgs_bin", "pgs_datadir"])
+
+    pgctl_bin_path = get_binary_path("pg_ctl", globals()["pgs_bin"])
+    pgserr.print_debug("pg_ctl bin path: ",pgctl_bin_path)
+
+    # 2- check if postgres is running
+    status_command = [pgctl_bin_path,
+                      "status",
+                      "-D", globals()["pgs_datadir"]]
+    pgserr.print_debug("status command: ", status_command)
+
+    status_result = run(status_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
+    pgserr.print_debug("status command return code: ", status_result.returncode)
+    if status_result.returncode == 3:
+        print("The database is already stopped.")
+        return(pgserr.ERR_SBOX_ALREADY_STOPPED)
+    elif status_result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, status_result.stderr)
+
+    # 3- stop postgres
+    #${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mf
+    stop_command = [pgctl_bin_path,
+                    "stop",
+                    "-D", globals()["pgs_datadir"],
+                    "-mf"]
+    pgserr.print_debug("stop command: ", stop_command)
+
+    stop_result = run(stop_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
+    pgserr.print_debug("stop command return code: ", stop_result.returncode)
+    if stop_result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, stop_result.stderr)
+    else:
+        return(0)
+
+
+def exec_use(argv):
+    # 0- change to sandbox directory
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    try:
+        os.chdir(globals()["pgs_sandbox_dir"])
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    # 1- read env file, if any, and check for other compulsory variables defined
+    read_env()
+    check_compulsory_global_vars(["pgs_bin", "pgs_host", "pgs_port", "pgs_user", "pgs_dbname"])
+
+    psql_bin_path = get_binary_path("psql", globals()["pgs_bin"])
+    pgserr.print_debug("psql bin path: ", psql_bin_path)
+
+    # 2- execute psql
+    #${PG_SBOX_BIN}/psql -h ${PG_SBOX_HOST} -p ${PG_SBOX_PORT} -U ${PG_SBOX_USER} -d ${PG_SBOX_DBNAME} "$@"
+    psql_command = [psql_bin_path,
+                    "-h", globals()["pgs_host"],
+                    "-p", globals()["pgs_port"],
+                    "-U", globals()["pgs_user"],
+                    "-d", globals()["pgs_dbname"]
+                    ]+argv
+    pgserr.print_debug("psql command: ", psql_command)
+
+    psql_result = run(psql_command, universal_newlines=True)
+    pgserr.print_debug("psql command return code: ", psql_result.returncode)
+    # No need to check errors here, errors will be printed through stderr.
+
+
+if __name__ == "__main__":
+    args = sys.argv
+    
+    # To see debug outputs use: export PGS_DEBUG=1 before invoking pg_sandbox
+    pgs_debug = os.getenv("PGS_DEBUG")
+
+    if len(args) < 2:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAM_COUNT,pgserr.ERR_INCORRECT_PARAM_COUNT_MESSAGE)
+
+    # The only correct invocation is: pg_sandbox COMMAND [OPTS]
+    # So the first argument should be a valid COMMAND
+    pgs_command = args[1]
+    pgserr.print_debug("Main command: ", pgs_command)
+
+    command_list = ['build','deploy','destroy','help', 'report', 'restart','run','setenv','start','status','stop','use']
+
+    if pgs_command not in command_list:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND, pgserr.ERR_INCORRECT_COMMAND_MESSAGE)
+
+    # set default values for variables
+    set_defaults()
+    # before we parse the command-line options, we will read the environment file, if any
+    read_env()
+    # parse command-line options (this overrides whatever was read from the env file)
+    # we are left with positional arguments, in case the command was "run"
+    positional_args = parse_opts()
+
+    # For simplicity, we enforce using ~/postgresql-sandboxes/ as directory for all sandboxes.
+    # If needed, change the PGS_ROOT_DIR constant above.
+    if not os.path.exists(os.path.expanduser(PGS_ROOT_DIR)):
+        print("The PostgreSQL Sandbox root directory (~/postgresql-sandboxes/) doesn't exist.")
+        create_dir = input("Do you want to create it? [y/N]: ")
+        if (create_dir == "y") or (create_dir == "Y"):
+            os.mkdir(os.path.expanduser(PGS_ROOT_DIR))
+        else:
+            pgserr.print_error_and_exit(pgserr.ERR_ROOTDIR_NOT_EXISTS, pgserr.ERR_ROOTDIR_NOT_EXISTS_MESSAGE)
+
+    # We need to do this before we change directory to the PGS_ROOT_DIR
+    if pgs_command == "report":
+        pg_gather_out_absolute_path = os.path.abspath(positional_args[0])
+
+    # All execution functions assume they are called starting on PGS_ROOT_DIR    
+    os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+
+    # If -? or --help were used, favor printing help outptus and exit (don't run anything else).
+    # TODO: change this functionality to actually affect if help was a command (global help) or a --help for a command in particular
+    if globals()["pgs_help"] == 1:
+        pgs_command = "help"
+    
+    # Execute main command routines
+    if pgs_command == "build":
+        pgserr.print_debug("Executing build")
+        version = positional_args[0]
+        exec_build(version)
+    elif pgs_command == "deploy":
+        pgserr.print_debug("Executing deploy")
+        exec_deploy()
+    elif pgs_command == "destroy":
+        pgserr.print_debug("Executing destroy")
+        exec_destroy()
+    elif pgs_command == "help":
+        pgserr.print_debug("Executing help")
+        pgshlp.print_help()
+    elif pgs_command == "report":
+        pgserr.print_debug("Executing report")
+        exec_report(positional_args, pg_gather_out_absolute_path)
+    elif pgs_command == "restart":
+        pgserr.print_debug("Executing restart")
+        if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
+            print("Database stopped.")
+        os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+        exec_start()
+        pgserr.print_and_exit("Database restarted. Listening on port "+globals()["pgs_port"])
+    elif pgs_command == "run":
+        pgserr.print_debug("Executing run")
+        exec_run(positional_args, False)
+    elif pgs_command == "setenv":
+        pgserr.print_debug("Executing setenv")
+        exec_setenv()
+    elif pgs_command == "start":
+        pgserr.print_debug("Executing start")
+        exec_start()
+        pgserr.print_and_exit("Database started. Listening on port "+globals()["pgs_port"])
+    elif pgs_command == "status":
+        pgserr.print_debug("Executing status")
+        exec_status()
+    elif pgs_command == "stop":
+        pgserr.print_debug("Executing stop")
+        if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
+            pgserr.print_and_exit("Database stopped.")
+    elif pgs_command == "use":
+        pgserr.print_debug("Executing use")
+        exec_use(positional_args)
+    
+    sys.exit(0)
