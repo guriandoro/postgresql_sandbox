@@ -303,6 +303,7 @@ def exec_deploy():
     check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir", "pgs_datadir", "pgs_user", "pgs_log", "pgs_port"])
 
     # check if port is not already in use.
+    # TODO: if it is, and no --port was used (or pgs_port == default value), try other ports
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
             pgs_port = globals()["pgs_port"]
@@ -389,9 +390,15 @@ def exec_destroy():
 
 
 def exec_report(argv, pg_gather_out_absolute_path):
+    # Get the out.txt file path from arguments (for debug purposes, mainly)
+    # We will use pg_gather_out_absolute_path to avoid issues when changing directories
     pg_gather_out = argv[0]
     pgserr.print_debug("out.txt file: "+pg_gather_out)
     pgserr.print_debug("out.txt file absolute path: "+pg_gather_out_absolute_path)
+
+    # Check that the out.txt file exists
+    if not os.path.exists(pg_gather_out_absolute_path):
+        pgserr.print_error_and_exit(pgserr.ERR_OUT_FILE_NOT_EXISTS, pgserr.ERR_OUT_FILE_NOT_EXISTS_MESSAGE+pg_gather_out_absolute_path)
 
     # In this case, we may want to try and guess defaults for -b and -s, to simplify the command
 
@@ -471,6 +478,7 @@ def exec_report(argv, pg_gather_out_absolute_path):
     (res_code, res_out) = exec_run(["psql","-X","-f",gather_report_path], True)
 
     res_dir = os.path.dirname(pg_gather_out_absolute_path)
+    # TODO: should we append the out.txt filename in any way? To support doing many reports in batch and not overriding the files.
     res_file = os.path.join(res_dir,"GatherReport.html")
     pgserr.print_debug("resulting file path: "+res_file)
     with open(res_file, 'w') as f:
@@ -490,9 +498,12 @@ def exec_run(argv,return_stdout=False):
     except FileNotFoundError:
         pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
 
-    subcommand = argv[0]
-    subcommand_bin_path = get_binary_path(subcommand, globals()["pgs_bin"])
-    pgserr.print_debug("subcommand bin path: ", subcommand_bin_path)
+    try:
+        subcommand = argv[0]
+        subcommand_bin_path = get_binary_path(subcommand, globals()["pgs_bin"])
+        pgserr.print_debug("subcommand bin path: ", subcommand_bin_path)
+    except IndexError:
+        pgserr.print_error_and_exit(pgserr.ERR_SUBCOMMAND_NOT_SPECIFIED, pgserr.ERR_SUBCOMMAND_NOT_SPECIFIED_MESSAGE)
 
     if globals()["pgs_no_dsn"] == 1:
         subcommand_command = [subcommand_bin_path]+argv[1:]
