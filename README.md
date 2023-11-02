@@ -23,4 +23,4 @@ pg_sandbox destroy -s pg-16.0
 
 # Demo file with examples
 
-To read more on how to use the different functionality provided by pg_sandbox, you can check the [Demo.md](Demo.md) file.
+To read more on how to use the different functionality provided by pg_sandbox, you can check the [Demo](DEMO.md) file.
