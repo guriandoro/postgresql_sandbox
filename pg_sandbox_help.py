@@ -4,7 +4,7 @@ def print_help():
 
 Commands:
     build              compile PostgreSQL for the given major.minor version (as first argument after "build")
-    create             initialize the PostgreSQL instance, and start it
+    deploy             initialize the PostgreSQL instance, and start it
     destroy            stop the PostgreSQL instance, and delete all directories
     help               print this message and exit
     report             generate pg_gather report from out.txt output file.
