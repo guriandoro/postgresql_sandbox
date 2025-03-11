@@ -88,7 +88,7 @@ def get_binary_path(bin_name, root_path):
                 bin_path = os.path.join(root, file)
                 return bin_path
     if bin_path == "":
-        pgserr.print_error(bin_name+" binary not found in '"+root_path+"' directory.")
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, bin_name+" binary not found in '"+root_path+"' directory.")
         return pgserr.ERR_GENERIC_ERROR
 
 def get_latest_binary_from_default_path(bin_name, root_path):
@@ -478,8 +478,10 @@ def exec_report(argv, pg_gather_out_absolute_path):
     (res_code, res_out) = exec_run(["psql","-X","-f",gather_report_path], True)
 
     res_dir = os.path.dirname(pg_gather_out_absolute_path)
-    # TODO: should we append the out.txt filename in any way? To support doing many reports in batch and not overriding the files.
-    res_file = os.path.join(res_dir,"GatherReport.html")
+    # TODO: To support doing many reports in batch and not overriding the files, we are prepending the pg_gather filename.
+    # TODO: Try it out and see if we should do anything better.
+    res_file_name = pg_gather_out+"_GatherReport.html"
+    res_file = os.path.join(res_dir,res_file_name)
     pgserr.print_debug("resulting file path: "+res_file)
     with open(res_file, 'w') as f:
         f.writelines(res_out)
@@ -491,6 +493,8 @@ def exec_report(argv, pg_gather_out_absolute_path):
 
 
 def exec_run(argv,return_stdout=False):
+    # TODO: bug -- check if there are no args in argv and error out.
+    # TODO: bug -- what happens if there are no binaries anymore in /opt/postgres/xx/ ? We need to try/catch on get_binary_path functions throughout all the code
     # 0- change to sandbox directory
     check_compulsory_global_vars(["pgs_sandbox_dir"])
     try:
