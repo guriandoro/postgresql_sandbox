@@ -1,4 +1,4 @@
-def print_help():
+def print_general_help():
     print("""Usage:
     pg_sandbox COMMAND [OPTIONS] SUBCOMMAND [POSITIONAL_ARGUMENTS]
 
@@ -28,3 +28,37 @@ Options:
     -s, --sandbox-dir  directory used as base for the needed files
     -U, --user         user name to use with commands (default: postgres)
     """)
+
+def print_help(pgs_command):
+    if pgs_command == "build":
+        #TODO add help for build command
+        print("TODO")
+    elif pgs_command == "deploy":
+        #TODO add help for deploy command
+        print("TODO")
+    elif pgs_command == "destroy":
+        #TODO add help for destroy command
+        print("TODO")
+    elif pgs_command == "report":
+        #TODO add help for report command
+        print("TODO")
+    elif pgs_command == "restart":
+        #TODO add help for restart command
+        print("TODO")
+    elif pgs_command == "run":
+        #TODO add help for run command
+        print("TODO")
+    elif pgs_command == "setenv":
+        #TODO add help for setenv command
+        print("TODO")
+    elif pgs_command == "start":
+        #TODO add help for start command
+        print("TODO")
+    elif pgs_command == "stop":
+        #TODO add help for stop command
+        print("TODO")
+    elif pgs_command == "use":
+        #TODO add help for use command
+        print("TODO")
+    else:
+        print_general_help()
