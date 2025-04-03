@@ -105,8 +105,7 @@ def get_latest_binary_from_default_path(bin_name, root_path):
                         return bin_path
 
     if bin_path == "":
-        pgserr.print_error(bin_name+" binary not found in '"+root_path+"' directory. Use -b to point to a valid PostgreSQL binary directory.")
-        return pgserr.ERR_GENERIC_ERROR
+        pgserr.print_error_and_exit(bin_name+" binary not found in '"+root_path+"' directory. Use -b to point to a valid PostgreSQL binary directory.")
 
 
 # Returns an array with all the positional arguments (unprocessed).
@@ -180,66 +179,87 @@ def create_handy_scripts():
 
 def exec_build(version):
     # 0- Check if temporary directories have been created
-    src_dir = os.path.join(PGS_BUILD_DIR, "src")
 
     if os.path.isdir(PGS_BUILD_DIR) == False:
+        pgserr.print_debug("Creating directory: "+PGS_BUILD_DIR)
         os.makedirs(PGS_BUILD_DIR)
+    if os.path.isdir(PGS_BIN_DIR) == False:
+        pgserr.print_debug("Creating directory: "+PGS_BIN_DIR)
+        os.makedirs(PGS_BIN_DIR)
+
+    src_dir = os.path.join(PGS_BUILD_DIR, "src")
     if os.path.isdir(src_dir) == False:
+        pgserr.print_debug("Creating directory: "+src_dir)
         os.makedirs(src_dir)
-    
+
     # 1- Get source code
     os.chdir(src_dir)
-    url = "https://ftp.postgresql.org/pub/source/v"+version+"/postgresql-"+version+".tar.gz"
-    print("Downloading source code from: "+url)
+    print("Changed directory to: "+src_dir)
+
     try:
         curl_out_file = "postgresql-"+version+".tar.gz"
-        curl_command = ["curl", "-o", curl_out_file, "-L", url]
-        run(curl_command, universal_newlines=True)
-        #(pg_src_path, headers) = urllib.request.urlretrieve(url, "postgresql-src.tar.gz")
+        # Check if file already exists, and avoid downloading again
+        if os.path.isfile(curl_out_file):
+            print("File already exists. Skipping download.")
+        else:
+            # Download source code tar.gz file
+            url = "https://ftp.postgresql.org/pub/source/v"+version+"/postgresql-"+version+".tar.gz"
+            print("Downloading source code from: "+url)
+            curl_command = ["curl", "-o", curl_out_file, "-L", url]
+            run(curl_command, universal_newlines=True)
+            #(pg_src_path, headers) = urllib.request.urlretrieve(url, "postgresql-src.tar.gz")
     except Exception as e:
-        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
-        #TODO return err_code
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
     
     # 2- Untar source code
     try:
         untar_command = ["tar", "xzf", curl_out_file]
         run(untar_command, universal_newlines=True)
     except Exception as e:
-        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
-        #TODO return err_code
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
     # 3- Run configure
     os.chdir("postgresql-"+version)
     print("Running configure script.")
     try:
         configure_prefix = os.path.join(PGS_BIN_DIR,version)
-        configure_command = ["./configure", "--prefix="+configure_prefix]
+        # TODO: We are hardcoding --without-icu for now, but we should add a parameter to allow it
+        # TODO: add parameterized extra configs
+
+        # If the debug environment variable is set, include extra flags
+        if os.getenv("PGS_BUILD_DEBUG") == "1":
+            configure_command = ["./configure", "--prefix="+configure_prefix,"--without-icu","--enable-cassert","--enable-debug","CFLAGS=-ggdb -Og -g3 -fno-omit-frame-pointer"]
+        else:
+            configure_command = ["./configure", "--prefix="+configure_prefix,"--without-icu"]
         pgserr.print_debug("configure command: ",configure_command)
+
         configure_result = run(configure_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
         if configure_result.returncode == 0:
             print(" ./configure command successful.")
         else:
+            print(" ./configure command failed.")
             print(configure_result.stderr)
-            #TODO handle gracefully, delete files, etc
+            # TODO: handle gracefully with proper error code from pgserr
+            # TODO: print helper output to see where to check for config.log file
             return -1
     except Exception as e:
-        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
-        #TODO return err_code + handle gracefully
-    
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
+
     # 4- Compile postgres source
     print("Running make command.")
     try:
+        # TODO: remove -j8 so we can have it use all available cores
         make_command = ["make", "-j8"]
         make_result = run(make_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
         if make_result.returncode == 0:
             print(" make command successful.")
         else:
+            print(" make command failed.")
             print(make_result.stderr)
-            #TODO handle gracefully, delete files, etc
+            # TODO: handle gracefully with proper error code from pgserr
             return -1
     except Exception as e:
-        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
-        #TODO return err_code + handle gracefully
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
     # 5- Install postgres source
     print("Running make install command.")
@@ -249,12 +269,12 @@ def exec_build(version):
         if make_install_result.returncode == 0:
             print(" make install command successful.")
         else:
+            print(" make install command failed.")
             print(make_install_result.stderr)
-            #TODO handle gracefully, delete files, etc
+            #TODO handle gracefully with proper error code from pgserr
             return -1
     except Exception as e:
-        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
-        #TODO return err_code + handle gracefully
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
     # 6- Compile contrib, if it exists
     if os.path.isdir("contrib"):
@@ -266,12 +286,12 @@ def exec_build(version):
             if make_contrib_result.returncode == 0:
                 print(" make contrib command successful.")
             else:
+                print(" make contrib command failed.")
                 print(make_contrib_result.stderr)
-                #TODO handle gracefully, delete files, etc
+                # TODO: handle gracefully with proper error code from pgserr
                 return -1
         except Exception as e:
-            pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
-            #TODO return err_code + handle gracefully
+            pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
     # 7- Install contrib
     print("Running make install command for contrib packages")
@@ -281,16 +301,17 @@ def exec_build(version):
         if make_install_contrib_result.returncode == 0:
             print(" make install contrib command successful.")
         else:
+            print(" make install contrib command failed.")
             print(make_install_contrib_result.stderr)
-            #TODO handle gracefully, delete files, etc
+            #TODO handle gracefully with proper error code from pgserr
             return -1
     except Exception as e:
-        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e)
-        #TODO return err_code + handle gracefully
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
     print("Binaries installed in "+PGS_BIN_DIR)
 
     # 8- Remove src directory
+    print("Removing source code directory.")
     os.chdir(os.path.join(src_dir,".."))
     shutil.rmtree(src_dir)
 
@@ -719,6 +740,12 @@ if __name__ == "__main__":
     # we are left with positional arguments, in case the command was "run"
     positional_args = parse_opts()
 
+    # If help outputs were requested, favor printing them and exit (don't run anything else).
+    if pgs_command == "help" or pgs_command == "--help" or pgs_command == "-h" or (globals()["pgs_help"] == 1):
+        pgserr.print_debug("Executing help")
+        pgshlp.print_help(pgs_command)
+        sys.exit(0)
+
     # For simplicity, we enforce using ~/postgresql-sandboxes/ as directory for all sandboxes.
     # If needed, change the PGS_ROOT_DIR constant above.
     if not os.path.exists(os.path.expanduser(PGS_ROOT_DIR)):
@@ -733,14 +760,9 @@ if __name__ == "__main__":
     if pgs_command == "report":
         pg_gather_out_absolute_path = os.path.abspath(positional_args[0])
 
-    # All execution functions assume they are called starting on PGS_ROOT_DIR    
+    # All execution functions (except build) assume they are called starting on PGS_ROOT_DIR    
     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
 
-    # If -? or --help were used, favor printing help outptus and exit (don't run anything else).
-    # TODO: change this functionality to actually affect if help was a command (global help) or a --help for a command in particular
-    if globals()["pgs_help"] == 1:
-        pgs_command = "help"
-    
     # Execute main command routines
     if pgs_command == "build":
         pgserr.print_debug("Executing build")
@@ -752,9 +774,6 @@ if __name__ == "__main__":
     elif pgs_command == "destroy":
         pgserr.print_debug("Executing destroy")
         exec_destroy()
-    elif pgs_command == "help" or pgs_command == "--help" or pgs_command == "-h":
-        pgserr.print_debug("Executing help")
-        pgshlp.print_help()
     elif pgs_command == "report":
         pgserr.print_debug("Executing report")
         exec_report(positional_args, pg_gather_out_absolute_path)
