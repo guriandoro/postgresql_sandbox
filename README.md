@@ -3,6 +3,12 @@ A simple-to-use PostgreSQL sandbox helper.
 
 Check `pg_sandbox --help` for detailed usage information and tips.
 
+# Environment Variables
+
+The following environment variables can be used to customize the behavior of pg_sandbox:
+
+- `PGS_BUILD_DIR`: Sets the directory where PostgreSQL source code is downloaded and compiled during the build process. Defaults to `/tmp/postgresql-sandbox-build/` if not set.
+
 # Basic workflow
 
 Deploy a sandbox.
