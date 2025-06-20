@@ -22,7 +22,7 @@ PGS_ROOT_DIR = "~/postgresql-sandboxes/"
 PGS_BIN_DIR = "/opt/postgresql/"
 PGS_ENV_FILE = "pg_sandbox.env"
 PGS_PG_GATHER_DIR = "~/src/support-snippets/postgresql/pg_gather/"
-PGS_BUILD_DIR = "/tmp/postgresql-sandbox-build/"
+PGS_BUILD_DIR = os.getenv("PGS_BUILD_DIR", "/tmp/postgresql-sandbox-build/")
 
 # Functions
 def set_defaults():
