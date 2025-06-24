@@ -2,6 +2,77 @@
 
 Repo at: https://github.com/guriandoro/postgresql_sandbox
 
+## Environment Variables Examples
+
+The following examples show how to use environment variables to customize the PostgreSQL sandbox behavior:
+
+### Custom Root Directory
+Instead of using the default `~/postgresql-sandboxes/`, you can set a custom root directory:
+```bash
+export PGS_ROOT_DIR="/tmp/my-postgres-sandboxes/"
+pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3
+# Sandbox will be created in /tmp/my-postgres-sandboxes/pg-15.3/
+```
+
+### Custom Binary Directory
+If you have PostgreSQL binaries installed in a different location:
+```bash
+export PGS_BIN_DIR="/usr/local/postgresql/"
+pg_sandbox build 15.3
+# Binaries will be installed in /usr/local/postgresql/15.3/
+```
+
+### Custom Build Directory
+For temporary builds, you can use a different directory:
+```bash
+export PGS_BUILD_DIR="/tmp/my-postgres-builds/"
+pg_sandbox build 15.3
+# Source code will be downloaded and compiled in /tmp/my-postgres-builds/
+```
+
+### Debug Build
+To compile PostgreSQL with debug flags for development:
+```bash
+export PGS_BUILD_DEBUG="1"
+pg_sandbox build 15.3
+# PostgreSQL will be compiled with --enable-cassert, --enable-debug, and debug CFLAGS
+```
+
+### Enable Debug Output
+To see detailed debug information during script execution:
+```bash
+export PGS_DEBUG="1"
+pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3
+# Will show debug information about commands being executed
+```
+
+### Custom pg_gather Directory
+If you have pg_gather scripts in a custom location:
+```bash
+export PGS_PG_GATHER_DIR="/opt/pg_gather/"
+pg_sandbox report out.txt
+# Will look for gather_schema.sql and gather_report.sql in /opt/pg_gather/
+```
+
+### Custom Environment File Name
+To use a different name for the sandbox environment file:
+```bash
+export PGS_ENV_FILE="my_sandbox_config.json"
+pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3
+# Will create my_sandbox_config.json instead of pg_sandbox.env
+```
+
+### Combining Multiple Environment Variables
+You can combine multiple environment variables for a fully customized setup:
+```bash
+export PGS_ROOT_DIR="/opt/sandboxes/"
+export PGS_BIN_DIR="/usr/local/postgresql/"
+export PGS_BUILD_DIR="/tmp/builds/"
+export PGS_DEBUG="1"
+pg_sandbox build 15.3
+pg_sandbox deploy -b /usr/local/postgresql/15.3/ -s pg-15.3
+```
+
 Check help outputs
 ```
 pg_sandbox help
