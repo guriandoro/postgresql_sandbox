@@ -18,10 +18,10 @@ from subprocess import PIPE, run
 global pgs_bin, pgs_dbname, pgs_datadir, pgs_force, pgs_log, pgs_host, pgs_port, pgs_sandbox_dir, pgs_user
 
 # Constants
-PGS_ROOT_DIR = "~/postgresql-sandboxes/"
-PGS_BIN_DIR = "/opt/postgresql/"
-PGS_ENV_FILE = "pg_sandbox.env"
-PGS_PG_GATHER_DIR = "~/src/support-snippets/postgresql/pg_gather/"
+PGS_ROOT_DIR = os.getenv("PGS_ROOT_DIR", "~/postgresql-sandboxes/")
+PGS_BIN_DIR = os.getenv("PGS_BIN_DIR", "/opt/postgresql/")
+PGS_ENV_FILE = os.getenv("PGS_ENV_FILE", "pg_sandbox.env")
+PGS_PG_GATHER_DIR = os.getenv("PGS_PG_GATHER_DIR", "~/src/support-snippets/postgresql/pg_gather/")
 PGS_BUILD_DIR = os.getenv("PGS_BUILD_DIR", "/tmp/postgresql-sandbox-build/")
 
 # Functions
