@@ -230,7 +230,14 @@ def exec_build(version):
         if os.getenv("PGS_BUILD_DEBUG") == "1":
             configure_command = ["./configure", "--prefix="+configure_prefix,"--without-icu","--enable-cassert","--enable-debug","CFLAGS=-ggdb -Og -g3 -fno-omit-frame-pointer"]
         else:
-            configure_command = ["./configure", "--prefix="+configure_prefix,"--without-icu"]
+            #configure_command = ["./configure", "--prefix="+configure_prefix,"--without-icu"]
+            configure_command = [
+                "./configure",
+                "--prefix=" + configure_prefix,
+                "--without-icu",
+                "--with-openssl"
+            ]
+
         pgserr.print_debug("configure command: ",configure_command)
 
         configure_result = run(configure_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
