@@ -1786,10 +1786,17 @@ def exec_status():
 
     status_result = run(status_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
     pgserr.print_debug("status command return code: ", status_result.returncode)
-    if status_result.stderr != '':
-        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, status_result.stderr)
+    # pg_ctl uses 0 (running) and 3 (not running) as its normal exit codes
+    # and may write harmless warnings to stderr in either case. Only treat
+    # other return codes as fatal; surface stderr as a hint when present.
+    if status_result.returncode not in (0, 3):
+        err = (status_result.stderr or "").strip() or "unknown pg_ctl status error"
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, err)
 
     print(status_result.stdout)
+    if status_result.stderr:
+        # Don't drop diagnostics on the floor when pg_ctl is just chatty.
+        print(status_result.stderr, end="" if status_result.stderr.endswith("\n") else "\n")
 
     # 3- replication info (only when the instance is actually running, so we
     # don't spam the user with connection failures when reporting status of
