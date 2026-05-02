@@ -1544,6 +1544,7 @@ def exec_report(argv, pg_gather_out_absolute_path):
         pgserr.print_error_and_exit(pgserr.ERR_SBOX_NOT_RUNNING, "Sandbox deploy failed.")
 
     # 3- import out.txt
+    gather_schema_path = None
     try:
         if os.path.isfile(os.path.expanduser(PGS_PG_GATHER_DIR+"gather_schema.sql")):
             gather_schema_path = os.path.expanduser(PGS_PG_GATHER_DIR+"gather_schema.sql")
@@ -1560,6 +1561,11 @@ def exec_report(argv, pg_gather_out_absolute_path):
                 else:
                     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
                     exec_destroy()
+                    pgserr.print_and_exit("Aborted by user; temporary sandbox removed.")
+    except SystemExit:
+        # print_and_exit / print_error_and_exit reach here on the abort path;
+        # let the exit propagate without re-running cleanup.
+        raise
     except:
         os.chdir(os.path.expanduser(PGS_ROOT_DIR))
         exec_destroy()
@@ -1570,6 +1576,7 @@ def exec_report(argv, pg_gather_out_absolute_path):
     exec_run(["psql","-f",gather_schema_path,"-f",pg_gather_out_absolute_path], False)
 
     # 4- generate report
+    gather_report_path = None
     try:
         if os.path.isfile(os.path.expanduser(PGS_PG_GATHER_DIR+"gather_report.sql")):
             gather_report_path = os.path.expanduser(PGS_PG_GATHER_DIR+"gather_report.sql")
@@ -1586,6 +1593,9 @@ def exec_report(argv, pg_gather_out_absolute_path):
                 else:
                     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
                     exec_destroy()
+                    pgserr.print_and_exit("Aborted by user; temporary sandbox removed.")
+    except SystemExit:
+        raise
     except:
         os.chdir(os.path.expanduser(PGS_ROOT_DIR))
         exec_destroy()
