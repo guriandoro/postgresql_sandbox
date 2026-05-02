@@ -279,11 +279,12 @@ def exec_build(version):
         if configure_result.returncode == 0:
             print(" ./configure command successful.")
         else:
-            print(" ./configure command failed.")
-            print(configure_result.stderr)
-            # TODO: handle gracefully with proper error code from pgserr
-            # TODO: print helper output to see where to check for config.log file
-            return -1
+            config_log_path = os.path.join(os.getcwd(), "config.log")
+            hint = ("Hint: inspect '"+config_log_path+
+                    "' for full ./configure diagnostics (missing headers, libs, etc.).")
+            pgserr.print_step_failure_and_exit(
+                pgserr.ERR_BUILD_FAILED, "./configure",
+                configure_result.stderr, hint)
     except Exception as e:
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
@@ -296,10 +297,8 @@ def exec_build(version):
         if make_result.returncode == 0:
             print(" make command successful.")
         else:
-            print(" make command failed.")
-            print(make_result.stderr)
-            # TODO: handle gracefully with proper error code from pgserr
-            return -1
+            pgserr.print_step_failure_and_exit(
+                pgserr.ERR_BUILD_FAILED, "make", make_result.stderr)
     except Exception as e:
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
@@ -311,10 +310,8 @@ def exec_build(version):
         if make_install_result.returncode == 0:
             print(" make install command successful.")
         else:
-            print(" make install command failed.")
-            print(make_install_result.stderr)
-            #TODO handle gracefully with proper error code from pgserr
-            return -1
+            pgserr.print_step_failure_and_exit(
+                pgserr.ERR_BUILD_FAILED, "make install", make_install_result.stderr)
     except Exception as e:
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
@@ -328,10 +325,8 @@ def exec_build(version):
             if make_contrib_result.returncode == 0:
                 print(" make contrib command successful.")
             else:
-                print(" make contrib command failed.")
-                print(make_contrib_result.stderr)
-                # TODO: handle gracefully with proper error code from pgserr
-                return -1
+                pgserr.print_step_failure_and_exit(
+                    pgserr.ERR_BUILD_FAILED, "make (contrib)", make_contrib_result.stderr)
         except Exception as e:
             pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
@@ -343,10 +338,8 @@ def exec_build(version):
         if make_install_contrib_result.returncode == 0:
             print(" make install contrib command successful.")
         else:
-            print(" make install contrib command failed.")
-            print(make_install_contrib_result.stderr)
-            #TODO handle gracefully with proper error code from pgserr
-            return -1
+            pgserr.print_step_failure_and_exit(
+                pgserr.ERR_BUILD_FAILED, "make install (contrib)", make_install_contrib_result.stderr)
     except Exception as e:
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
