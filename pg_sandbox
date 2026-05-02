@@ -850,9 +850,23 @@ def _set_synchronous_standby_on_primary(src_sandbox_dir, app_name):
         pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
             "Failed to read synchronous_standby_names on source: "+err)
     current = (out or "").strip()
+    current_upper = current.upper()
+
+    # We only know how to safely extend the FIRST n (...) form (and the
+    # historical bare comma-separated list, which Postgres treats as
+    # FIRST 1). Refuse to auto-modify quorum (ANY) configurations: the
+    # previous logic would split "ANY 2 (a, b, c)" by comma, producing
+    # garbage tokens, then overwrite the value as FIRST and silently
+    # break quorum replication.
+    if current_upper.startswith("ANY"):
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+            "Source '"+src_sandbox_dir+"' already uses a quorum "
+            "(ANY) synchronous_standby_names configuration: '"+current
+            +"'. Refusing to auto-convert to FIRST. Adjust the setting "
+            "manually before adding more synchronous standbys.")
 
     existing_names = []
-    if current and current.upper().startswith("FIRST"):
+    if current_upper.startswith("FIRST"):
         # Format is: FIRST n (a, b, c)
         try:
             inner = current[current.index("(")+1:current.rindex(")")]
