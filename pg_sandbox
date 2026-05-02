@@ -486,7 +486,10 @@ def exec_build(version):
     except Exception as e:
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
-    # 6- Compile contrib, if it exists
+    # 6- Compile + install contrib, if it exists. Both steps must stay
+    #    inside the same guard: step 7 historically ran unconditionally,
+    #    misleadingly logging a "contrib" install while actually re-running
+    #    the top-level install from the source-tree root.
     if os.path.isdir("contrib"):
         os.chdir("contrib")
         print("Running make command for contrib packages")
@@ -501,22 +504,24 @@ def exec_build(version):
                     pgserr.ERR_BUILD_FAILED, "make (contrib)", make_contrib_result.stderr,
                     "Captured stdout/stderr in: "+log_dir)
         except Exception as e:
-            pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
+            pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, str(e))
 
-    # 7- Install contrib
-    print("Running make install command for contrib packages")
-    try:
-        make_install_contrib_command = ["make", "install"]
-        make_install_contrib_result = run(make_install_contrib_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
-        _persist_subprocess_log(log_dir, "make_install_contrib", make_install_contrib_result)
-        if make_install_contrib_result.returncode == 0:
-            print(" make install contrib command successful.")
-        else:
-            pgserr.print_step_failure_and_exit(
-                pgserr.ERR_BUILD_FAILED, "make install (contrib)", make_install_contrib_result.stderr,
-                "Captured stdout/stderr in: "+log_dir)
-    except Exception as e:
-        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
+        # 7- Install contrib
+        print("Running make install command for contrib packages")
+        try:
+            make_install_contrib_command = ["make", "install"]
+            make_install_contrib_result = run(make_install_contrib_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+            _persist_subprocess_log(log_dir, "make_install_contrib", make_install_contrib_result)
+            if make_install_contrib_result.returncode == 0:
+                print(" make install contrib command successful.")
+            else:
+                pgserr.print_step_failure_and_exit(
+                    pgserr.ERR_BUILD_FAILED, "make install (contrib)", make_install_contrib_result.stderr,
+                    "Captured stdout/stderr in: "+log_dir)
+        except Exception as e:
+            pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, str(e))
+    else:
+        print("No contrib directory found; skipping contrib build/install.")
 
     print("Binaries installed in "+PGS_BIN_DIR)
     print("Build logs preserved in: "+log_dir)
