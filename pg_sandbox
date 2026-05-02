@@ -234,9 +234,10 @@ def exec_build(version):
             configure_command = [
                 "./configure",
                 "--prefix=" + configure_prefix,
-                "--without-icu",
-                "--with-openssl"
+                "--without-icu"
             ]
+            #    "--with-openssl"
+            #]
 
         pgserr.print_debug("configure command: ",configure_command)
 
