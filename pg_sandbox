@@ -189,6 +189,23 @@ def _validate_path(opt_name, arg):
     return os.path.normpath(val)
 
 
+def _prompt_yes_no(question, default=False):
+    """Prompt the user with a yes/no question.
+
+    Accepts 'y', 'yes' (case-insensitive, surrounding whitespace stripped)
+    as yes, anything else as no. Empty input picks `default`. Centralized
+    here because the pre-existing call sites only matched a single
+    'y'/'Y' character, which silently treated 'yes' / ' y' as no.
+    """
+    answer = input(question)
+    if answer is None:
+        return default
+    answer = answer.strip().lower()
+    if answer == "":
+        return default
+    return answer in ("y", "yes")
+
+
 def _validate_relative_path(opt_name, arg):
     """Like _validate_path but rejects absolute paths and '..' traversal.
 
@@ -1291,9 +1308,8 @@ def exec_cluster_destroy():
     slots = manifest.get("slots", {})
 
     if not globals().get("pgs_force", 0):
-        confirm = input("Destroy cluster '"+cluster_name+"' (primary '"+primary
-                        +"' + "+str(len(standbys))+" standbys)? [y/N]: ")
-        if confirm.lower() != "y":
+        if not _prompt_yes_no("Destroy cluster '"+cluster_name+"' (primary '"+primary
+                              +"' + "+str(len(standbys))+" standbys)? [y/N]: "):
             print("Aborted.")
             return 0
 
@@ -1572,8 +1588,7 @@ def exec_destroy():
         print("Detected -f or --force, the sandbox directory has been removed.")
     else:
         print("Sandbox directory: "+os.path.abspath(globals()["pgs_sandbox_dir"]))
-        remove_dir = input("Do you want to remove the sandbox directory and all of its contents? [y/N]: ")
-        if (remove_dir == "y") or (remove_dir == "Y"):
+        if _prompt_yes_no("Do you want to remove the sandbox directory and all of its contents? [y/N]: "):
             shutil.rmtree(globals()["pgs_sandbox_dir"])
             print("The sandbox directory has been removed.")
         else:
@@ -1628,8 +1643,7 @@ def exec_report(argv, pg_gather_out_absolute_path):
                 print("gather_schema.sql can't be found. Detected -f or --force, downloading it from: "+url)
                 (gather_schema_path, headers) = urllib.request.urlretrieve(url, "gather_schema.sql")
             else:
-                download_gather_schema = input("gather_schema.sql can't be found. Would you like to download it? [y/N] ")
-                if (download_gather_schema == "y") or (download_gather_schema == "Y"):
+                if _prompt_yes_no("gather_schema.sql can't be found. Would you like to download it? [y/N] "):
                     print("Downloading gather_schema.sql from: "+url)
                     (gather_schema_path, headers) = urllib.request.urlretrieve(url, "gather_schema.sql")
                 else:
@@ -1660,8 +1674,7 @@ def exec_report(argv, pg_gather_out_absolute_path):
                 print("Downloading gather_report.sql from: "+url)
                 (gather_report_path, headers) = urllib.request.urlretrieve(url, "gather_report.sql")
             else:
-                download_gather_report = input("gather_report.sql can't be found. Would you like to download it? [y/N] ")
-                if (download_gather_report == "y") or (download_gather_report == "Y"):
+                if _prompt_yes_no("gather_report.sql can't be found. Would you like to download it? [y/N] "):
                     print("Downloading gather_report.sql from: "+url)
                     (gather_report_path, headers) = urllib.request.urlretrieve(url, "gather_report.sql")
                 else:
@@ -2061,8 +2074,7 @@ if __name__ == "__main__":
     # If needed, change the PGS_ROOT_DIR constant above.
     if not os.path.exists(os.path.expanduser(PGS_ROOT_DIR)):
         print("The PostgreSQL Sandbox root directory (~/postgresql-sandboxes/) doesn't exist.")
-        create_dir = input("Do you want to create it? [y/N]: ")
-        if (create_dir == "y") or (create_dir == "Y"):
+        if _prompt_yes_no("Do you want to create it? [y/N]: "):
             os.mkdir(os.path.expanduser(PGS_ROOT_DIR))
         else:
             pgserr.print_error_and_exit(pgserr.ERR_ROOTDIR_NOT_EXISTS, pgserr.ERR_ROOTDIR_NOT_EXISTS_MESSAGE)
