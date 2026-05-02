@@ -882,7 +882,12 @@ if __name__ == "__main__":
     # If help outputs were requested, favor printing them and exit (don't run anything else).
     if pgs_command == "help" or pgs_command == "--help" or pgs_command == "-h" or (globals()["pgs_help"] == 1):
         pgserr.print_debug("Executing help")
-        pgshlp.print_help(pgs_command)
+        # Allow "pg_sandbox help <command>" to print per-command help, in
+        # addition to "pg_sandbox <command> --help" which is handled below.
+        if pgs_command in ("help", "--help", "-h") and len(positional_args) >= 1:
+            pgshlp.print_help(positional_args[0])
+        else:
+            pgshlp.print_help(pgs_command)
         sys.exit(0)
 
     # For simplicity, we enforce using ~/postgresql-sandboxes/ as directory for all sandboxes.
