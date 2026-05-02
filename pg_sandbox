@@ -1689,7 +1689,7 @@ def exec_report(argv, pg_gather_out_absolute_path):
     #    if there are no binaries there, error out.
     try:
         pgs_bin = globals()["pgs_bin"]
-    except:
+    except KeyError:
         print("PostgreSQL binary directory not set. Scanning default directory: "+PGS_BIN_DIR)
         pgs_bin = get_latest_binary_from_default_path("postgres", PGS_BIN_DIR)
         print("Setting binary directory to: "+pgs_bin)
@@ -1697,7 +1697,7 @@ def exec_report(argv, pg_gather_out_absolute_path):
     # 1- if -s was not specified, use pg_gather_temp as name, or error out if it exists
     try:
         pgs_sandbox_dir = globals()["pgs_sandbox_dir"]
-    except:
+    except KeyError:
         print("PostgreSQL Sandbox directory not set. Setting it to: pg_gather_temp.")
         pgs_sandbox_dir = "pg_gather_temp"
 
@@ -1730,10 +1730,17 @@ def exec_report(argv, pg_gather_out_absolute_path):
         # print_and_exit / print_error_and_exit reach here on the abort path;
         # let the exit propagate without re-running cleanup.
         raise
-    except:
+    except Exception as e:
+        # Catching `Exception` (not bare `except:`) avoids swallowing
+        # KeyboardInterrupt/SystemExit and lets us include the original
+        # error in the user-facing message for easier debugging (the
+        # previous bare `except:` discarded urllib/OS error context).
         os.chdir(os.path.expanduser(PGS_ROOT_DIR))
         exec_destroy()
-        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, "Make sure gather_schema.sql is available in "+PGS_PG_GATHER_DIR+" or that there is a working internet connection.")
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "Could not obtain gather_schema.sql ("+type(e).__name__+": "+str(e)+"). "
+            "Make sure it is available in "+PGS_PG_GATHER_DIR
+            +" or that there is a working internet connection.")
 
     # psql -f gather_schema.sql -f out.txt
     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
@@ -1771,10 +1778,13 @@ def exec_report(argv, pg_gather_out_absolute_path):
                     pgserr.print_and_exit("Aborted by user; temporary sandbox removed.")
     except SystemExit:
         raise
-    except:
+    except Exception as e:
         os.chdir(os.path.expanduser(PGS_ROOT_DIR))
         exec_destroy()
-        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, "Make sure gather_report.sql is available in "+PGS_PG_GATHER_DIR+" or that there is a working internet connection.")
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "Could not obtain gather_report.sql ("+type(e).__name__+": "+str(e)+"). "
+            "Make sure it is available in "+PGS_PG_GATHER_DIR
+            +" or that there is a working internet connection.")
     
     # pg_sandbox use -X -f ~/src/pg_gather/gather_report.sql > ../GatherReport.html
     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
