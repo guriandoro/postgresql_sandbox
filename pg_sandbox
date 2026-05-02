@@ -60,25 +60,39 @@ def set_defaults():
 
 def read_env():
     if os.path.isfile(PGS_ENV_FILE):
-        with open(PGS_ENV_FILE) as file:
-            data = json.load(file)
-            globals()["pgs_bin"] = data["PGS_BIN"]
-            globals()["pgs_dbname"] = data["PGS_DBNAME"]
-            globals()["pgs_datadir"] = data["PGS_DATADIR"]
-            globals()["pgs_log"] = data["PGS_LOG"]
-            globals()["pgs_host"] = data["PGS_HOST"]
-            globals()["pgs_port"] = data["PGS_PORT"]
-            # A persisted port counts as user-chosen.
-            globals()["pgs_port_is_default"] = 0
-            globals()["pgs_sandbox_dir"] = data["PGS_SANDBOX_DIR"]
-            globals()["pgs_user"] = data["PGS_USER"]
-            # Replication metadata is optional so old env files keep working.
-            globals()["pgs_role"] = data.get("PGS_ROLE", "primary")
-            globals()["pgs_replicate_from"] = data.get("PGS_REPLICATE_FROM", "")
-            globals()["pgs_slot_name"] = data.get("PGS_SLOT_NAME", "")
-            globals()["pgs_repl_user"] = data.get("PGS_REPL_USER", "replicator")
-            globals()["pgs_cluster"] = data.get("PGS_CLUSTER", "")
-            file.close()
+        try:
+            with open(PGS_ENV_FILE) as file:
+                data = json.load(file)
+        except (OSError, ValueError) as e:
+            pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+                "Could not read environment file '"+PGS_ENV_FILE+"': "+str(e))
+        # Required keys: surface a structured ERR_VAR_NOT_DEFINED instead
+        # of a bare KeyError when an env file has been hand-edited or is
+        # otherwise incomplete.
+        required = [
+            ("PGS_BIN", "pgs_bin"),
+            ("PGS_DBNAME", "pgs_dbname"),
+            ("PGS_DATADIR", "pgs_datadir"),
+            ("PGS_LOG", "pgs_log"),
+            ("PGS_HOST", "pgs_host"),
+            ("PGS_PORT", "pgs_port"),
+            ("PGS_SANDBOX_DIR", "pgs_sandbox_dir"),
+            ("PGS_USER", "pgs_user"),
+        ]
+        for key, var in required:
+            if key not in data:
+                pgserr.print_error_and_exit(pgserr.ERR_VAR_NOT_DEFINED,
+                    "Required key '"+key+"' missing from env file '"+PGS_ENV_FILE
+                    +"'. Re-run 'pg_sandbox setenv -s <sandbox>' or restore the file.")
+            globals()[var] = data[key]
+        # A persisted port counts as user-chosen.
+        globals()["pgs_port_is_default"] = 0
+        # Replication metadata is optional so old env files keep working.
+        globals()["pgs_role"] = data.get("PGS_ROLE", "primary")
+        globals()["pgs_replicate_from"] = data.get("PGS_REPLICATE_FROM", "")
+        globals()["pgs_slot_name"] = data.get("PGS_SLOT_NAME", "")
+        globals()["pgs_repl_user"] = data.get("PGS_REPL_USER", "replicator")
+        globals()["pgs_cluster"] = data.get("PGS_CLUSTER", "")
 
 
 def write_env(dest_file):
