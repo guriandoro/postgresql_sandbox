@@ -6,7 +6,7 @@ pg_sandbox build <version>
 ```
 
 ## Arguments
-- `<version>`: Required. The major.minor PostgreSQL version number (e.g., "15.3", "16.0")
+- `<version>`: Required. The major.minor PostgreSQL version number (e.g., "18.3", "18.2")
 
 ## Description
 The `build` command compiles PostgreSQL from source for the specified version. It:
@@ -17,7 +17,7 @@ The `build` command compiles PostgreSQL from source for the specified version. I
 
 ## Example
 ```
-pg_sandbox build 15.3
+pg_sandbox build 18.3
 ```
 
 ## Technical Details
@@ -64,7 +64,7 @@ The deploy command accepts the standard pg_sandbox options:
 
 ## Example
 ```
-pg_sandbox deploy -b /opt/postgresql/15.3/bin -s pg-15.3
+pg_sandbox deploy -b /opt/postgresql/18.3/bin -s pg-18.3
 ```
 
 ## Notes
@@ -187,7 +187,7 @@ The `setenv` command writes environment variables to the pg_sandbox.env file. Th
 
 ## Example
 ```
-pg_sandbox -b /opt/postgresql/15.3/bin -s pg-15.3 -p 23444 setenv
+pg_sandbox -b /opt/postgresql/18.3/bin -s pg-18.3 -p 23444 setenv
 ```
 
 ## Notes

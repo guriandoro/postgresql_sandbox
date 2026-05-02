@@ -10,23 +10,23 @@ The following examples show how to use environment variables to customize the Po
 Instead of using the default `~/postgresql-sandboxes/`, you can set a custom root directory:
 ```bash
 export PGS_ROOT_DIR="/tmp/my-postgres-sandboxes/"
-pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3
-# Sandbox will be created in /tmp/my-postgres-sandboxes/pg-15.3/
+pg_sandbox deploy -b /opt/postgresql/18.3/ -s pg-18.3
+# Sandbox will be created in /tmp/my-postgres-sandboxes/pg-18.3/
 ```
 
 ### Custom Binary Directory
 If you have PostgreSQL binaries installed in a different location:
 ```bash
 export PGS_BIN_DIR="/usr/local/postgresql/"
-pg_sandbox build 15.3
-# Binaries will be installed in /usr/local/postgresql/15.3/
+pg_sandbox build 18.3
+# Binaries will be installed in /usr/local/postgresql/18.3/
 ```
 
 ### Custom Build Directory
 For temporary builds, you can use a different directory:
 ```bash
 export PGS_BUILD_DIR="/tmp/my-postgres-builds/"
-pg_sandbox build 15.3
+pg_sandbox build 18.3
 # Source code will be downloaded and compiled in /tmp/my-postgres-builds/
 ```
 
@@ -34,7 +34,7 @@ pg_sandbox build 15.3
 To compile PostgreSQL with debug flags for development:
 ```bash
 export PGS_BUILD_DEBUG="1"
-pg_sandbox build 15.3
+pg_sandbox build 18.3
 # PostgreSQL will be compiled with --enable-cassert, --enable-debug, and debug CFLAGS
 ```
 
@@ -42,7 +42,7 @@ pg_sandbox build 15.3
 To see detailed debug information during script execution:
 ```bash
 export PGS_DEBUG="1"
-pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3
+pg_sandbox deploy -b /opt/postgresql/18.3/ -s pg-18.3
 # Will show debug information about commands being executed
 ```
 
@@ -58,7 +58,7 @@ pg_sandbox report out.txt
 To use a different name for the sandbox environment file:
 ```bash
 export PGS_ENV_FILE="my_sandbox_config.json"
-pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3
+pg_sandbox deploy -b /opt/postgresql/18.3/ -s pg-18.3
 # Will create my_sandbox_config.json instead of pg_sandbox.env
 ```
 
@@ -69,8 +69,8 @@ export PGS_ROOT_DIR="/opt/sandboxes/"
 export PGS_BIN_DIR="/usr/local/postgresql/"
 export PGS_BUILD_DIR="/tmp/builds/"
 export PGS_DEBUG="1"
-pg_sandbox build 15.3
-pg_sandbox deploy -b /usr/local/postgresql/15.3/ -s pg-15.3
+pg_sandbox build 18.3
+pg_sandbox deploy -b /usr/local/postgresql/18.3/ -s pg-18.3
 ```
 
 Check help outputs
@@ -80,12 +80,12 @@ pg_sandbox help
 
 Build a new postgres version we don't have. Since PostgreSQL doesn't offer tarball releases, we have to compile it on our own. We are also compiling the contrib packages, so we have the typical extensions (like pg_stat_statements) available to use
 ```
-pg_sandbox build 15.3
+pg_sandbox build 18.3
 ```
 
 Deploy our first sandbox
 ```
-pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3
+pg_sandbox deploy -b /opt/postgresql/18.3/ -s pg-18.3
 ```
 
 Change dir to postgres sandboxes home (if it wasn't already created, it will prompt to create)
@@ -96,22 +96,22 @@ ls -l
 
 Try to create another sandbox with same command (it will generate a port error)
 ```
-pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3
+pg_sandbox deploy -b /opt/postgresql/18.3/ -s pg-18.3
 ```
 
 Override default port (but we are still using the same directory, so it will also error out)
 ```
-pg_sandbox deploy -b /opt/postgresql/15.3/ -s pg-15.3 -p 23444
+pg_sandbox deploy -b /opt/postgresql/18.3/ -s pg-18.3 -p 23444
 ```
 
 Change the sandbox directory used (this command will succeed)
 ```
-pg_sandbox deploy -b /opt/postgresql/15.3/ -s another-pg-15.3 -p 23444
+pg_sandbox deploy -b /opt/postgresql/18.3/ -s another-pg-18.3 -p 23444
 ```
 
 Use the first sandbox deployed
 ```
-cd ~/postgresql-sandboxes/pg-15.3
+cd ~/postgresql-sandboxes/pg-18.3
 ```
 
 Check all the scripts that are created (and investigate what they do).
@@ -133,12 +133,12 @@ pg_sandbox use
 Connect to psql from another directory (we can use the -s argument to tell which sandbox we want to work with)
 ```
 cd
-pg_sandbox use -s pg-15.3
+pg_sandbox use -s pg-18.3
 ```
 
 Go back to our sandbox dir
 ```
-cd ~/postgresql-sandboxes/pg-15.3
+cd ~/postgresql-sandboxes/pg-18.3
 ls -l
 ```
 
@@ -170,7 +170,7 @@ curl -LO https://raw.githubusercontent.com/guriandoro/postgresql_sandbox/master/
 
 Check which binaries we have in the bin dir, to use with the ./run command
 ```
-s -l /opt/postgresql/15.3/bin/
+s -l /opt/postgresql/18.3/bin/
 ```
 
 Use pg_dump to create a new dump of the postgres database
@@ -217,43 +217,43 @@ pg_sandbox report -f out.txt
 
 Deploy a primary first.
 ```
-pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-primary
+pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-primary
 ```
 
 Attach a streaming standby. The source is prepared on demand (wal_level, max_wal_senders, replication role, pg_hba.conf) and a physical replication slot is created via `pg_basebackup -C --slot=...`.
 ```
-pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-s1 \
-    --replicate-from pg-16-primary --slot pg_16_s1_slot
+pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-s1 \
+    --replicate-from pg-18-primary --slot pg_18_s1_slot
 ```
 
 Attach a synchronous standby. `--sync` appends the standby's name to `synchronous_standby_names` on the primary using the FIRST quorum form.
 ```
-pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-s2 \
-    --replicate-from pg-16-primary --slot pg_16_s2_slot --sync
+pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-s2 \
+    --replicate-from pg-18-primary --slot pg_18_s2_slot --sync
 ```
 
 Cascade off an existing standby instead of the primary.
 ```
-pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-s1c \
-    --replicate-from pg-16-s1 --slot pg_16_s1c_slot
+pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-s1c \
+    --replicate-from pg-18-s1 --slot pg_18_s1c_slot
 ```
 
 Inspect replication state on either side.
 ```
-pg_sandbox status -s pg-16-primary
-pg_sandbox status -s pg-16-s1
+pg_sandbox status -s pg-18-primary
+pg_sandbox status -s pg-18-s1
 ```
 
 Promote a standby to a standalone primary.
 ```
-pg_sandbox promote -s pg-16-s2
+pg_sandbox promote -s pg-18-s2
 ```
 
 ## Clusters (one-shot replication topology)
 
 Deploy a cluster with a primary and N standbys, the first K of which are synchronous, all in one command. Members live together under a per-cluster directory `<PGS_ROOT_DIR>/<cluster>/`, named `<cluster>_p`, `<cluster>_s1`, `<cluster>_s2`, ...
 ```
-pg_sandbox cluster deploy -s rep -b /opt/postgresql/16.2 -N 2 --sync-count 1
+pg_sandbox cluster deploy -s rep -b /opt/postgresql/18.3 -N 2 --sync-count 1
 ```
 
 Show consolidated status for every member of the cluster.
