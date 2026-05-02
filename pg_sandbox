@@ -359,18 +359,46 @@ def exec_build(version):
             # Download source code tar.gz file
             url = "https://ftp.postgresql.org/pub/source/v"+version+"/postgresql-"+version+".tar.gz"
             print("Downloading source code from: "+url)
-            curl_command = ["curl", "-o", curl_out_file, "-L", url]
-            run(curl_command, universal_newlines=True)
+            curl_command = ["curl", "-fSL", "-o", curl_out_file, url]
+            curl_result = run(curl_command, universal_newlines=True)
+            if curl_result.returncode != 0:
+                # Remove the partial / error-page file so a retry can re-fetch
+                # cleanly instead of hitting the "File already exists" branch.
+                try:
+                    if os.path.isfile(curl_out_file):
+                        os.remove(curl_out_file)
+                except OSError:
+                    pass
+                pgserr.print_step_failure_and_exit(
+                    pgserr.ERR_BUILD_FAILED, "curl",
+                    "curl exited with code "+str(curl_result.returncode)
+                    +" while downloading "+url,
+                    "Hint: verify the version exists at "
+                    "https://ftp.postgresql.org/pub/source/ and that you have "
+                    "network access.")
             #(pg_src_path, headers) = urllib.request.urlretrieve(url, "postgresql-src.tar.gz")
     except Exception as e:
-        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
-    
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, str(e))
+
     # 2- Untar source code
     try:
         untar_command = ["tar", "xzf", curl_out_file]
-        run(untar_command, universal_newlines=True)
+        untar_result = run(untar_command, universal_newlines=True)
+        if untar_result.returncode != 0:
+            # The archive is unusable; drop it so a retry re-downloads from
+            # scratch instead of repeatedly failing on the same bad bytes.
+            try:
+                os.remove(curl_out_file)
+            except OSError:
+                pass
+            pgserr.print_step_failure_and_exit(
+                pgserr.ERR_BUILD_FAILED, "tar",
+                "tar exited with code "+str(untar_result.returncode)
+                +" while extracting "+curl_out_file,
+                "Hint: the downloaded archive was removed; rerun "
+                "'pg_sandbox build "+version+"' to fetch it again.")
     except Exception as e:
-        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, str(e))
 
     # 3- Run configure
     os.chdir("postgresql-"+version)
