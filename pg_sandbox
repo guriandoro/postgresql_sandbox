@@ -341,7 +341,10 @@ def create_handy_scripts():
             file.writelines(["#!/bin/bash\n", sys.argv[0]+" restart\n"])
             os.chmod("restart",user_group_rwx)
         with open("run", "w") as file:
-            file.writelines(["#!/bin/bash\n", sys.argv[0]+" run $@\n"])
+            # Quote "$@" so arguments containing spaces, globs, or other
+            # shell metacharacters reach the wrapped binary intact (a
+            # bare $@ word-splits and globs the args on every invocation).
+            file.writelines(["#!/bin/bash\n", sys.argv[0]+" run \"$@\"\n"])
             os.chmod("run",user_group_rwx)
         with open("start", "w") as file:
             file.writelines(["#!/bin/bash\n", sys.argv[0]+" start\n"])
@@ -353,7 +356,7 @@ def create_handy_scripts():
             file.writelines(["#!/bin/bash\n", sys.argv[0]+" stop\n"])
             os.chmod("stop",user_group_rwx)
         with open("use", "w") as file:
-            file.writelines(["#!/bin/bash\n", sys.argv[0]+" use $@\n"])
+            file.writelines(["#!/bin/bash\n", sys.argv[0]+" use \"$@\"\n"])
             os.chmod("use",user_group_rwx)
     except Exception as e:
         pgserr.print_error(pgserr.ERR_GENERIC_ERROR, str(e))
