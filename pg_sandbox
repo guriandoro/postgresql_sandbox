@@ -108,6 +108,42 @@ def get_latest_binary_from_default_path(bin_name, root_path):
         pgserr.print_error_and_exit(bin_name+" binary not found in '"+root_path+"' directory. Use -b to point to a valid PostgreSQL binary directory.")
 
 
+# --- Argument validation helpers -----------------------------------------
+
+def _validate_str(opt_name, arg):
+    # Reject None, empty/whitespace-only and strings containing NUL bytes.
+    if arg is None:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                    opt_name+" requires a value.")
+    val = arg.strip()
+    if val == "":
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                    opt_name+" cannot be empty.")
+    if "\x00" in val:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                    opt_name+" cannot contain NUL characters.")
+    return val
+
+
+def _validate_path(opt_name, arg):
+    # Strip + collapse '.', '..' and redundant separators via normpath.
+    val = _validate_str(opt_name, arg)
+    return os.path.normpath(val)
+
+
+def _validate_port(opt_name, arg):
+    val = _validate_str(opt_name, arg)
+    try:
+        port = int(val)
+    except ValueError:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                    opt_name+" must be an integer between 1 and 65535.")
+    if port < 1 or port > 65535:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                    opt_name+" must be between 1 and 65535.")
+    return str(port)
+
+
 # Returns an array with all the positional arguments (unprocessed).
 def parse_opts():
     try:
@@ -120,33 +156,31 @@ def parse_opts():
         pgserr.print_debug("Positional arguments: ", args)
     except getopt.GetoptError as error_msg:
         pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS, error_msg)
-    
-    # TODO: (high prio) validate all args!
-    # TODO: (low low prio) strip paths from unneeded . and ..
+
     for opt, arg in opts:
         if opt in ['-b','--bin']:
-            globals()["pgs_bin"] = arg
+            globals()["pgs_bin"] = _validate_path(opt, arg)
         elif opt in ['-d','--dbname']:
-            globals()["pgs_dbname"] = arg
+            globals()["pgs_dbname"] = _validate_str(opt, arg)
         elif opt in ['-D','--datadir']:
-            globals()["pgs_datadir"] = arg
+            globals()["pgs_datadir"] = _validate_path(opt, arg)
         elif opt in ['-f','--force']:
             globals()["pgs_force"] = 1
         elif opt in ['-l','--log']:
-            globals()["pgs_log"] = arg
+            globals()["pgs_log"] = _validate_path(opt, arg)
         elif opt in ['-h','--host']:
-            globals()["pgs_host"] = arg
+            globals()["pgs_host"] = _validate_str(opt, arg)
         elif opt in ['-n','--no-dsn']:
             globals()["pgs_no_dsn"] = 1
         elif opt in ['-p','--port']:
-            globals()["pgs_port"] = arg
+            globals()["pgs_port"] = _validate_port(opt, arg)
         elif opt in ['-s','--sandbox-dir']:
-            globals()["pgs_sandbox_dir"] = arg
+            globals()["pgs_sandbox_dir"] = _validate_path(opt, arg)
         elif opt in ['-U','--user']:
-            globals()["pgs_user"] = arg
+            globals()["pgs_user"] = _validate_str(opt, arg)
         elif opt in ['-?','--help']:
             globals()["pgs_help"] = 1
-    
+
     return args
 
 
