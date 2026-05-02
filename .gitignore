@@ -1,0 +1,3 @@
+# Python bytecode caches (regenerated on import; interpreter-version specific)
+__pycache__/
+*.pyc
