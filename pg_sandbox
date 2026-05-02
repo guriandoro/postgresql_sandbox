@@ -2151,7 +2151,11 @@ if __name__ == "__main__":
         pgserr.print_and_exit("Database restarted. Listening on port "+globals()["pgs_port"])
     elif pgs_command == "run":
         pgserr.print_debug("Executing run")
-        exec_run(positional_args, False)
+        # Propagate the wrapped binary's return code so shell scripts and
+        # CI pipelines can detect failures of `pg_sandbox run ...` instead
+        # of always seeing a 0 exit from the trailing sys.exit(0) below.
+        run_rc, _ = exec_run(positional_args, False)
+        sys.exit(run_rc)
     elif pgs_command == "setenv":
         pgserr.print_debug("Executing setenv")
         exec_setenv()
@@ -2171,6 +2175,8 @@ if __name__ == "__main__":
             pgserr.print_and_exit("Database stopped.")
     elif pgs_command == "use":
         pgserr.print_debug("Executing use")
-        exec_use(positional_args)
+        # Propagate psql's return code (already returned by exec_use) so
+        # callers can react to non-zero results.
+        sys.exit(exec_use(positional_args))
     
     sys.exit(0)
