@@ -1714,7 +1714,7 @@ def exec_report(argv, pg_gather_out_absolute_path):
 
 def exec_run(argv,return_stdout=False):
     # 0- validate inputs and change to sandbox directory
-    if not argv or len(argv) == 0:
+    if not argv:
         pgserr.print_error_and_exit(pgserr.ERR_SUBCOMMAND_NOT_SPECIFIED,
                                     pgserr.ERR_SUBCOMMAND_NOT_SPECIFIED_MESSAGE)
 
