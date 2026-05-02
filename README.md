@@ -19,18 +19,18 @@ The following environment variables can be used to customize the behavior of pg_
 
 Deploy a sandbox.
 ```
-pg_sandbox deploy -b /opt/postgresql/16.0 -s pg-16.0
+pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18.3
 ```
 
 Use the sandbox.
 ```
-cd ~/postgresql-sandboxes/pg-16.0/
+cd ~/postgresql-sandboxes/pg-18.3/
 ./use
 ```
 
 Destroy the sandbox.
 ```
-pg_sandbox destroy -s pg-16.0
+pg_sandbox destroy -s pg-18.3
 ```
 
 # Physical replication
@@ -41,17 +41,17 @@ Two equivalent entry points:
 
 - Incremental, one node at a time:
   ```
-  pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-primary
-  pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-s1 \
-      --replicate-from pg-16-primary --slot pg_16_s1_slot
-  pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-s2 \
-      --replicate-from pg-16-primary --slot pg_16_s2_slot --sync
+  pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-primary
+  pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-s1 \
+      --replicate-from pg-18-primary --slot pg_18_s1_slot
+  pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-s2 \
+      --replicate-from pg-18-primary --slot pg_18_s2_slot --sync
   ```
   `--replicate-from` may also point at another standby (cascading).
 
 - One-shot cluster:
   ```
-  pg_sandbox cluster deploy  -s rep -b /opt/postgresql/16.2 -N 2 --sync-count 1
+  pg_sandbox cluster deploy  -s rep -b /opt/postgresql/18.3 -N 2 --sync-count 1
   pg_sandbox cluster status  -s rep
   pg_sandbox cluster destroy -s rep -f
   ```

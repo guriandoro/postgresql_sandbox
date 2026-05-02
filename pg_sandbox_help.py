@@ -57,7 +57,7 @@ _COMMAND_HELP = {
     pg_sandbox build [OPTIONS] VERSION
 
 Downloads, configures, builds and installs the PostgreSQL major.minor
-version supplied as the only positional argument (e.g. "16.2"). Source
+version supplied as the only positional argument (e.g. "18.3"). Source
 is fetched from https://ftp.postgresql.org and the resulting binaries
 are installed under PGS_BIN_DIR/<version>/ (defaults to
 /opt/postgresql/<version>/).
@@ -79,7 +79,7 @@ Environment:
     PGS_BUILD_DIR      override default build scratch dir (/tmp/postgresql-sandbox-build/)
 
 Example:
-    pg_sandbox build --with-openssl --configure-opts="--enable-tap-tests" 16.2
+    pg_sandbox build --with-openssl --configure-opts="--enable-tap-tests" 18.3
 """,
 
     "deploy": """Usage:
@@ -119,11 +119,11 @@ Replication options:
                         the source (appended to synchronous_standby_names)
 
 Examples:
-    pg_sandbox deploy -b /opt/postgresql/16.2 -s sbox_16
-    pg_sandbox deploy -b /opt/postgresql/16.2 -s sbox_16_s1 \\
-        --replicate-from sbox_16 --slot sbox_16_s1_slot
-    pg_sandbox deploy -b /opt/postgresql/16.2 -s sbox_16_s2 \\
-        --replicate-from sbox_16 --slot sbox_16_s2_slot --sync
+    pg_sandbox deploy -b /opt/postgresql/18.3 -s sbox_18
+    pg_sandbox deploy -b /opt/postgresql/18.3 -s sbox_18_s1 \\
+        --replicate-from sbox_18 --slot sbox_18_s1_slot
+    pg_sandbox deploy -b /opt/postgresql/18.3 -s sbox_18_s2 \\
+        --replicate-from sbox_18 --slot sbox_18_s2_slot --sync
 """,
 
     "cluster": """Usage:
@@ -177,7 +177,7 @@ Options:
     -f, --force         (destroy) skip the confirmation prompt
 
 Examples:
-    pg_sandbox cluster deploy  -s rep -b /opt/postgresql/16.2 -N 2 --sync-count 1
+    pg_sandbox cluster deploy  -s rep -b /opt/postgresql/18.3 -N 2 --sync-count 1
     pg_sandbox cluster status  -s rep
     pg_sandbox cluster destroy -s rep -f
 """,
@@ -197,7 +197,7 @@ Options:
     -s, --sandbox-dir   standby sandbox to promote (required)
 
 Example:
-    pg_sandbox promote -s sbox_16_s1
+    pg_sandbox promote -s sbox_18_s1
 """,
 
     "destroy": """Usage:
@@ -212,7 +212,7 @@ Options:
     -f, --force         do not ask for confirmation; remove immediately
 
 Example:
-    pg_sandbox destroy -s sbox_16 -f
+    pg_sandbox destroy -s sbox_18 -f
 """,
 
     "global_status": """Usage:
@@ -275,7 +275,7 @@ Options:
     -s, --sandbox-dir   sandbox directory (required)
 
 Example:
-    pg_sandbox restart -s sbox_16
+    pg_sandbox restart -s sbox_18
 """,
 
     "run": """Usage:
@@ -291,8 +291,8 @@ Options:
     -n, --no-dsn        do not auto-inject -h/-p/-U; pass ARGS verbatim
 
 Examples:
-    pg_sandbox run -s sbox_16 pgbench -i -s 10 postgres
-    pg_sandbox run -s sbox_16 -n pg_config --version
+    pg_sandbox run -s sbox_18 pgbench -i -s 10 postgres
+    pg_sandbox run -s sbox_18 -n pg_config --version
 """,
 
     "setenv": """Usage:
@@ -316,7 +316,7 @@ Options:
     -l, --log           server log file
 
 Example:
-    pg_sandbox setenv -s sbox_16 -d mydb -U alice
+    pg_sandbox setenv -s sbox_18 -d mydb -U alice
 """,
 
     "start": """Usage:
@@ -330,7 +330,7 @@ Options:
     -s, --sandbox-dir   sandbox directory (required)
 
 Example:
-    pg_sandbox start -s sbox_16
+    pg_sandbox start -s sbox_18
 """,
 
     "status": """Usage:
@@ -350,7 +350,7 @@ Options:
     -s, --sandbox-dir   sandbox directory (required)
 
 Example:
-    pg_sandbox status -s sbox_16
+    pg_sandbox status -s sbox_18
 """,
 
     "stop": """Usage:
@@ -364,7 +364,7 @@ Options:
     -s, --sandbox-dir   sandbox directory (required)
 
 Example:
-    pg_sandbox stop -s sbox_16
+    pg_sandbox stop -s sbox_18
 """,
 
     "use": """Usage:
@@ -380,9 +380,9 @@ Options:
     -U, --user          override connecting user
 
 Examples:
-    pg_sandbox use -s sbox_16
-    pg_sandbox use -s sbox_16 -X -f my_script.sql
-    pg_sandbox use -s sbox_16 -c "SELECT version()"
+    pg_sandbox use -s sbox_18
+    pg_sandbox use -s sbox_18 -X -f my_script.sql
+    pg_sandbox use -s sbox_18 -c "SELECT version()"
 """,
 }
 

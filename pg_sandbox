@@ -2276,7 +2276,7 @@ if __name__ == "__main__":
         if not positional_args:
             pgserr.print_error_and_exit(
                 pgserr.ERR_INCORRECT_PARAMS,
-                "build requires a PostgreSQL version (e.g. '16.2') as a "
+                "build requires a PostgreSQL version (e.g. '18.3') as a "
                 "positional argument. See 'pg_sandbox help build'.")
         version = positional_args[0]
         exec_build(version)
