@@ -1684,7 +1684,19 @@ def exec_report(argv, pg_gather_out_absolute_path):
 
     # psql -f gather_schema.sql -f out.txt
     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
-    exec_run(["psql","-f",gather_schema_path,"-f",pg_gather_out_absolute_path], False)
+    # If loading the schema or out.txt fails (syntax issues, incompatible
+    # input, dropped connection), abort instead of silently producing a
+    # report from an empty / inconsistent database. Tear down the temp
+    # sandbox first so we don't leak it on the way out.
+    schema_rc, _ = exec_run(["psql","-v","ON_ERROR_STOP=1",
+                             "-f",gather_schema_path,
+                             "-f",pg_gather_out_absolute_path], False)
+    if schema_rc != 0:
+        os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+        exec_destroy()
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "psql failed to load the gather schema or '"+pg_gather_out_absolute_path
+            +"' (exit code "+str(schema_rc)+"). Temporary sandbox removed.")
 
     # 4- generate report
     gather_report_path = None
@@ -1714,6 +1726,15 @@ def exec_report(argv, pg_gather_out_absolute_path):
     # pg_sandbox use -X -f ~/src/pg_gather/gather_report.sql > ../GatherReport.html
     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
     (res_code, res_out) = exec_run(["psql","-X","-f",gather_report_path], True)
+    # Don't write a half-baked HTML file if psql couldn't generate the
+    # report (e.g. missing pg_gather objects, runtime errors). Clean up
+    # the temp sandbox and surface the failure.
+    if res_code != 0:
+        os.chdir(os.path.expanduser(PGS_ROOT_DIR))
+        exec_destroy()
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "psql failed to generate the gather report (exit code "
+            +str(res_code)+"). Temporary sandbox removed.")
 
     res_dir = os.path.dirname(pg_gather_out_absolute_path)
     # Derive the report filename from the input file's basename (without its
