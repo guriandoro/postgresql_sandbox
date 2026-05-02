@@ -116,7 +116,7 @@ def write_env(dest_file):
         with open(dest_file, "w") as file:
             json.dump(data, file, indent=0)
     except Exception as e:
-        pgserr.print_and_exit(pgserr.ERR_GENERIC_ERROR, e.message)
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, str(e))
 
 
 def check_compulsory_global_vars(vars):
@@ -304,7 +304,7 @@ def create_handy_scripts():
             file.writelines(["#!/bin/bash\n", sys.argv[0]+" use $@\n"])
             os.chmod("use",user_group_rwx)
     except Exception as e:
-        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, e.message)
+        pgserr.print_error(pgserr.ERR_GENERIC_ERROR, str(e))
     
     return 0
 
