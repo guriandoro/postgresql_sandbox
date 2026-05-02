@@ -189,6 +189,27 @@ def _validate_path(opt_name, arg):
     return os.path.normpath(val)
 
 
+def _validate_relative_path(opt_name, arg):
+    """Like _validate_path but rejects absolute paths and '..' traversal.
+
+    Used for sandbox-scoped values (sandbox dir, datadir, log file,
+    replicate-from), which the rest of the code joins under
+    PGS_ROOT_DIR / the sandbox dir. Absolute paths or '..' segments
+    would silently escape the sandbox -- e.g.
+    `--sandbox-dir=../../etc` followed by `destroy -f` would target a
+    directory outside the sandbox root.
+    """
+    val = _validate_path(opt_name, arg)
+    if os.path.isabs(val):
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+            opt_name+" must be a relative path inside the sandbox; got '"+arg+"'.")
+    parts = val.split(os.sep)
+    if ".." in parts:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+            opt_name+" cannot contain '..' segments; got '"+arg+"'.")
+    return val
+
+
 def _validate_port(opt_name, arg):
     val = _validate_str(opt_name, arg)
     try:
@@ -224,11 +245,11 @@ def parse_opts():
         elif opt in ['-d','--dbname']:
             globals()["pgs_dbname"] = _validate_str(opt, arg)
         elif opt in ['-D','--datadir']:
-            globals()["pgs_datadir"] = _validate_path(opt, arg)
+            globals()["pgs_datadir"] = _validate_relative_path(opt, arg)
         elif opt in ['-f','--force']:
             globals()["pgs_force"] = 1
         elif opt in ['-l','--log']:
-            globals()["pgs_log"] = _validate_path(opt, arg)
+            globals()["pgs_log"] = _validate_relative_path(opt, arg)
         elif opt in ['-h','--host']:
             globals()["pgs_host"] = _validate_str(opt, arg)
         elif opt in ['-n','--no-dsn']:
@@ -237,7 +258,7 @@ def parse_opts():
             globals()["pgs_port"] = _validate_port(opt, arg)
             globals()["pgs_port_is_default"] = 0
         elif opt in ['-s','--sandbox-dir']:
-            globals()["pgs_sandbox_dir"] = _validate_path(opt, arg)
+            globals()["pgs_sandbox_dir"] = _validate_relative_path(opt, arg)
         elif opt in ['-U','--user']:
             globals()["pgs_user"] = _validate_str(opt, arg)
         elif opt in ['-?','--help']:
@@ -249,7 +270,7 @@ def parse_opts():
         elif opt == '--configure-opts':
             globals()["pgs_configure_opts"] = _validate_str(opt, arg)
         elif opt == '--replicate-from':
-            globals()["pgs_replicate_from"] = _validate_path(opt, arg)
+            globals()["pgs_replicate_from"] = _validate_relative_path(opt, arg)
         elif opt == '--slot':
             globals()["pgs_slot_name"] = _validate_str(opt, arg)
         elif opt == '--sync':
