@@ -1114,9 +1114,16 @@ def _deploy_standby():
 
 # --- Cluster commands -----------------------------------------------------
 
+CLUSTER_MANIFEST_FILE = "cluster.json"
+
+
 def _cluster_manifest_path(cluster_name):
+    # The manifest lives inside the per-cluster directory, so the whole
+    # cluster (members + metadata) is self-contained under
+    # <PGS_ROOT_DIR>/<cluster>/ and `cluster destroy` cleans it up by
+    # removing that single tree.
     return os.path.join(os.path.expanduser(PGS_ROOT_DIR),
-                        cluster_name+".cluster.json")
+                        cluster_name, CLUSTER_MANIFEST_FILE)
 
 
 def _read_cluster_manifest(cluster_name):
@@ -1175,12 +1182,10 @@ def exec_cluster_deploy():
 
     root = os.path.expanduser(PGS_ROOT_DIR)
     manifest_path = _cluster_manifest_path(cluster_name)
-    if os.path.exists(manifest_path):
-        pgserr.print_error_and_exit(pgserr.ERR_CLUSTER_EXISTS,
-            pgserr.ERR_CLUSTER_EXISTS_MESSAGE+" Manifest already at: "+manifest_path)
 
-    # Members live inside a parent directory named after the cluster, so a
-    # one-shot deploy is fully self-contained:
+    # Members and the manifest live inside a parent directory named after
+    # the cluster, so a one-shot deploy is fully self-contained:
+    #   <PGS_ROOT_DIR>/<cluster>/cluster.json
     #   <PGS_ROOT_DIR>/<cluster>/<basename>_p
     #   <PGS_ROOT_DIR>/<cluster>/<basename>_s1, _s2, ...
     # `basename` strips any subdirectory prefix the user may have passed via
@@ -1445,17 +1450,10 @@ def exec_cluster_destroy():
             pass
         os.chdir(root)
 
-    # 4) Remove the manifest itself.
-    try:
-        os.remove(_cluster_manifest_path(cluster_name))
-    except FileNotFoundError:
-        pass
-
-    # 5) Remove the cluster parent directory if it exists. New-style
-    #    clusters keep their members under <root>/<cluster>/, so once the
-    #    members are gone we delete the now-empty wrapper. We don't error
-    #    out if the directory is missing -- legacy clusters (created
-    #    before the per-cluster directory layout) never had one.
+    # 4) Remove the per-cluster directory (which also takes the manifest
+    #    with it -- the manifest lives at <cluster>/cluster.json). After
+    #    the member sandboxes have been destroyed above, what's left is
+    #    the wrapper dir holding the manifest.
     cluster_dir_abs = os.path.join(root, cluster_name)
     if os.path.isdir(cluster_dir_abs):
         try:
@@ -1525,32 +1523,59 @@ def _iter_sandbox_dirs(root):
 
 
 def _iter_cluster_manifests(root):
-    """Return (manifests, warnings) for every '*.cluster.json' under root.
+    """Return (manifests, warnings) for every '<cluster>/cluster.json' under root.
 
-    Manifests are sorted by filename and each one is augmented with a
-    synthesized 'name' field if missing. Files that fail to parse are
-    skipped and surfaced as warnings instead of aborting the listing."""
+    Walks the tree rooted at `root` looking for cluster manifest files.
+    A directory containing PGS_ENV_FILE is treated as a sandbox leaf and
+    is not descended into (its private files -- recovery configs, json
+    blobs, etc. -- must never be mistaken for cluster metadata). A
+    directory that contains a CLUSTER_MANIFEST_FILE is recorded as a
+    cluster and pruned from further descent (its immediate children are
+    member sandboxes). Manifests are sorted by path and each one is
+    augmented with a synthesized 'name' field if missing. Files that
+    fail to parse are skipped and surfaced as warnings instead of
+    aborting the listing."""
     manifests = []
     warnings = []
     if not root or not os.path.isdir(root):
         return manifests, warnings
-    try:
-        with os.scandir(root) as it:
-            entries = [e for e in it
-                       if e.is_file() and e.name.endswith(".cluster.json")]
-    except OSError as e:
-        warnings.append("Could not scan cluster manifests under '"+root+"': "+str(e))
-        return manifests, warnings
-    entries.sort(key=lambda e: e.name)
-    for entry in entries:
+
+    found_paths = []
+    stack = [root]
+    while stack:
+        current = stack.pop()
         try:
-            with open(entry.path) as f:
+            entries = list(os.scandir(current))
+        except OSError as e:
+            warnings.append("Could not scan '"+current+"': "+str(e))
+            continue
+        names = {e.name for e in entries}
+        # Sandbox leaf: stop here so we don't surface stray *.json files
+        # from inside a sandbox as cluster manifests.
+        if PGS_ENV_FILE in names:
+            continue
+        if CLUSTER_MANIFEST_FILE in names:
+            found_paths.append(os.path.join(current, CLUSTER_MANIFEST_FILE))
+            # Don't descend into member sandboxes; the PGS_ENV_FILE check
+            # above would filter them anyway, but pruning saves work.
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+            except OSError:
+                continue
+
+    found_paths.sort()
+    for path in found_paths:
+        try:
+            with open(path) as f:
                 data = json.load(f)
         except Exception as e:
-            warnings.append("Could not read cluster manifest '"+entry.path+"': "+str(e))
+            warnings.append("Could not read cluster manifest '"+path+"': "+str(e))
             continue
         if "name" not in data or not data["name"]:
-            data["name"] = entry.name[:-len(".cluster.json")]
+            data["name"] = os.path.relpath(os.path.dirname(path), root)
         manifests.append(data)
     return manifests, warnings
 

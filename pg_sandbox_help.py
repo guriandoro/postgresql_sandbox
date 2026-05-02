@@ -132,15 +132,16 @@ Examples:
     pg_sandbox cluster destroy -s CLUSTER [-f]
 
 Provisions, inspects, or tears down a primary + N-standby cluster as a
-single unit. Members are kept together under one per-cluster parent
-directory:
+single unit. Members and metadata are kept together under one
+per-cluster parent directory:
 
     <PGS_ROOT_DIR>/<CLUSTER>/
+        cluster.json        manifest tying the members together
         <CLUSTER>_p/        primary
         <CLUSTER>_s1/       standby 1
         <CLUSTER>_s<N>/     standby N
 
-A manifest file at <PGS_ROOT_DIR>/<CLUSTER>.cluster.json ties the
+The manifest file at <PGS_ROOT_DIR>/<CLUSTER>/cluster.json ties the
 members together for status/destroy.
 
 cluster deploy:
@@ -153,7 +154,7 @@ cluster deploy:
      "<slot-prefix>_s<i>" (slot prefix defaults to CLUSTER).
   4. The first --sync-count standbys are registered as synchronous on
      the primary.
-  5. Writes the manifest.
+  5. Writes the manifest at <CLUSTER>/cluster.json.
 
 cluster status:
   Prints connection + replication info for every member (uses
@@ -163,7 +164,7 @@ cluster status:
 cluster destroy:
   Stops + removes all standbys first (best-effort dropping their slots
   on the primary while it is still running), then the primary, then
-  the manifest file, then the (now-empty) per-cluster directory.
+  the per-cluster directory (which also takes the manifest with it).
   Honors -f.
 
 Options:
