@@ -903,9 +903,12 @@ def _drop_replication_slot_on_source(src_sandbox_dir, slot_name):
     on the source forever. Failures here are debug-logged, never fatal."""
     if not slot_name:
         return
-    try:
-        env = _read_sandbox_env(src_sandbox_dir)
-    except SystemExit:
+    # Use the non-fatal reader; the previous code caught SystemExit raised
+    # by _read_sandbox_env's print_error_and_exit, which left the user
+    # with a misleading ERROR line on the way out of a successful destroy.
+    env = _read_sandbox_env_safe(src_sandbox_dir)
+    if env is None:
+        pgserr.print_debug("Source '"+src_sandbox_dir+"' env not readable; skipping slot drop for '"+slot_name+"'.")
         return
     src_bin = env["PGS_BIN"]
     src_host = env["PGS_HOST"]
@@ -1187,10 +1190,13 @@ def exec_cluster_deploy():
 
 def _print_replication_status_for_member(label, sandbox_dir):
     """Print connection + replication info for a single cluster member."""
-    try:
-        env = _read_sandbox_env(sandbox_dir)
-    except SystemExit:
-        print("["+label+"] '"+sandbox_dir+"': env file missing.")
+    # _read_sandbox_env_safe returns None on missing/unreadable env files
+    # without printing or exiting; the previous SystemExit-catching path
+    # left the user seeing both the helper's "ERROR: ..." and our own
+    # "env file missing" message for the same condition.
+    env = _read_sandbox_env_safe(sandbox_dir)
+    if env is None:
+        print("["+label+"] '"+sandbox_dir+"': env file missing or unreadable.")
         return
     bin_dir = env["PGS_BIN"]
     host = env["PGS_HOST"]
