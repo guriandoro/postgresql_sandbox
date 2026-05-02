@@ -23,6 +23,9 @@ ERR_BASEBACKUP_FAILED = 18
 ERR_NOT_A_STANDBY = 19
 ERR_CLUSTER_EXISTS = 20
 ERR_CLUSTER_MANIFEST_MISSING = 21
+ERR_PUBLICATION_FAILED = 22
+ERR_SUBSCRIPTION_FAILED = 23
+ERR_SCHEMA_COPY_FAILED = 24
 
 # Error messages
 # ERR_GENERIC_ERROR_MESSAGE = comes from generic exception
@@ -46,6 +49,9 @@ ERR_BASEBACKUP_FAILED_MESSAGE = "pg_basebackup failed while cloning the source i
 ERR_NOT_A_STANDBY_MESSAGE = "The target sandbox is not a standby; only standbys can be promoted."
 ERR_CLUSTER_EXISTS_MESSAGE = "A cluster with that name (or one of its member sandbox directories) already exists."
 ERR_CLUSTER_MANIFEST_MISSING_MESSAGE = "Cluster manifest file not found under the sandbox root directory."
+ERR_PUBLICATION_FAILED_MESSAGE = "Failed to create or read a logical replication publication on the source instance."
+ERR_SUBSCRIPTION_FAILED_MESSAGE = "Failed to create a logical replication subscription on the target instance."
+ERR_SCHEMA_COPY_FAILED_MESSAGE = "Failed to copy schema from publisher to subscriber via pg_dump | psql."
 
 # Functions
 def print_and_exit(message):

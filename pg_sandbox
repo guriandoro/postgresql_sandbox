@@ -56,6 +56,22 @@ def set_defaults():
     globals()["pgs_nodes"] = 0
     globals()["pgs_sync_count"] = 0
     globals()["pgs_slot_prefix"] = ""
+    # logical-replication options (default to non-logical-replication mode so
+    # existing workflows remain unaffected).
+    globals()["pgs_subscribe_from"] = ""
+    globals()["pgs_pub_name"] = ""
+    globals()["pgs_sub_name"] = ""
+    globals()["pgs_copy_schema"] = 0
+    globals()["pgs_no_copy_data"] = 0
+    globals()["pgs_all_tables"] = 0
+    globals()["pgs_tables"] = ""
+    globals()["pgs_logical"] = 0
+    globals()["pgs_logical_pub_name"] = ""
+    # Per-sandbox logical-replication metadata persisted in pg_sandbox.env.
+    globals()["pgs_subscription_name"] = ""
+    globals()["pgs_publication_name"] = ""
+    globals()["pgs_subscription_dbname"] = ""
+    globals()["pgs_publications"] = []
 
 
 def read_env():
@@ -93,6 +109,17 @@ def read_env():
         globals()["pgs_slot_name"] = data.get("PGS_SLOT_NAME", "")
         globals()["pgs_repl_user"] = data.get("PGS_REPL_USER", "replicator")
         globals()["pgs_cluster"] = data.get("PGS_CLUSTER", "")
+        # Logical-replication metadata is also optional so plain primaries
+        # / physical standbys keep producing the same env file as before.
+        globals()["pgs_subscribe_from"] = data.get("PGS_SUBSCRIBE_FROM", "")
+        globals()["pgs_subscription_name"] = data.get("PGS_SUBSCRIPTION_NAME", "")
+        globals()["pgs_publication_name"] = data.get("PGS_PUBLICATION_NAME", "")
+        globals()["pgs_subscription_dbname"] = data.get("PGS_SUBSCRIPTION_DBNAME", "")
+        publications_value = data.get("PGS_PUBLICATIONS", [])
+        if isinstance(publications_value, list):
+            globals()["pgs_publications"] = publications_value
+        else:
+            globals()["pgs_publications"] = []
 
 
 def write_env(dest_file):
@@ -125,6 +152,24 @@ def write_env(dest_file):
     cluster = globals().get("pgs_cluster", "")
     if cluster:
         data["PGS_CLUSTER"] = cluster
+    # Logical-replication metadata is only written when actually used, so
+    # the env file for a plain primary remains byte-for-byte identical to
+    # the pre-logical-support format.
+    subscribe_from = globals().get("pgs_subscribe_from", "")
+    if subscribe_from:
+        data["PGS_SUBSCRIBE_FROM"] = subscribe_from
+    subscription_name = globals().get("pgs_subscription_name", "")
+    if subscription_name:
+        data["PGS_SUBSCRIPTION_NAME"] = subscription_name
+    publication_name = globals().get("pgs_publication_name", "")
+    if publication_name:
+        data["PGS_PUBLICATION_NAME"] = publication_name
+    subscription_dbname = globals().get("pgs_subscription_dbname", "")
+    if subscription_dbname:
+        data["PGS_SUBSCRIPTION_DBNAME"] = subscription_dbname
+    publications = globals().get("pgs_publications", []) or []
+    if publications:
+        data["PGS_PUBLICATIONS"] = publications
 
     try:
         with open(dest_file, "w") as file:
@@ -261,7 +306,9 @@ def parse_opts():
         short_opts = "b:d:D:fh:l:nN:p:s:U:?"
         long_opts = ["bin=","dbname=","datadir=","force","host=","log=","no-dsn","port=","sandbox-dir=","user=","help",
                      "with-icu","with-openssl","configure-opts=",
-                     "replicate-from=","slot=","sync","nodes=","sync-count=","slot-prefix="]
+                     "replicate-from=","slot=","sync","nodes=","sync-count=","slot-prefix=",
+                     "subscribe-to=","pub-name=","sub-name=","from=","copy-schema","no-copy-data",
+                     "all-tables","tables=","logical","logical-pub-name="]
 
         opts, args = getopt.getopt(sys.argv[2:], short_opts, long_opts)
 
@@ -330,6 +377,29 @@ def parse_opts():
             globals()["pgs_sync_count"] = k
         elif opt == '--slot-prefix':
             globals()["pgs_slot_prefix"] = _validate_str(opt, arg)
+        elif opt == '--subscribe-to':
+            globals()["pgs_subscribe_from"] = _validate_relative_path(opt, arg)
+        elif opt == '--pub-name':
+            globals()["pgs_pub_name"] = _validate_str(opt, arg)
+        elif opt == '--sub-name':
+            globals()["pgs_sub_name"] = _validate_str(opt, arg)
+        elif opt == '--from':
+            # Alias of --subscribe-to for the standalone `subscribe` command,
+            # so the CLI reads more naturally:
+            #   pg_sandbox subscribe -s sub --from pub --pub-name p --sub-name s
+            globals()["pgs_subscribe_from"] = _validate_relative_path(opt, arg)
+        elif opt == '--copy-schema':
+            globals()["pgs_copy_schema"] = 1
+        elif opt == '--no-copy-data':
+            globals()["pgs_no_copy_data"] = 1
+        elif opt == '--all-tables':
+            globals()["pgs_all_tables"] = 1
+        elif opt == '--tables':
+            globals()["pgs_tables"] = _validate_str(opt, arg)
+        elif opt == '--logical':
+            globals()["pgs_logical"] = 1
+        elif opt == '--logical-pub-name':
+            globals()["pgs_logical_pub_name"] = _validate_str(opt, arg)
 
     return args
 
@@ -624,12 +694,23 @@ def _allocate_port(initial_port, port_is_default):
 
 
 def exec_deploy():
-    """Dispatcher: standalone primary vs. streaming standby.
+    """Dispatcher: standalone primary vs. streaming standby vs. logical subscriber.
 
-    The standby path (--replicate-from set) defers to _deploy_standby; the
-    primary path is the historical _deploy_primary body.
+    The standby path (--replicate-from) defers to _deploy_standby, the
+    subscriber path (--subscribe-to) defers to _deploy_subscriber, and the
+    primary path is the historical _deploy_primary body. --replicate-from
+    and --subscribe-to are mutually exclusive (they describe two different
+    relationships to the source instance).
     """
-    if globals().get("pgs_replicate_from", ""):
+    has_replicate = bool(globals().get("pgs_replicate_from", ""))
+    has_subscribe = bool(globals().get("pgs_subscribe_from", ""))
+    if has_replicate and has_subscribe:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+            "--replicate-from and --subscribe-to are mutually exclusive; "
+            "use one or the other.")
+    if has_subscribe:
+        return _deploy_subscriber()
+    if has_replicate:
         return _deploy_standby()
     return _deploy_primary()
 
@@ -805,14 +886,26 @@ def _ensure_pg_hba_replication_entry(datadir_abs, repl_user):
     return added
 
 
-def _ensure_primary_ready_for_replication(src_sandbox_dir, repl_user="replicator"):
-    """Idempotent prep so src_sandbox_dir can serve a streaming standby.
+# Ordering used to decide whether the running wal_level already meets the
+# requested minimum. Postgres treats higher values as supersets, so a
+# 'logical' instance can serve physical standbys without escalation.
+_WAL_LEVEL_RANK = {"minimal": 0, "replica": 1, "logical": 2}
 
-    Adjusts wal_level, max_wal_senders, max_replication_slots via ALTER
-    SYSTEM (restarting only if wal_level had to change), creates the
-    replication role if missing, and adds a localhost replication entry to
-    pg_hba.conf (reloading the config). On any failure, exits with
+
+def _ensure_primary_ready_for_replication(src_sandbox_dir, repl_user="replicator",
+                                          min_wal_level="replica"):
+    """Idempotent prep so src_sandbox_dir can serve a streaming standby or
+    a logical subscriber.
+
+    Adjusts wal_level (escalating to at least `min_wal_level`),
+    max_wal_senders, max_replication_slots via ALTER SYSTEM (restarting
+    only if wal_level had to change), creates the replication role if
+    missing, and adds a localhost replication entry to pg_hba.conf
+    (reloading the config). On any failure, exits with
     ERR_REPL_BOOTSTRAP_FAILED."""
+    if min_wal_level not in _WAL_LEVEL_RANK:
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+            "Internal error: unknown min_wal_level '"+str(min_wal_level)+"'.")
     env = _read_sandbox_env(src_sandbox_dir)
     src_bin = env["PGS_BIN"]
     src_host = env["PGS_HOST"]
@@ -844,12 +937,16 @@ def _ensure_primary_ready_for_replication(src_sandbox_dir, repl_user="replicator
 
     needs_restart = False
     wal_level = _show("wal_level").lower()
-    if wal_level == "minimal":
-        # 'replica' is the lowest setting that supports streaming standbys;
-        # it persists across a restart via ALTER SYSTEM.
-        _alter("ALTER SYSTEM SET wal_level = 'replica';")
+    current_rank = _WAL_LEVEL_RANK.get(wal_level, 0)
+    target_rank = _WAL_LEVEL_RANK[min_wal_level]
+    if current_rank < target_rank:
+        # Escalate only as far as needed: a logical-replication caller
+        # bumps to 'logical', a physical caller only bumps to 'replica'.
+        # Persists across a restart via ALTER SYSTEM.
+        _alter("ALTER SYSTEM SET wal_level = '"+min_wal_level+"';")
         needs_restart = True
-        print("Source '"+src_sandbox_dir+"': wal_level set to 'replica' (restart required).")
+        print("Source '"+src_sandbox_dir+"': wal_level set to '"+min_wal_level
+              +"' (restart required).")
 
     try:
         if int(_show("max_wal_senders")) < 10:
@@ -1025,6 +1122,278 @@ def _rewrite_standby_auto_conf(datadir_abs, port, primary_conninfo, slot_name):
             "Could not rewrite postgresql.auto.conf at '"+auto_path+"': "+str(e))
 
 
+# --- Logical replication helpers -----------------------------------------
+
+def _quote_sql_ident(name):
+    """Quote a SQL identifier for safe inclusion in CREATE/DROP statements.
+
+    PostgreSQL identifiers are wrapped in double quotes; embedded double
+    quotes are doubled. This is the standard quoting used by libpq's
+    PQescapeIdentifier and is sufficient for the publication / subscription
+    / table names this script deals with."""
+    return "\""+str(name).replace("\"", "\"\"")+"\""
+
+
+def _quote_sql_literal(value):
+    """Quote a SQL string literal (single quotes, doubled internal quotes)."""
+    return "'"+str(value).replace("'", "''")+"'"
+
+
+def _create_publication_on_source(src_sandbox_dir, dbname, pub_name,
+                                  all_tables=False, tables=None):
+    """Create a publication named pub_name on src_sandbox_dir if missing.
+
+    If pub_name already exists, the call is a no-op (we don't try to
+    ALTER the existing publication's table set, since intent-to-replace
+    isn't expressible in this CLI). Exits with ERR_PUBLICATION_FAILED
+    on any psql error other than 'already exists'.
+    """
+    if not pub_name:
+        pgserr.print_error_and_exit(pgserr.ERR_PUBLICATION_FAILED,
+            "Publication name is required.")
+    env = _read_sandbox_env(src_sandbox_dir)
+    src_bin = env["PGS_BIN"]
+    src_host = env["PGS_HOST"]
+    src_port = env["PGS_PORT"]
+    src_user = env["PGS_USER"]
+    target_db = dbname or env.get("PGS_DBNAME") or "postgres"
+
+    rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                 target_db,
+                                 "SELECT 1 FROM pg_publication WHERE pubname = "
+                                 +_quote_sql_literal(pub_name)+";",
+                                 return_output=True)
+    if rc != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_PUBLICATION_FAILED,
+            "Failed to inspect pg_publication on '"+src_sandbox_dir+"': "+err)
+    if out.strip() == "1":
+        print("Source '"+src_sandbox_dir+"': publication '"+pub_name
+              +"' already exists; reusing.")
+        return
+
+    if all_tables:
+        sql = "CREATE PUBLICATION "+_quote_sql_ident(pub_name)+" FOR ALL TABLES;"
+    elif tables:
+        if isinstance(tables, str):
+            table_list = [t.strip() for t in tables.split(",") if t.strip()]
+        else:
+            table_list = [str(t).strip() for t in tables if str(t).strip()]
+        if not table_list:
+            pgserr.print_error_and_exit(pgserr.ERR_PUBLICATION_FAILED,
+                "--tables list is empty after parsing.")
+        # We don't quote individual table names so users can pass schema-qualified
+        # names like "public.t1" or already-quoted identifiers; if you need an
+        # identifier with special characters, quote it yourself when invoking.
+        sql = ("CREATE PUBLICATION "+_quote_sql_ident(pub_name)
+               +" FOR TABLE "+", ".join(table_list)+";")
+    else:
+        pgserr.print_error_and_exit(pgserr.ERR_PUBLICATION_FAILED,
+            "publish requires either --all-tables or --tables T1,T2,...")
+
+    rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                 target_db, sql, return_output=True)
+    if rc != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_PUBLICATION_FAILED,
+            "CREATE PUBLICATION on '"+src_sandbox_dir+"' failed: "+err)
+    print("Source '"+src_sandbox_dir+"': publication '"+pub_name+"' created in db '"+target_db+"'.")
+
+
+def _create_subscription_on_target(target_sandbox_dir, src_sandbox_dir,
+                                   sub_name, pub_name, dbname=None,
+                                   copy_data=True, repl_user="replicator"):
+    """Create a logical replication subscription on target_sandbox_dir.
+
+    The subscription's connection string carries application_name=<sub_name>
+    so that synchronous_standby_names entries on the publisher can match
+    logical subscribers the same way they match physical standbys.
+    Returns silently if a subscription with the same name already exists.
+    Exits with ERR_SUBSCRIPTION_FAILED on any other psql error.
+    """
+    if not sub_name:
+        pgserr.print_error_and_exit(pgserr.ERR_SUBSCRIPTION_FAILED,
+            "Subscription name is required.")
+    if not pub_name:
+        pgserr.print_error_and_exit(pgserr.ERR_SUBSCRIPTION_FAILED,
+            "Publication name is required for CREATE SUBSCRIPTION.")
+    target_env = _read_sandbox_env(target_sandbox_dir)
+    src_env = _read_sandbox_env(src_sandbox_dir)
+    target_bin = target_env["PGS_BIN"]
+    target_host = target_env["PGS_HOST"]
+    target_port = target_env["PGS_PORT"]
+    target_user = target_env["PGS_USER"]
+    target_db = dbname or target_env.get("PGS_DBNAME") or "postgres"
+    src_host = src_env["PGS_HOST"]
+    src_port = src_env["PGS_PORT"]
+    src_db = dbname or src_env.get("PGS_DBNAME") or "postgres"
+
+    rc, out, err = _psql_oneshot(target_bin, target_host, target_port,
+                                 target_user, target_db,
+                                 "SELECT 1 FROM pg_subscription WHERE subname = "
+                                 +_quote_sql_literal(sub_name)+";",
+                                 return_output=True)
+    if rc != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_SUBSCRIPTION_FAILED,
+            "Failed to inspect pg_subscription on '"+target_sandbox_dir+"': "+err)
+    if out.strip() == "1":
+        print("Target '"+target_sandbox_dir+"': subscription '"+sub_name
+              +"' already exists; reusing.")
+        return
+
+    conninfo = ("host="+str(src_host)+" port="+str(src_port)
+                +" user="+repl_user+" dbname="+src_db
+                +" application_name="+sub_name)
+    options = "(copy_data = "+("true" if copy_data else "false")+")"
+    sql = ("CREATE SUBSCRIPTION "+_quote_sql_ident(sub_name)
+           +" CONNECTION "+_quote_sql_literal(conninfo)
+           +" PUBLICATION "+_quote_sql_ident(pub_name)
+           +" WITH "+options+";")
+    rc, out, err = _psql_oneshot(target_bin, target_host, target_port,
+                                 target_user, target_db, sql, return_output=True)
+    if rc != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_SUBSCRIPTION_FAILED,
+            "CREATE SUBSCRIPTION on '"+target_sandbox_dir+"' failed: "+err)
+    print("Target '"+target_sandbox_dir+"': subscription '"+sub_name
+          +"' created (publication='"+pub_name+"', from='"+src_sandbox_dir
+          +"', db='"+target_db+"').")
+
+
+def _pg_dump_schema_only(src_sandbox_dir, target_sandbox_dir, dbname=None):
+    """Pipe `pg_dump -s` from src into `psql` on target.
+
+    Both sandboxes must be running. dbname defaults to the source's
+    PGS_DBNAME (and is loaded into the same dbname on the target).
+    Exits with ERR_SCHEMA_COPY_FAILED if either side returns non-zero."""
+    src_env = _read_sandbox_env(src_sandbox_dir)
+    target_env = _read_sandbox_env(target_sandbox_dir)
+    src_bin = src_env["PGS_BIN"]
+    src_host = src_env["PGS_HOST"]
+    src_port = src_env["PGS_PORT"]
+    src_user = src_env["PGS_USER"]
+    src_db = dbname or src_env.get("PGS_DBNAME") or "postgres"
+    target_bin = target_env["PGS_BIN"]
+    target_host = target_env["PGS_HOST"]
+    target_port = target_env["PGS_PORT"]
+    target_user = target_env["PGS_USER"]
+    target_db = dbname or target_env.get("PGS_DBNAME") or "postgres"
+
+    pg_dump_path = get_binary_path("pg_dump", src_bin)
+    psql_path = get_binary_path("psql", target_bin)
+
+    dump_cmd = [pg_dump_path, "-s",
+                "-h", str(src_host), "-p", str(src_port),
+                "-U", str(src_user), "-d", str(src_db)]
+    psql_cmd = [psql_path, "-X", "-v", "ON_ERROR_STOP=1",
+                "-h", str(target_host), "-p", str(target_port),
+                "-U", str(target_user), "-d", str(target_db)]
+    pgserr.print_debug("pg_dump command: ", dump_cmd)
+    pgserr.print_debug("psql load command: ", psql_cmd)
+
+    # Use Popen rather than `run` because we need to pipe stdout->stdin
+    # between the two processes without buffering the whole dump in memory.
+    from subprocess import Popen
+    try:
+        dumper = Popen(dump_cmd, stdout=PIPE, stderr=PIPE,
+                       universal_newlines=True)
+        loader = Popen(psql_cmd, stdin=dumper.stdout, stdout=PIPE, stderr=PIPE,
+                       universal_newlines=True)
+        # Allow dumper to receive SIGPIPE if loader dies first.
+        dumper.stdout.close()
+        loader_out, loader_err = loader.communicate()
+        dumper_err = (dumper.stderr.read() or "")
+        dumper.stderr.close()
+        dumper.wait()
+    except Exception as e:
+        pgserr.print_error_and_exit(pgserr.ERR_SCHEMA_COPY_FAILED,
+            "pg_dump|psql pipeline raised an exception: "+str(e))
+
+    if dumper.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_SCHEMA_COPY_FAILED,
+            "pg_dump on '"+src_sandbox_dir+"' failed (rc="
+            +str(dumper.returncode)+"): "+(dumper_err or "").strip())
+    if loader.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_SCHEMA_COPY_FAILED,
+            "psql load on '"+target_sandbox_dir+"' failed (rc="
+            +str(loader.returncode)+"): "+(loader_err or "").strip())
+    print("Schema copied from '"+src_sandbox_dir+"' to '"+target_sandbox_dir
+          +"' (db='"+target_db+"').")
+
+
+def _drop_subscription_on_target(target_sandbox_dir, sub_name, dbname=None):
+    """Best-effort DROP SUBSCRIPTION on target_sandbox_dir.
+
+    Used by destroy paths so the publisher's logical slot is cleaned up
+    cleanly while both ends are still running. Failures here are
+    debug-logged, never fatal."""
+    if not sub_name:
+        return
+    env = _read_sandbox_env_safe(target_sandbox_dir)
+    if env is None:
+        pgserr.print_debug("Target '"+target_sandbox_dir
+                           +"' env not readable; skipping subscription drop for '"
+                           +sub_name+"'.")
+        return
+    target_bin = env["PGS_BIN"]
+    target_host = env["PGS_HOST"]
+    target_port = env["PGS_PORT"]
+    target_user = env["PGS_USER"]
+    target_db = dbname or env.get("PGS_DBNAME") or "postgres"
+    target_datadir_abs = _sandbox_path(target_sandbox_dir, env["PGS_DATADIR"])
+    if not _pg_ctl_is_running(target_bin, target_datadir_abs):
+        pgserr.print_debug("Target '"+target_sandbox_dir
+                           +"' not running; skipping subscription drop for '"
+                           +sub_name+"'.")
+        return
+    sql = ("DROP SUBSCRIPTION IF EXISTS "+_quote_sql_ident(sub_name)+";")
+    rc, out, err = _psql_oneshot(target_bin, target_host, target_port,
+                                 target_user, target_db, sql, return_output=True)
+    if rc != 0:
+        pgserr.print_debug("Best-effort subscription drop on '"
+                           +target_sandbox_dir+"' failed: ", err)
+    else:
+        print("Dropped subscription '"+sub_name+"' on target '"
+              +target_sandbox_dir+"'.")
+
+
+def _drop_publication_on_source(src_sandbox_dir, pub_name, dbname=None):
+    """Best-effort DROP PUBLICATION on src_sandbox_dir.
+
+    Failures here are debug-logged, never fatal."""
+    if not pub_name:
+        return
+    env = _read_sandbox_env_safe(src_sandbox_dir)
+    if env is None:
+        pgserr.print_debug("Source '"+src_sandbox_dir
+                           +"' env not readable; skipping publication drop for '"
+                           +pub_name+"'.")
+        return
+    src_bin = env["PGS_BIN"]
+    src_host = env["PGS_HOST"]
+    src_port = env["PGS_PORT"]
+    src_user = env["PGS_USER"]
+    src_db = dbname or env.get("PGS_DBNAME") or "postgres"
+    src_datadir_abs = _sandbox_path(src_sandbox_dir, env["PGS_DATADIR"])
+    if not _pg_ctl_is_running(src_bin, src_datadir_abs):
+        pgserr.print_debug("Source '"+src_sandbox_dir
+                           +"' not running; skipping publication drop for '"
+                           +pub_name+"'.")
+        return
+    sql = "DROP PUBLICATION IF EXISTS "+_quote_sql_ident(pub_name)+";"
+    rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                 src_db, sql, return_output=True)
+    if rc != 0:
+        pgserr.print_debug("Best-effort publication drop on '"
+                           +src_sandbox_dir+"' failed: ", err)
+    else:
+        print("Dropped publication '"+pub_name+"' on source '"
+              +src_sandbox_dir+"'.")
+
+
+def _default_sub_name_for(sandbox_dir):
+    """Derive a default subscription name from a sandbox directory name."""
+    base = os.path.basename(sandbox_dir.rstrip("/")) or sandbox_dir
+    return base+"_sub"
+
+
 def _deploy_standby():
     """Provision a streaming standby sandbox attached to pgs_replicate_from."""
     check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir", "pgs_datadir",
@@ -1112,6 +1481,75 @@ def _deploy_standby():
     return 0
 
 
+def _deploy_subscriber():
+    """Provision a fresh primary sandbox subscribed to pgs_subscribe_from.
+
+    A subscriber is a regular primary that has a CREATE SUBSCRIPTION
+    pointing at a publication on the source. Schema is *not* replicated
+    by logical replication; pass --copy-schema to bootstrap it via
+    pg_dump | psql before the subscription is created."""
+    check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir", "pgs_datadir",
+                                   "pgs_user", "pgs_log", "pgs_port",
+                                   "pgs_subscribe_from", "pgs_pub_name"])
+
+    src_sandbox_dir = globals()["pgs_subscribe_from"]
+    pub_name = globals()["pgs_pub_name"]
+    repl_user = globals().get("pgs_repl_user", "replicator") or "replicator"
+    dbname = globals().get("pgs_dbname", "postgres") or "postgres"
+    sub_name = (globals().get("pgs_sub_name", "")
+                or _default_sub_name_for(globals()["pgs_sandbox_dir"]))
+    copy_data = (globals().get("pgs_no_copy_data", 0) == 0)
+
+    src_env = _read_sandbox_env(src_sandbox_dir)
+    src_bin = src_env["PGS_BIN"]
+    src_datadir_abs = _sandbox_path(src_sandbox_dir, src_env["PGS_DATADIR"])
+    if not _pg_ctl_is_running(src_bin, src_datadir_abs):
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_SOURCE_NOT_RUNNING,
+            pgserr.ERR_REPL_SOURCE_NOT_RUNNING_MESSAGE)
+
+    # Bootstrap publisher: wal_level=logical, replication role, pg_hba.
+    _ensure_primary_ready_for_replication(src_sandbox_dir, repl_user,
+                                          min_wal_level="logical")
+
+    # Persist subscriber metadata so the env file written by _deploy_primary's
+    # write_env() reflects the logical-replication relationship without us
+    # having to rewrite the file afterwards.
+    globals()["pgs_subscribe_from"] = src_sandbox_dir
+    globals()["pgs_subscription_name"] = sub_name
+    globals()["pgs_publication_name"] = pub_name
+    globals()["pgs_subscription_dbname"] = dbname
+    globals()["pgs_repl_user"] = repl_user
+
+    # Build the subscriber as a fresh primary (initdb + start). After this
+    # call we are inside the new sandbox dir and the env file has been
+    # written.
+    _deploy_primary()
+
+    # Optional pg_dump --schema-only bootstrap into the subscriber. We do
+    # this *before* CREATE SUBSCRIPTION so initial copy_data has table
+    # definitions to land into.
+    if globals().get("pgs_copy_schema", 0) == 1:
+        _pg_dump_schema_only(src_sandbox_dir, globals()["pgs_sandbox_dir"], dbname)
+
+    _create_subscription_on_target(globals()["pgs_sandbox_dir"], src_sandbox_dir,
+                                   sub_name, pub_name, dbname=dbname,
+                                   copy_data=copy_data, repl_user=repl_user)
+
+    # If --sync was passed, mirror the physical-standby pattern: append the
+    # subscription's application_name (== sub_name) to the publisher's
+    # synchronous_standby_names. This makes synchronous logical replication
+    # behave the same way as synchronous physical replication does today.
+    if globals().get("pgs_sync", 0) == 1:
+        _set_synchronous_standby_on_primary(src_sandbox_dir, sub_name)
+        print("Subscriber '"+sub_name+"' registered as a synchronous standby on '"
+              +src_sandbox_dir+"'.")
+
+    print("Subscriber '"+globals()["pgs_sandbox_dir"]+"' attached to '"
+          +src_sandbox_dir+"' (pub='"+pub_name+"', sub='"+sub_name
+          +"', db='"+dbname+"').")
+    return 0
+
+
 # --- Cluster commands -----------------------------------------------------
 
 CLUSTER_MANIFEST_FILE = "cluster.json"
@@ -1137,9 +1575,9 @@ def _read_cluster_manifest(cluster_name):
 
 def _reset_per_member_globals():
     """Restore the deploy-time defaults that _deploy_primary / _deploy_standby
-    consume from globals, so each iteration in a cluster deploy starts from
-    a clean slate (instead of inheriting whatever the previous member ended
-    up with)."""
+    / _deploy_subscriber consume from globals, so each iteration in a
+    cluster deploy starts from a clean slate (instead of inheriting
+    whatever the previous member ended up with)."""
     globals()["pgs_dbname"] = "postgres"
     globals()["pgs_datadir"] = "data"
     globals()["pgs_log"] = "server.log"
@@ -1150,6 +1588,16 @@ def _reset_per_member_globals():
     globals()["pgs_slot_name"] = ""
     globals()["pgs_sync"] = 0
     globals()["pgs_role"] = "primary"
+    # Logical-replication per-member fields too, so a cluster's publisher
+    # doesn't inherit the previous member's subscription metadata and
+    # vice-versa.
+    globals()["pgs_subscribe_from"] = ""
+    globals()["pgs_subscription_name"] = ""
+    globals()["pgs_publication_name"] = ""
+    globals()["pgs_subscription_dbname"] = ""
+    globals()["pgs_publications"] = []
+    globals()["pgs_copy_schema"] = 0
+    globals()["pgs_no_copy_data"] = 0
 
 
 def exec_cluster(subcommand):
@@ -1178,7 +1626,26 @@ def exec_cluster_deploy():
     if sync_count > n:
         pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
             "--sync-count cannot exceed --nodes.")
+
+    logical_mode = (globals().get("pgs_logical", 0) == 1)
     slot_prefix = globals().get("pgs_slot_prefix", "") or cluster_name
+    # Logical-mode-only options. We default the publication to "pgs_pub" so
+    # the user only needs to pass --logical for the common case.
+    logical_pub_name = (globals().get("pgs_logical_pub_name", "")
+                        or "pgs_pub")
+    logical_dbname = globals().get("pgs_dbname", "") or "postgres"
+    logical_all_tables = (globals().get("pgs_all_tables", 0) == 1)
+    logical_tables = globals().get("pgs_tables", "")
+    logical_copy_schema = (globals().get("pgs_copy_schema", 0) == 1)
+    if logical_mode:
+        # Default to FOR ALL TABLES when neither --all-tables nor --tables
+        # is set; logical clusters are usually used as a quick demo
+        # scaffold and "everything in the db" is the most useful default.
+        if not logical_all_tables and not logical_tables:
+            logical_all_tables = True
+        if logical_all_tables and logical_tables:
+            pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                "--all-tables and --tables are mutually exclusive.")
 
     root = os.path.expanduser(PGS_ROOT_DIR)
     manifest_path = _cluster_manifest_path(cluster_name)
@@ -1217,7 +1684,9 @@ def exec_cluster_deploy():
     base_port_str = globals()["pgs_port"]
     base_port_is_default = globals().get("pgs_port_is_default", 1)
 
-    print("=== Deploying cluster '"+cluster_name+"' (1 primary + "+str(n)+" standbys) ===")
+    cluster_kind = "logical subscribers" if logical_mode else "standbys"
+    print("=== Deploying cluster '"+cluster_name+"' (1 primary + "
+          +str(n)+" "+cluster_kind+") ===")
 
     # Track members successfully deployed so we can roll them back if a
     # later step fails. Without this, a half-deployed cluster has no
@@ -1225,23 +1694,45 @@ def exec_cluster_deploy():
     # removal of orphan sandboxes.
     deployed_members = []
     deployed_slots = {}
+    deployed_subscriptions = {}
+    publication_created = False
 
     def _rollback_partial_cluster():
         if not deployed_members:
             return
         print("Cluster deploy failed; rolling back partially deployed members...")
-        # Drop replication slots on the primary first (while it is still
-        # up) so we don't leak slots that pin WAL.
-        if primary_name in deployed_members:
-            for sb_name, slot_name in deployed_slots.items():
+        if logical_mode:
+            # Drop subscriptions while subscribers are still up so the
+            # publisher cleans up the corresponding logical slot.
+            for sb_name, sub_name in deployed_subscriptions.items():
                 try:
-                    _drop_replication_slot_on_source(primary_name, slot_name)
+                    _drop_subscription_on_target(sb_name, sub_name,
+                                                 dbname=logical_dbname)
                 except SystemExit:
                     pass
                 except Exception:
                     pass
-        # Tear down standbys before the primary so their walreceivers
-        # disconnect cleanly.
+            if publication_created and primary_name in deployed_members:
+                try:
+                    _drop_publication_on_source(primary_name, logical_pub_name,
+                                                dbname=logical_dbname)
+                except SystemExit:
+                    pass
+                except Exception:
+                    pass
+        else:
+            # Drop replication slots on the primary first (while it is still
+            # up) so we don't leak slots that pin WAL.
+            if primary_name in deployed_members:
+                for sb_name, slot_name in deployed_slots.items():
+                    try:
+                        _drop_replication_slot_on_source(primary_name, slot_name)
+                    except SystemExit:
+                        pass
+                    except Exception:
+                        pass
+        # Tear down standbys/subscribers before the primary so their
+        # walreceivers / logical workers disconnect cleanly.
         for member in reversed(deployed_members):
             sb_path = os.path.join(root, member)
             if not os.path.exists(sb_path):
@@ -1266,38 +1757,80 @@ def exec_cluster_deploy():
                       +cluster_dir_abs+"': "+str(e))
 
     try:
-        # 1) Primary
+        # 1) Primary (publisher in logical mode)
         _reset_per_member_globals()
         globals()["pgs_bin"] = bin_dir
         globals()["pgs_sandbox_dir"] = primary_name
         globals()["pgs_cluster"] = cluster_name
         globals()["pgs_port"] = base_port_str
         globals()["pgs_port_is_default"] = base_port_is_default
+        if logical_mode:
+            globals()["pgs_dbname"] = logical_dbname
         _deploy_primary()
         deployed_members.append(primary_name)
         primary_port = globals()["pgs_port"]
         os.chdir(root)
 
-        # 2) Standbys
+        if logical_mode:
+            # Bootstrap publisher for logical replication and create the
+            # cluster-wide publication. The publisher won't have any
+            # subscribers yet, but having the publication ready means
+            # subscribers can connect to a stable target.
+            _ensure_primary_ready_for_replication(primary_name, "replicator",
+                                                  min_wal_level="logical")
+            _create_publication_on_source(primary_name, logical_dbname,
+                                          logical_pub_name,
+                                          all_tables=logical_all_tables,
+                                          tables=logical_tables)
+            publication_created = True
+            # Persist publication on the publisher's env so cluster destroy
+            # / status can surface it without re-reading the manifest.
+            primary_path = os.path.join(root, primary_name)
+            os.chdir(primary_path)
+            read_env()
+            primary_pubs = list(globals().get("pgs_publications", []) or [])
+            if logical_pub_name not in primary_pubs:
+                primary_pubs.append(logical_pub_name)
+                globals()["pgs_publications"] = primary_pubs
+                write_env(PGS_ENV_FILE)
+            os.chdir(root)
+
+        # 2) Children (standbys in physical mode, subscribers in logical mode)
         slots = {}
+        subscriptions = {}
         for i, sb_name in enumerate(standby_names, start=1):
-            slot_name = slot_prefix+"_s"+str(i)
-            slots[sb_name] = slot_name
             is_sync = (i <= sync_count)
 
             _reset_per_member_globals()
             globals()["pgs_bin"] = bin_dir
             globals()["pgs_sandbox_dir"] = sb_name
             globals()["pgs_cluster"] = cluster_name
-            globals()["pgs_replicate_from"] = primary_name
-            globals()["pgs_slot_name"] = slot_name
             globals()["pgs_sync"] = 1 if is_sync else 0
             # Probe a port near the primary's, but allow auto-fallback if busy.
             globals()["pgs_port"] = str(int(primary_port)+i)
             globals()["pgs_port_is_default"] = 1
-            _deploy_standby()
-            deployed_members.append(sb_name)
-            deployed_slots[sb_name] = slot_name
+
+            if logical_mode:
+                # Logical subscriber: use _deploy_subscriber which builds a
+                # fresh primary and attaches it via CREATE SUBSCRIPTION.
+                sub_name = slot_prefix+"_s"+str(i)+"_sub"
+                subscriptions[sb_name] = sub_name
+                globals()["pgs_dbname"] = logical_dbname
+                globals()["pgs_subscribe_from"] = primary_name
+                globals()["pgs_pub_name"] = logical_pub_name
+                globals()["pgs_sub_name"] = sub_name
+                globals()["pgs_copy_schema"] = 1 if logical_copy_schema else 0
+                _deploy_subscriber()
+                deployed_members.append(sb_name)
+                deployed_subscriptions[sb_name] = sub_name
+            else:
+                slot_name = slot_prefix+"_s"+str(i)
+                slots[sb_name] = slot_name
+                globals()["pgs_replicate_from"] = primary_name
+                globals()["pgs_slot_name"] = slot_name
+                _deploy_standby()
+                deployed_members.append(sb_name)
+                deployed_slots[sb_name] = slot_name
             os.chdir(root)
     except SystemExit:
         os.chdir(root)
@@ -1314,9 +1847,15 @@ def exec_cluster_deploy():
         "bin": bin_dir,
         "primary": primary_name,
         "standbys": standby_names,
-        "slots": slots,
         "sync_count": sync_count,
+        "mode": "logical" if logical_mode else "physical",
     }
+    if logical_mode:
+        manifest["dbname"] = logical_dbname
+        manifest["publication"] = logical_pub_name
+        manifest["subscriptions"] = subscriptions
+    else:
+        manifest["slots"] = slots
     try:
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
@@ -1326,6 +1865,30 @@ def exec_cluster_deploy():
     print("Cluster manifest written to: "+manifest_path)
     print("Cluster '"+cluster_name+"' deployed successfully.")
     return 0
+
+
+def _print_logical_status(bin_dir, host, port, user, dbname, indent="  "):
+    """Print pg_publication and pg_stat_subscription rows when present.
+
+    Designed to be a no-op (well, three blank-ish queries) on instances
+    that don't participate in logical replication, so it can be called
+    unconditionally from the regular status path."""
+    rc, out, err = _psql_oneshot(bin_dir, host, port, user, dbname,
+                                 "SELECT pubname, puballtables FROM pg_publication ORDER BY pubname;",
+                                 return_output=True)
+    if rc == 0 and out:
+        print(indent+"pg_publication (pubname|all_tables):")
+        for line in out.splitlines():
+            print(indent+"  "+line)
+    sub_sql = ("SELECT s.subname, s.subenabled, s.subpublications, st.received_lsn, st.last_msg_receipt_time "
+               "FROM pg_subscription s LEFT JOIN pg_stat_subscription st ON st.subid = s.oid "
+               "ORDER BY s.subname;")
+    rc, out, err = _psql_oneshot(bin_dir, host, port, user, dbname,
+                                 sub_sql, return_output=True)
+    if rc == 0 and out:
+        print(indent+"pg_subscription (sub|enabled|pubs|received_lsn|last_msg_receipt_time):")
+        for line in out.splitlines():
+            print(indent+"  "+line)
 
 
 def _print_replication_status_for_member(label, sandbox_dir):
@@ -1382,21 +1945,34 @@ def _print_replication_status_for_member(label, sandbox_dir):
             else:
                 for line in out.splitlines():
                     print("    "+line)
+    # Also surface any publications/subscriptions on this member: a sandbox
+    # can simultaneously be a physical primary and a logical publisher
+    # (or subscriber), so this is independent of the role check above.
+    _print_logical_status(bin_dir, host, port, user, "postgres", indent="  ")
 
 
 def exec_cluster_status():
     check_compulsory_global_vars(["pgs_sandbox_dir"])
     cluster_name = globals()["pgs_sandbox_dir"]
     manifest = _read_cluster_manifest(cluster_name)
+    mode = manifest.get("mode", "physical")
+    member_label = "subscriber" if mode == "logical" else "standby"
     print("Cluster: "+manifest["name"])
-    print("  Primary:   "+manifest["primary"])
-    print("  Standbys:  "+(", ".join(manifest.get("standbys", [])) or "(none)"))
+    print("  Mode:      "+mode)
+    print("  Primary:   "+manifest["primary"]
+          +(" (publisher)" if mode == "logical" else ""))
+    print("  "+member_label.capitalize()+"s: "
+          +(", ".join(manifest.get("standbys", [])) or "(none)"))
     print("  Sync cnt:  "+str(manifest.get("sync_count", 0)))
+    if mode == "logical":
+        print("  Publication: "+(manifest.get("publication", "?")
+                                 or "?")
+              +" (db='"+(manifest.get("dbname", "postgres") or "postgres")+"')")
     print()
     _print_replication_status_for_member("primary", manifest["primary"])
     print()
     for sb in manifest.get("standbys", []):
-        _print_replication_status_for_member("standby", sb)
+        _print_replication_status_for_member(member_label, sb)
         print()
     return 0
 
@@ -1408,21 +1984,40 @@ def exec_cluster_destroy():
     primary = manifest["primary"]
     standbys = manifest.get("standbys", [])
     slots = manifest.get("slots", {})
+    mode = manifest.get("mode", "physical")
+    publication_name = manifest.get("publication", "")
+    subscriptions = manifest.get("subscriptions", {}) or {}
+    cluster_dbname = manifest.get("dbname", "") or "postgres"
 
+    member_kind = "logical subscribers" if mode == "logical" else "standbys"
     if not globals().get("pgs_force", 0):
         if not _prompt_yes_no("Destroy cluster '"+cluster_name+"' (primary '"+primary
-                              +"' + "+str(len(standbys))+" standbys)? [y/N]: "):
+                              +"' + "+str(len(standbys))+" "+member_kind
+                              +")? [y/N]: "):
             print("Aborted.")
             return 0
 
     root = os.path.expanduser(PGS_ROOT_DIR)
 
-    # 1) Best-effort: drop replication slots on the primary while it is
-    #    still up, so we don't leak slots that pin WAL.
-    for sb in standbys:
-        slot = slots.get(sb)
-        if slot:
-            _drop_replication_slot_on_source(primary, slot)
+    if mode == "logical":
+        # 1a) Drop subscriptions on each subscriber while both ends are up,
+        #     so the publisher cleans up the corresponding logical slot
+        #     instead of leaking it (logical slots pin WAL until dropped).
+        for sb in standbys:
+            sub_name = subscriptions.get(sb)
+            if sub_name:
+                _drop_subscription_on_target(sb, sub_name, dbname=cluster_dbname)
+        # 1b) Drop publication on the publisher.
+        if publication_name:
+            _drop_publication_on_source(primary, publication_name,
+                                        dbname=cluster_dbname)
+    else:
+        # 1) Best-effort: drop replication slots on the primary while it is
+        #    still up, so we don't leak slots that pin WAL.
+        for sb in standbys:
+            slot = slots.get(sb)
+            if slot:
+                _drop_replication_slot_on_source(primary, slot)
 
     # 2) Stop + remove standbys.
     for sb in standbys:
@@ -1641,6 +2236,23 @@ def _format_sandbox_line(sandbox_dir, indent="  "):
             bits.append("slot="+slot)
         if bits:
             suffix = " ("+", ".join(bits)+")"
+    else:
+        # A primary may also be a logical subscriber (PGS_SUBSCRIBE_FROM)
+        # and/or a publisher (PGS_PUBLICATIONS); surface either via the
+        # same trailing parenthetical so global_status stays scannable.
+        bits = []
+        sub_src = env.get("PGS_SUBSCRIBE_FROM", "")
+        sub_name = env.get("PGS_SUBSCRIPTION_NAME", "")
+        if sub_src:
+            sub_bit = "sub-from="+sub_src
+            if sub_name:
+                sub_bit += " sub="+sub_name
+            bits.append(sub_bit)
+        publications = env.get("PGS_PUBLICATIONS", []) or []
+        if publications:
+            bits.append("pubs="+",".join(publications))
+        if bits:
+            suffix = " ("+", ".join(bits)+")"
 
     return (indent
             + state.ljust(state_w)
@@ -1714,8 +2326,158 @@ def exec_global_status():
     return 0
 
 
+def exec_publish():
+    """Create a publication on an existing sandbox.
+
+    The publish target may be any running sandbox (a primary, a logical
+    subscriber, or even a physical standby's source). We bootstrap the
+    instance for logical replication on demand: wal_level=logical,
+    replication role, pg_hba.conf entry. A wal_level escalation requires
+    a restart of the target; the helper handles that transparently.
+    """
+    check_compulsory_global_vars(["pgs_sandbox_dir", "pgs_pub_name"])
+    sandbox_dir = globals()["pgs_sandbox_dir"]
+    pub_name = globals()["pgs_pub_name"]
+    repl_user = globals().get("pgs_repl_user", "replicator") or "replicator"
+
+    if (globals().get("pgs_all_tables", 0) != 1 and
+            not globals().get("pgs_tables", "")):
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+            "publish requires either --all-tables or --tables T1,T2,...")
+    if (globals().get("pgs_all_tables", 0) == 1 and
+            globals().get("pgs_tables", "")):
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+            "--all-tables and --tables are mutually exclusive.")
+
+    sb_path = os.path.join(os.path.expanduser(PGS_ROOT_DIR), sandbox_dir)
+    if not os.path.isdir(sb_path):
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS,
+            pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    # Read the sandbox env so the per-sandbox dbname becomes the default
+    # publication target when -d isn't passed; also so we know the binary
+    # dir for the helper calls below.
+    sb_env = _read_sandbox_env(sandbox_dir)
+    sb_bin = sb_env["PGS_BIN"]
+    sb_datadir_abs = _sandbox_path(sandbox_dir, sb_env["PGS_DATADIR"])
+    if not _pg_ctl_is_running(sb_bin, sb_datadir_abs):
+        pgserr.print_error_and_exit(pgserr.ERR_SBOX_NOT_RUNNING,
+            pgserr.ERR_SBOX_NOT_RUNNING_MESSAGE)
+
+    # Same idempotent prep used by --replicate-from / --subscribe-to.
+    _ensure_primary_ready_for_replication(sandbox_dir, repl_user,
+                                          min_wal_level="logical")
+
+    dbname = (globals().get("pgs_dbname", "")
+              or sb_env.get("PGS_DBNAME") or "postgres")
+    tables_arg = globals().get("pgs_tables", "")
+    all_tables = (globals().get("pgs_all_tables", 0) == 1)
+    _create_publication_on_source(sandbox_dir, dbname, pub_name,
+                                  all_tables=all_tables, tables=tables_arg)
+
+    # Track this publication in the sandbox env so cluster destroy and
+    # status can surface it later. Re-load + re-write the env file so we
+    # don't have to depend on whatever globals are currently set.
+    try:
+        os.chdir(sb_path)
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS,
+            pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+    read_env()
+    publications = list(globals().get("pgs_publications", []) or [])
+    if pub_name not in publications:
+        publications.append(pub_name)
+        globals()["pgs_publications"] = publications
+        write_env(PGS_ENV_FILE)
+    return 0
+
+
+def exec_subscribe():
+    """Create a subscription on an existing sandbox attaching to a remote pub.
+
+    The target sandbox stays a primary (logical subscribers are not
+    physical standbys). The source publisher is bootstrapped on demand
+    (wal_level=logical, replication role, pg_hba)."""
+    check_compulsory_global_vars(["pgs_sandbox_dir", "pgs_subscribe_from",
+                                   "pgs_pub_name"])
+    target_sandbox_dir = globals()["pgs_sandbox_dir"]
+    src_sandbox_dir = globals()["pgs_subscribe_from"]
+    pub_name = globals()["pgs_pub_name"]
+    repl_user = globals().get("pgs_repl_user", "replicator") or "replicator"
+    sub_name = (globals().get("pgs_sub_name", "")
+                or _default_sub_name_for(target_sandbox_dir))
+    copy_data = (globals().get("pgs_no_copy_data", 0) == 0)
+
+    target_path = os.path.join(os.path.expanduser(PGS_ROOT_DIR),
+                               target_sandbox_dir)
+    if not os.path.isdir(target_path):
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS,
+            pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    target_env = _read_sandbox_env(target_sandbox_dir)
+    target_bin = target_env["PGS_BIN"]
+    target_datadir_abs = _sandbox_path(target_sandbox_dir,
+                                       target_env["PGS_DATADIR"])
+    if not _pg_ctl_is_running(target_bin, target_datadir_abs):
+        pgserr.print_error_and_exit(pgserr.ERR_SBOX_NOT_RUNNING,
+            pgserr.ERR_SBOX_NOT_RUNNING_MESSAGE)
+
+    src_env = _read_sandbox_env(src_sandbox_dir)
+    src_bin = src_env["PGS_BIN"]
+    src_datadir_abs = _sandbox_path(src_sandbox_dir, src_env["PGS_DATADIR"])
+    if not _pg_ctl_is_running(src_bin, src_datadir_abs):
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_SOURCE_NOT_RUNNING,
+            pgserr.ERR_REPL_SOURCE_NOT_RUNNING_MESSAGE)
+
+    _ensure_primary_ready_for_replication(src_sandbox_dir, repl_user,
+                                          min_wal_level="logical")
+
+    dbname = (globals().get("pgs_dbname", "")
+              or target_env.get("PGS_DBNAME") or "postgres")
+
+    if globals().get("pgs_copy_schema", 0) == 1:
+        _pg_dump_schema_only(src_sandbox_dir, target_sandbox_dir, dbname)
+
+    _create_subscription_on_target(target_sandbox_dir, src_sandbox_dir,
+                                   sub_name, pub_name, dbname=dbname,
+                                   copy_data=copy_data, repl_user=repl_user)
+
+    if globals().get("pgs_sync", 0) == 1:
+        _set_synchronous_standby_on_primary(src_sandbox_dir, sub_name)
+        print("Subscriber '"+sub_name+"' registered as a synchronous standby on '"
+              +src_sandbox_dir+"'.")
+
+    # Persist subscription metadata to the target's env file so subsequent
+    # destroy / status invocations can surface it.
+    try:
+        os.chdir(target_path)
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS,
+            pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+    read_env()
+    globals()["pgs_subscribe_from"] = src_sandbox_dir
+    globals()["pgs_subscription_name"] = sub_name
+    globals()["pgs_publication_name"] = pub_name
+    globals()["pgs_subscription_dbname"] = dbname
+    globals()["pgs_repl_user"] = repl_user
+    write_env(PGS_ENV_FILE)
+    return 0
+
+
 def exec_destroy():
-    # 0- stop the sandbox
+    # 0a- best-effort DROP SUBSCRIPTION while the sandbox is still up, so
+    #     the publisher reclaims the logical slot (and the WAL it was
+    #     pinning) cleanly. Failures here are non-fatal.
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    sb_name = globals()["pgs_sandbox_dir"]
+    sb_env_pre_stop = _read_sandbox_env_safe(sb_name)
+    if sb_env_pre_stop is not None:
+        sub_name = sb_env_pre_stop.get("PGS_SUBSCRIPTION_NAME", "")
+        sub_dbname = sb_env_pre_stop.get("PGS_SUBSCRIPTION_DBNAME", "") or "postgres"
+        if sub_name:
+            _drop_subscription_on_target(sb_name, sub_name, dbname=sub_dbname)
+
+    # 0b- stop the sandbox
     if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
         print("Database stopped.")
     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
@@ -2061,6 +2823,13 @@ def exec_status():
                 else:
                     for line in out.splitlines():
                         print("  "+line)
+        # Logical replication info (publications + subscriptions) is
+        # surfaced for every running instance regardless of role: the same
+        # sandbox can host both physical and logical replication
+        # relationships at the same time.
+        sub_db = (globals().get("pgs_subscription_dbname", "")
+                  or globals().get("pgs_dbname", "") or "postgres")
+        _print_logical_status(bin_dir, host, port, user, sub_db, indent="")
     return 0
 
 
@@ -2214,7 +2983,7 @@ if __name__ == "__main__":
     pgs_command = args[1]
     pgserr.print_debug("Main command: ", pgs_command)
 
-    command_list = ['build','cluster','deploy','destroy','global_status','help', '--help', '-h', 'promote', 'report', 'restart','run','setenv','start','status','stop','use']
+    command_list = ['build','cluster','deploy','destroy','global_status','help', '--help', '-h', 'promote', 'publish', 'report', 'restart','run','setenv','start','status','stop','subscribe','use']
 
     if pgs_command not in command_list:
         pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND, pgserr.ERR_INCORRECT_COMMAND_MESSAGE)
@@ -2292,6 +3061,12 @@ if __name__ == "__main__":
     elif pgs_command == "promote":
         pgserr.print_debug("Executing promote")
         exec_promote()
+    elif pgs_command == "publish":
+        pgserr.print_debug("Executing publish")
+        exec_publish()
+    elif pgs_command == "subscribe":
+        pgserr.print_debug("Executing subscribe")
+        exec_subscribe()
     elif pgs_command == "report":
         pgserr.print_debug("Executing report")
         exec_report(positional_args, pg_gather_out_absolute_path)

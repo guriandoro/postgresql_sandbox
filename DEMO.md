@@ -265,3 +265,76 @@ Destroy the entire cluster (best-effort drops slots on the primary first, then s
 ```
 pg_sandbox cluster destroy -s rep -f
 ```
+
+## Logical replication
+
+Deploy a publisher (a regular primary that will host a publication).
+```
+pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-pub
+```
+
+Create a publication on it. The sandbox is bootstrapped for logical replication on demand: `wal_level=logical` (server restart), `replicator` role, `pg_hba.conf` entry. Use `--all-tables` for the easy demo path.
+```
+pg_sandbox publish -s pg-18-pub --pub-name app_pub --all-tables
+```
+
+Or, target a specific table set. Schema-qualified names are allowed.
+```
+pg_sandbox publish -s pg-18-pub --pub-name orders_pub \
+    --tables public.orders,public.line_items
+```
+
+Deploy a fresh subscriber sandbox in one shot. `--copy-schema` runs `pg_dump --schema-only | psql` from publisher to subscriber before `CREATE SUBSCRIPTION` so the initial `copy_data` has table definitions to land into.
+```
+pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-sub \
+    --subscribe-to pg-18-pub --pub-name app_pub --copy-schema
+```
+
+Or, attach an already-deployed sandbox to a publication on another sandbox. Use `--from` for the natural reading order; `--subscribe-to` works as an alias.
+```
+pg_sandbox deploy    -b /opt/postgresql/18.3 -s pg-18-sub2
+pg_sandbox subscribe -s pg-18-sub2 --from pg-18-pub --pub-name app_pub --copy-schema
+```
+
+Mark a subscriber as synchronous on the publisher. Subscriptions carry `application_name=<sub_name>` so they match `synchronous_standby_names` the same way physical standbys do.
+```
+pg_sandbox subscribe -s pg-18-sub2 --from pg-18-pub --pub-name app_pub --sync
+```
+
+Skip the initial copy (existing rows on the publisher are not snapshotted; only changes from now on are replicated).
+```
+pg_sandbox subscribe -s pg-18-sub2 --from pg-18-pub --pub-name app_pub --no-copy-data
+```
+
+Inspect logical state on either side. `status` includes `pg_publication`, `pg_subscription`, and `pg_stat_subscription` for every running instance, so the same command works for publishers, subscribers, or sandboxes that are both.
+```
+pg_sandbox status -s pg-18-pub
+pg_sandbox status -s pg-18-sub
+```
+
+Tear down a subscriber. `destroy` best-effort runs `DROP SUBSCRIPTION` (recorded via `PGS_SUBSCRIPTION_NAME` in the env file) before stopping the instance so the publisher reclaims the corresponding logical slot cleanly.
+```
+pg_sandbox destroy -s pg-18-sub -f
+```
+
+## Logical replication cluster (one-shot)
+
+Deploy a logical cluster with one publisher and N subscribers. By default the publication is `pgs_pub` `FOR ALL TABLES` in the `postgres` database; override with `--logical-pub-name`, `-d`, and `--tables`.
+```
+pg_sandbox cluster deploy -s lrep -b /opt/postgresql/18.3 -N 2 --logical --copy-schema
+```
+
+Show consolidated status (header includes `mode: logical`, the publication name, and the database; per-member status surfaces `pg_publication`/`pg_subscription`/`pg_stat_subscription` rows).
+```
+pg_sandbox cluster status -s lrep
+```
+
+Tear down the entire cluster. `cluster destroy` best-effort drops each subscription on the subscriber side first (so the publisher reclaims the logical slot), then drops the publication on the publisher, then removes every member directory and the per-cluster parent.
+```
+pg_sandbox cluster destroy -s lrep -f
+```
+
+Demonstrate that `--sync-count` works the same way in logical mode (the first K subscribers go into the publisher's `synchronous_standby_names`).
+```
+pg_sandbox cluster deploy -s lrep -b /opt/postgresql/18.3 -N 2 --logical --sync-count 1
+```
