@@ -251,7 +251,7 @@ pg_sandbox promote -s pg-16-s2
 
 ## Clusters (one-shot replication topology)
 
-Deploy a cluster with a primary and N standbys, the first K of which are synchronous, all in one command. Members live as regular sandboxes named `<cluster>_p`, `<cluster>_s1`, `<cluster>_s2`, ...
+Deploy a cluster with a primary and N standbys, the first K of which are synchronous, all in one command. Members live together under a per-cluster directory `<PGS_ROOT_DIR>/<cluster>/`, named `<cluster>_p`, `<cluster>_s1`, `<cluster>_s2`, ...
 ```
 pg_sandbox cluster deploy -s rep -b /opt/postgresql/16.2 -N 2 --sync-count 1
 ```
@@ -261,7 +261,7 @@ Show consolidated status for every member of the cluster.
 pg_sandbox cluster status -s rep
 ```
 
-Destroy the entire cluster (best-effort drops slots on the primary first, then stops + removes standbys, then the primary, then the manifest).
+Destroy the entire cluster (best-effort drops slots on the primary first, then stops + removes standbys, then the primary, then the manifest, then the per-cluster directory).
 ```
 pg_sandbox cluster destroy -s rep -f
 ```

@@ -55,7 +55,7 @@ Two equivalent entry points:
   pg_sandbox cluster status  -s rep
   pg_sandbox cluster destroy -s rep -f
   ```
-  This creates `rep_p`, `rep_s1`, `rep_s2`, plus a manifest at `<PGS_ROOT_DIR>/rep.cluster.json` used by `cluster status` / `cluster destroy`.
+  This creates a per-cluster directory `<PGS_ROOT_DIR>/rep/` containing `rep_p/`, `rep_s1/`, `rep_s2/`, plus a manifest at `<PGS_ROOT_DIR>/rep.cluster.json` used by `cluster status` / `cluster destroy`.
 
 Other replication-related commands:
 

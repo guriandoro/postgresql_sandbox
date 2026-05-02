@@ -132,20 +132,28 @@ Examples:
     pg_sandbox cluster destroy -s CLUSTER [-f]
 
 Provisions, inspects, or tears down a primary + N-standby cluster as a
-single unit. Each member is still a regular sandbox under PGS_ROOT_DIR
-(named CLUSTER_p, CLUSTER_s1, ..., CLUSTER_sN), with an additional
-manifest file at <PGS_ROOT_DIR>/<CLUSTER>.cluster.json that ties them
-together for status/destroy.
+single unit. Members are kept together under one per-cluster parent
+directory:
+
+    <PGS_ROOT_DIR>/<CLUSTER>/
+        <CLUSTER>_p/        primary
+        <CLUSTER>_s1/       standby 1
+        <CLUSTER>_s<N>/     standby N
+
+A manifest file at <PGS_ROOT_DIR>/<CLUSTER>.cluster.json ties the
+members together for status/destroy.
 
 cluster deploy:
-  1. Deploys the primary CLUSTER_p (port = -p value, default 65432, with
-     auto-fallback to the next free port).
-  2. Deploys each standby CLUSTER_s<i> via pg_basebackup -R, allocating
-     ports near the primary's port and creating physical replication
-     slots named "<slot-prefix>_s<i>" (slot prefix defaults to CLUSTER).
-  3. The first --sync-count standbys are registered as synchronous on
+  1. Creates the per-cluster directory <PGS_ROOT_DIR>/<CLUSTER>/.
+  2. Deploys the primary <CLUSTER>_p inside it (port = -p value,
+     default 65432, with auto-fallback to the next free port).
+  3. Deploys each standby <CLUSTER>_s<i> via pg_basebackup -R inside
+     the same parent directory, allocating ports near the primary's
+     port and creating physical replication slots named
+     "<slot-prefix>_s<i>" (slot prefix defaults to CLUSTER).
+  4. The first --sync-count standbys are registered as synchronous on
      the primary.
-  4. Writes the manifest.
+  5. Writes the manifest.
 
 cluster status:
   Prints connection + replication info for every member (uses
@@ -155,7 +163,8 @@ cluster status:
 cluster destroy:
   Stops + removes all standbys first (best-effort dropping their slots
   on the primary while it is still running), then the primary, then
-  the manifest file. Honors -f.
+  the manifest file, then the (now-empty) per-cluster directory.
+  Honors -f.
 
 Options:
     -s, --sandbox-dir   cluster name (required; used as base for member dirs)
