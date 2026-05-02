@@ -1,107 +1,76 @@
 # PostgreSQL Sandbox - TODO List (regenerated from code)
 
-This document is auto-generated from `TODO`/`FIXME` comments currently present in
-the source code. It tracks pending tasks and improvements for the PostgreSQL
-Sandbox project.
+This document is auto-generated from `TODO`/`FIXME` comments currently present
+in the source code. It tracks pending tasks and improvements for the
+PostgreSQL Sandbox project.
 
-## High Priority (Critical Issues)
+## Status
 
-### Argument Validation
-- **File**: `pg_sandbox` (lines 124-125, in `parse_opts`)
-- **Issue**: No argument validation implemented after `getopt` parsing
-- **Tasks**:
-  - Validate all command-line arguments
-  - (low priority) Strip unneeded `.` / `..` path components from path arguments
-- **Impact**: High - affects every command and overall robustness
+All previously tracked in-code `TODO` / `FIXME` comments have been resolved.
+A scan of `pg_sandbox` and `pg_sandbox_help.py` returns no matches.
 
-### Error Handling Improvements (`pgserr` error codes)
-- **File**: `pg_sandbox` (lines 250, 251, 267, 282, 299, 314, in `exec_build`)
-- **Issue**: Subprocess failures during build are returned as raw `-1` instead
-  of proper `pgserr` error codes
-- **Tasks**:
-  - Replace `return -1` with proper `pgserr` error codes after each failed
-    `./configure`, `make`, `make install`, `make` (contrib) and
-    `make install` (contrib) step
-  - Add helper output telling the user where to look (e.g. `config.log`) when
-    `./configure` fails (line 251)
-- **Impact**: High - affects debugging and user experience during builds
+The items that were closed in the latest pass include:
 
-### Critical Bug Fixes in `exec_run`
-- **File**: `pg_sandbox` (lines 525-526)
-- **Issues**:
-  - No validation when `argv` is empty - need to error out cleanly
-  - No handling for the case where binaries no longer exist under
-    `/opt/postgres/xx/` - need `try`/`except` around all `get_binary_path`
-    calls across the codebase
-- **Impact**: High - can cause crashes / unhelpful tracebacks
+### High priority (closed)
+- Argument validation in `parse_opts` (port range, non-empty strings, NUL
+  rejection, path normalization).
+- Proper `pgserr` exit codes for every failed `./configure` / `make` /
+  `make install` / `make (contrib)` / `make install (contrib)` step in
+  `exec_build`, plus a `config.log` hint on `./configure` failure.
+- `exec_run` now validates that `argv` is non-empty before any side effect,
+  and `get_binary_path` / `get_latest_binary_from_default_path` exit cleanly
+  with `ERR_BIN_NOT_FOUND` when the binary directory or binary itself is
+  missing (instead of returning an integer disguised as a path).
 
-## Medium Priority (Important Improvements)
+### Medium priority (closed)
+- `build` command is now flexible:
+  - `--with-icu` opt-in (still defaults to `--without-icu`).
+  - `--with-openssl` opt-in (replaces the previously commented-out hardcode).
+  - `--configure-opts="..."` for arbitrary extra `./configure` flags.
+  - `make` parallelism derived from `os.cpu_count()` (about half the cores,
+    rounded up, min 1) instead of a hardcoded `-j8`.
+- `exec_deploy` auto-falls-back to alternate ports (next 100) when the
+  default port is in use *and* the user did not explicitly pass `--port`.
+- `exec_build` persists stdout/stderr of every subprocess step to
+  `<PGS_BUILD_DIR>/logs/<version>/<step>.{stdout,stderr}.log` and surfaces
+  the path in failure hints.
+- `exec_report` now names the HTML output `<basename>.GatherReport.html`
+  (derived from the input file's basename without extension) instead of the
+  earlier `<full_arg>_GatherReport.html` stop-gap.
 
-### Build System Enhancements
-- **File**: `pg_sandbox` (lines 226-227, 259, in `exec_build`)
-- **Issues**:
-  - `--without-icu` is hardcoded in the `./configure` command
-  - `--with-openssl` was previously hardcoded; it's now removed/commented out
-    because it's not portable across all build environments
-  - No way to pass extra parameterized `./configure` options
-  - `make -j8` is hardcoded instead of using all available cores
-- **Tasks**:
-  - Add a parameter to enable/disable ICU
-  - Add `--with-openssl` as an optional CLI argument to the `build` command
-    (off by default), so users that have OpenSSL headers available can opt in
-    without editing the source
-  - Allow user-supplied extra `./configure` options (generic pass-through)
-  - Use `os.cpu_count()` (or similar) instead of `-j8`. Don't use all available, round to about half
-- **Impact**: Medium - affects build flexibility and performance
+### Low priority (closed)
+- `pg_sandbox_help.py` has actual per-command help for every command
+  (build, deploy, destroy, report, restart, run, setenv, start, status,
+  stop, use). `pg_sandbox help <cmd>` and `pg_sandbox <cmd> --help` both
+  print the per-command text.
 
-### Port Management
-- **File**: `pg_sandbox` (line 335, in `exec_deploy`)
-- **Issue**: When the chosen port is in use, the deploy fails outright
-- **Task**: If the user did not pass `--port` (i.e. `pgs_port` is the default),
-  automatically try other ports before erroring out
-- **Impact**: Medium - improves user experience
+## Possible Future Work (not currently tracked as code TODOs)
 
-### Logging and Debugging of Subprocesses
-- **File**: `pg_sandbox` (line 326, end of `exec_build`)
-- **Issue**: Subprocess stdout/stderr is not persisted to disk
-- **Task**: Write stdout/stderr of each subprocess to log files for
-  troubleshooting failed builds
-- **Impact**: Medium - affects debugging capabilities
+These are not blocking and are not represented as `TODO` comments in the
+source today, but came up while closing the items above:
 
-### Report Command File Naming
-- **File**: `pg_sandbox` (lines 510-511, in `exec_report`)
-- **Issue**: To support batch reports, the resulting HTML file is currently
-  named by prepending the `pg_gather` filename. This is a stop-gap; needs
-  validation / a better strategy.
-- **Task**: Evaluate the current `<pg_gather>_GatherReport.html` naming and
-  decide whether a better scheme is needed for batch runs
-- **Impact**: Medium - affects report organization
-
-## Low Priority (Nice to Have)
-
-### Help System Completion
-- **File**: `pg_sandbox_help.py` (lines 33-62, in `print_help`)
-- **Issue**: All per-command help branches just `print("TODO")`
-- **Tasks**: Implement actual help content for each command:
-  - `build`
-  - `deploy`
-  - `destroy`
-  - `report`
-  - `restart`
-  - `run`
-  - `setenv`
-  - `start`
-  - `stop`
-  - `use`
-- **Impact**: Low - affects documentation, not functionality
+- **Pre-flight for `exec_build` external steps** — `curl` / `tar` failures
+  currently let the script continue and crash later with a stack trace
+  when the expected source dir is missing. A clean `pgserr.print_error_and_exit`
+  on non-zero return codes from `curl` and `tar` would mirror the rest of
+  `exec_build`.
+- **Subprocess log streaming** — today we capture stdout/stderr fully and
+  write them at the end of each step. For very long builds, streaming to
+  the log file in real time (so the user can `tail -f` it) would be nicer.
+- **Shared subprocess wrapper** — `exec_deploy`, `exec_start`, `exec_stop`
+  and friends still use the same `run(..., stdout=PIPE, stderr=PIPE, ...)`
+  + manual returncode check pattern. Folding these into a single helper
+  (similar to `print_step_failure_and_exit` / `_persist_subprocess_log`)
+  would cut a fair amount of repetition.
+- **`status` short-circuit** — the general help table now lists the
+  `status` command, but its dedicated entry in the README/DEMO docs could
+  use a refresh.
 
 ## Summary of Code TODOs Counted
 
-- `pg_sandbox`: 17 `TODO` comments
-  - Lines: 124, 125, 226, 227, 250, 251, 259, 267, 282, 299, 314, 326, 335, 510, 511, 525, 526
-- `pg_sandbox_help.py`: 10 `TODO` comments
-  - Lines: 34, 37, 40, 43, 46, 49, 52, 55, 58, 61
-- **Total**: 27 `TODO` comments across 2 files
+- `pg_sandbox`: 0 `TODO` comments
+- `pg_sandbox_help.py`: 0 `TODO` comments
+- **Total**: 0 `TODO` comments across 2 files
 
 ## Development Guidelines
 
@@ -111,10 +80,11 @@ Sandbox project.
 3. **Low Priority** - documentation polish
 
 ### Recurring Pattern
-Many TODOs are variants of "handle gracefully with proper error code from
-`pgserr`". A small helper in `pg_sandbox_errors.py` that wraps the
-"print stderr + return appropriate code" pattern would let us close ~5
-TODOs at once in `exec_build`.
+The "print stderr + exit with appropriate `pgserr` code" pattern is now
+centralized in `pgserr.print_step_failure_and_exit`, and per-step subprocess
+logs go through `_persist_subprocess_log` in `pg_sandbox`. Future
+multi-step subprocess routines should reuse both rather than re-inlining
+the same shape.
 
 ---
 
