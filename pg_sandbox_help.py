@@ -4,15 +4,17 @@ def print_general_help():
 
 Commands:
     build              compile PostgreSQL for the given major.minor version (as first argument after "build")
-    deploy             initialize the PostgreSQL instance, and start it
+    cluster            provision/inspect/destroy a primary + N standby cluster ("cluster deploy|status|destroy")
+    deploy             initialize the PostgreSQL instance, and start it (or attach as a standby with --replicate-from)
     destroy            stop the PostgreSQL instance, and delete all directories
     help               print this message and exit
+    promote            promote a standby sandbox to a standalone primary
     report             generate pg_gather report from out.txt output file.
     restart            restart the PostgreSQL instance
     run                runs the binary specified by the subcommand with the positional arguments
     setenv             write variables to the environment variables file
     start              start the PostgreSQL instance
-    status             show the PostgreSQL instance status
+    status             show the PostgreSQL instance status (incl. replication info when running)
     stop               stop the PostgreSQL instance
     use                run the psql client. All arguments after "use" are sent directly to psql
 
@@ -33,6 +35,14 @@ Build-only options:
     --with-icu         compile PostgreSQL with ICU support (default: --without-icu)
     --with-openssl     compile PostgreSQL with OpenSSL support (requires libssl headers)
     --configure-opts   extra flags forwarded verbatim to ./configure (quoted string)
+
+Replication options (deploy / cluster):
+    --replicate-from   name of an existing sandbox to stream from (turns "deploy" into a standby)
+    --slot             physical replication slot name to create on the source
+    --sync             register the standby as synchronous on the source
+    -N, --nodes        (cluster deploy) number of standbys to provision
+    --sync-count       (cluster deploy) how many of the standbys to mark synchronous
+    --slot-prefix      (cluster deploy) override slot name prefix (defaults to cluster name)
 
 Run "pg_sandbox help COMMAND" (or "pg_sandbox COMMAND --help") for
 detailed help on a single command.
@@ -73,6 +83,7 @@ Example:
 
     "deploy": """Usage:
     pg_sandbox deploy -b BIN_DIR -s SANDBOX_DIR [OPTIONS]
+    pg_sandbox deploy -b BIN_DIR -s SANDBOX_DIR --replicate-from SRC_SANDBOX [--slot NAME] [--sync]
 
 Initializes a fresh PostgreSQL data directory inside SANDBOX_DIR using
 the binaries under BIN_DIR, writes the per-sandbox env file
@@ -81,6 +92,14 @@ the binaries under BIN_DIR, writes the per-sandbox env file
 
 If --port is not provided and the default port is busy, deploy will
 auto-fallback to the next free port in [default+1, default+100].
+
+When --replicate-from is given, deploy creates a streaming standby of
+the named existing sandbox via pg_basebackup -R. The source sandbox is
+prepared on demand: wal_level, max_wal_senders and max_replication_slots
+are raised if needed (restarting the source if wal_level had to change),
+a 'replicator' role is created if missing, and a localhost replication
+entry is added to the source's pg_hba.conf. Cascading is supported by
+pointing --replicate-from at another standby.
 
 Options:
     -b, --bin           PostgreSQL binary directory (required)
@@ -91,8 +110,83 @@ Options:
     -p, --port          TCP port (default: 65432, auto-fallback if not set)
     -l, --log           server log file inside sandbox (default: server.log)
 
-Example:
+Replication options:
+    --replicate-from SRC_SANDBOX
+                        existing sandbox dir to clone via pg_basebackup
+    --slot NAME         create + use this physical replication slot on source
+    --sync              register this standby as a synchronous standby on
+                        the source (appended to synchronous_standby_names)
+
+Examples:
     pg_sandbox deploy -b /opt/postgresql/16.2 -s sbox_16
+    pg_sandbox deploy -b /opt/postgresql/16.2 -s sbox_16_s1 \\
+        --replicate-from sbox_16 --slot sbox_16_s1_slot
+    pg_sandbox deploy -b /opt/postgresql/16.2 -s sbox_16_s2 \\
+        --replicate-from sbox_16 --slot sbox_16_s2_slot --sync
+""",
+
+    "cluster": """Usage:
+    pg_sandbox cluster deploy  -s CLUSTER -b BIN_DIR -N NODES [OPTIONS]
+    pg_sandbox cluster status  -s CLUSTER
+    pg_sandbox cluster destroy -s CLUSTER [-f]
+
+Provisions, inspects, or tears down a primary + N-standby cluster as a
+single unit. Each member is still a regular sandbox under PGS_ROOT_DIR
+(named CLUSTER_p, CLUSTER_s1, ..., CLUSTER_sN), with an additional
+manifest file at <PGS_ROOT_DIR>/<CLUSTER>.cluster.json that ties them
+together for status/destroy.
+
+cluster deploy:
+  1. Deploys the primary CLUSTER_p (port = -p value, default 65432, with
+     auto-fallback to the next free port).
+  2. Deploys each standby CLUSTER_s<i> via pg_basebackup -R, allocating
+     ports near the primary's port and creating physical replication
+     slots named "<slot-prefix>_s<i>" (slot prefix defaults to CLUSTER).
+  3. The first --sync-count standbys are registered as synchronous on
+     the primary.
+  4. Writes the manifest.
+
+cluster status:
+  Prints connection + replication info for every member (uses
+  pg_stat_replication on the primary, pg_stat_wal_receiver +
+  pg_is_in_recovery() on each standby).
+
+cluster destroy:
+  Stops + removes all standbys first (best-effort dropping their slots
+  on the primary while it is still running), then the primary, then
+  the manifest file. Honors -f.
+
+Options:
+    -s, --sandbox-dir   cluster name (required; used as base for member dirs)
+    -b, --bin           PostgreSQL binary directory (required for deploy)
+    -N, --nodes         number of standbys to provision (deploy, required >= 1)
+    -p, --port          base port for the primary (default 65432, auto-fallback)
+    --sync-count K      first K standbys are made synchronous (default 0)
+    --slot-prefix PFX   slot name prefix (default: CLUSTER)
+    -f, --force         (destroy) skip the confirmation prompt
+
+Examples:
+    pg_sandbox cluster deploy  -s rep -b /opt/postgresql/16.2 -N 2 --sync-count 1
+    pg_sandbox cluster status  -s rep
+    pg_sandbox cluster destroy -s rep -f
+""",
+
+    "promote": """Usage:
+    pg_sandbox promote -s STANDBY_SANDBOX
+
+Promotes the standby instance backing STANDBOX_SANDBOX to a standalone
+primary. Internally runs 'pg_ctl promote -D <datadir>' and waits up to
+30 seconds for pg_is_in_recovery() to become false. On success, the
+sandbox env file is updated so PGS_ROLE=primary and the standby-only
+fields (PGS_REPLICATE_FROM, PGS_SLOT_NAME) are cleared.
+
+Errors out cleanly if the target sandbox is not currently a standby.
+
+Options:
+    -s, --sandbox-dir   standby sandbox to promote (required)
+
+Example:
+    pg_sandbox promote -s sbox_16_s1
 """,
 
     "destroy": """Usage:
@@ -210,6 +304,12 @@ Example:
 Reports whether the PostgreSQL instance backing SANDBOX_DIR is running,
 including its PID and command-line arguments. This is a thin wrapper
 around 'pg_ctl status -D <datadir>'.
+
+When the instance is running, also prints replication info:
+  - role=primary: pg_stat_replication for every connected standby
+                  (application_name, state, sync_state, *_lag)
+  - role=standby: pg_is_in_recovery() and pg_stat_wal_receiver
+                  (status, sender_host, sender_port, slot, latest_end_lsn)
 
 Options:
     -s, --sandbox-dir   sandbox directory (required)
