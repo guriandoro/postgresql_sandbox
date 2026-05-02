@@ -1189,36 +1189,86 @@ def exec_cluster_deploy():
 
     print("=== Deploying cluster '"+cluster_name+"' (1 primary + "+str(n)+" standbys) ===")
 
-    # 1) Primary
-    _reset_per_member_globals()
-    globals()["pgs_bin"] = bin_dir
-    globals()["pgs_sandbox_dir"] = primary_name
-    globals()["pgs_cluster"] = cluster_name
-    globals()["pgs_port"] = base_port_str
-    globals()["pgs_port_is_default"] = base_port_is_default
-    _deploy_primary()
-    primary_port = globals()["pgs_port"]
-    os.chdir(root)
+    # Track members successfully deployed so we can roll them back if a
+    # later step fails. Without this, a half-deployed cluster has no
+    # manifest and `cluster destroy` cannot clean it up, forcing manual
+    # removal of orphan sandboxes.
+    deployed_members = []
+    deployed_slots = {}
 
-    # 2) Standbys
-    slots = {}
-    for i, sb_name in enumerate(standby_names, start=1):
-        slot_name = slot_prefix+"_s"+str(i)
-        slots[sb_name] = slot_name
-        is_sync = (i <= sync_count)
+    def _rollback_partial_cluster():
+        if not deployed_members:
+            return
+        print("Cluster deploy failed; rolling back partially deployed members...")
+        # Drop replication slots on the primary first (while it is still
+        # up) so we don't leak slots that pin WAL.
+        if primary_name in deployed_members:
+            for sb_name, slot_name in deployed_slots.items():
+                try:
+                    _drop_replication_slot_on_source(primary_name, slot_name)
+                except SystemExit:
+                    pass
+                except Exception:
+                    pass
+        # Tear down standbys before the primary so their walreceivers
+        # disconnect cleanly.
+        for member in reversed(deployed_members):
+            sb_path = os.path.join(root, member)
+            if not os.path.exists(sb_path):
+                continue
+            print("Rolling back member '"+member+"'")
+            globals()["pgs_sandbox_dir"] = member
+            globals()["pgs_force"] = 1
+            try:
+                exec_destroy()
+            except SystemExit:
+                pass
+            except Exception as e:
+                print("WARNING: rollback of '"+member+"' failed: "+str(e))
+            os.chdir(root)
 
+    try:
+        # 1) Primary
         _reset_per_member_globals()
         globals()["pgs_bin"] = bin_dir
-        globals()["pgs_sandbox_dir"] = sb_name
+        globals()["pgs_sandbox_dir"] = primary_name
         globals()["pgs_cluster"] = cluster_name
-        globals()["pgs_replicate_from"] = primary_name
-        globals()["pgs_slot_name"] = slot_name
-        globals()["pgs_sync"] = 1 if is_sync else 0
-        # Probe a port near the primary's, but allow auto-fallback if busy.
-        globals()["pgs_port"] = str(int(primary_port)+i)
-        globals()["pgs_port_is_default"] = 1
-        _deploy_standby()
+        globals()["pgs_port"] = base_port_str
+        globals()["pgs_port_is_default"] = base_port_is_default
+        _deploy_primary()
+        deployed_members.append(primary_name)
+        primary_port = globals()["pgs_port"]
         os.chdir(root)
+
+        # 2) Standbys
+        slots = {}
+        for i, sb_name in enumerate(standby_names, start=1):
+            slot_name = slot_prefix+"_s"+str(i)
+            slots[sb_name] = slot_name
+            is_sync = (i <= sync_count)
+
+            _reset_per_member_globals()
+            globals()["pgs_bin"] = bin_dir
+            globals()["pgs_sandbox_dir"] = sb_name
+            globals()["pgs_cluster"] = cluster_name
+            globals()["pgs_replicate_from"] = primary_name
+            globals()["pgs_slot_name"] = slot_name
+            globals()["pgs_sync"] = 1 if is_sync else 0
+            # Probe a port near the primary's, but allow auto-fallback if busy.
+            globals()["pgs_port"] = str(int(primary_port)+i)
+            globals()["pgs_port_is_default"] = 1
+            _deploy_standby()
+            deployed_members.append(sb_name)
+            deployed_slots[sb_name] = slot_name
+            os.chdir(root)
+    except SystemExit:
+        os.chdir(root)
+        _rollback_partial_cluster()
+        raise
+    except Exception:
+        os.chdir(root)
+        _rollback_partial_cluster()
+        raise
 
     # 3) Manifest
     manifest = {
