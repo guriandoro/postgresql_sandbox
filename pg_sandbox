@@ -1388,9 +1388,15 @@ def _safe_pg_ctl_status(bin_dir, datadir_abs):
 
 
 def _iter_sandbox_dirs(root):
-    """Sorted list of dir names directly under root that hold a sandbox env."""
+    """Return (sorted dir names with a sandbox env, warnings) under root.
+
+    A previous version returned just the list and silently swallowed
+    OSError, which made unreadable PGS_ROOT_DIR look like an empty
+    sandbox set. Now any iteration failure is surfaced via the
+    `warnings` channel so global_status can print it."""
+    warnings = []
     if not root or not os.path.isdir(root):
-        return []
+        return [], warnings
     found = []
     try:
         with os.scandir(root) as it:
@@ -1400,10 +1406,11 @@ def _iter_sandbox_dirs(root):
                 env_path = os.path.join(entry.path, PGS_ENV_FILE)
                 if os.path.isfile(env_path):
                     found.append(entry.name)
-    except OSError:
-        return []
+    except OSError as e:
+        warnings.append("Could not list sandboxes under '"+root+"': "+str(e))
+        return [], warnings
     found.sort()
-    return found
+    return found, warnings
 
 
 def _iter_cluster_manifests(root):
@@ -1420,7 +1427,8 @@ def _iter_cluster_manifests(root):
         with os.scandir(root) as it:
             entries = [e for e in it
                        if e.is_file() and e.name.endswith(".cluster.json")]
-    except OSError:
+    except OSError as e:
+        warnings.append("Could not scan cluster manifests under '"+root+"': "+str(e))
         return manifests, warnings
     entries.sort(key=lambda e: e.name)
     for entry in entries:
@@ -1534,7 +1542,8 @@ def exec_global_status():
     print("="*64)
 
     manifests, warnings = _iter_cluster_manifests(root)
-    all_dirs = _iter_sandbox_dirs(root)
+    all_dirs, dir_warnings = _iter_sandbox_dirs(root)
+    warnings.extend(dir_warnings)
 
     cluster_members = set()
     for m in manifests:
