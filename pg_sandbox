@@ -33,6 +33,10 @@ def set_defaults():
     globals()["pgs_log"] = "server.log"
     globals()["pgs_host"] = "127.0.0.1"
     globals()["pgs_port"] = "65432"
+    # Tracks whether pgs_port was explicitly provided by the user (CLI / env
+    # file). When 1 (default) the port was not user-supplied, so deploy can
+    # auto-fallback to alternate ports if the default one is busy.
+    globals()["pgs_port_is_default"] = 1
     globals()["pgs_user"] = "postgres"
     globals()["pgs_help"] = 0
     globals()["pgs_force"] = 0
@@ -52,6 +56,8 @@ def read_env():
             globals()["pgs_log"] = data["PGS_LOG"]
             globals()["pgs_host"] = data["PGS_HOST"]
             globals()["pgs_port"] = data["PGS_PORT"]
+            # A persisted port counts as user-chosen.
+            globals()["pgs_port_is_default"] = 0
             globals()["pgs_sandbox_dir"] = data["PGS_SANDBOX_DIR"]
             globals()["pgs_user"] = data["PGS_USER"]
             file.close()
@@ -190,6 +196,7 @@ def parse_opts():
             globals()["pgs_no_dsn"] = 1
         elif opt in ['-p','--port']:
             globals()["pgs_port"] = _validate_port(opt, arg)
+            globals()["pgs_port_is_default"] = 0
         elif opt in ['-s','--sandbox-dir']:
             globals()["pgs_sandbox_dir"] = _validate_path(opt, arg)
         elif opt in ['-U','--user']:
@@ -393,20 +400,40 @@ def exec_build(version):
     return 0
 
 
+def _is_port_in_use(port):
+    """Return True if 'port' is currently accepting TCP connections on localhost."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.5)
+            return sock.connect_ex(('localhost', int(port))) == 0
+    except Exception:
+        # On any unexpected socket error, treat the port as unusable so the
+        # caller can either fall back to another or surface the error cleanly.
+        return True
+
+
 def exec_deploy():
     # 0- Check for compulsory variables defined
     check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir", "pgs_datadir", "pgs_user", "pgs_log", "pgs_port"])
 
-    # check if port is not already in use.
-    # TODO: if it is, and no --port was used (or pgs_port == default value), try other ports
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-            pgs_port = globals()["pgs_port"]
-            if sock.connect_ex(('localhost', int(pgs_port))) == 0:
-                pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
-    except Exception as e:
-        print(e)
-        pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
+    # check if port is not already in use; if it is and the user didn't
+    # explicitly choose a port, try the next 100 ports before giving up.
+    chosen_port = int(globals()["pgs_port"])
+    if _is_port_in_use(chosen_port):
+        port_is_default = globals().get("pgs_port_is_default", 1) == 1
+        if not port_is_default:
+            pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
+
+        print("Port "+str(chosen_port)+" is in use; searching for an alternate free port...")
+        fallback = None
+        for candidate in range(chosen_port + 1, min(chosen_port + 101, 65536)):
+            if not _is_port_in_use(candidate):
+                fallback = candidate
+                break
+        if fallback is None:
+            pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
+        print("Using port "+str(fallback)+" instead.")
+        globals()["pgs_port"] = str(fallback)
 
     # 1- Create directory or error out if it exists
     if os.path.exists(globals()["pgs_sandbox_dir"]):
