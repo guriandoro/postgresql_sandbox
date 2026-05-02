@@ -1988,6 +1988,11 @@ if __name__ == "__main__":
 
     # We need to do this before we change directory to the PGS_ROOT_DIR
     if pgs_command == "report":
+        if not positional_args:
+            pgserr.print_error_and_exit(
+                pgserr.ERR_INCORRECT_PARAMS,
+                "report requires a path to the pg_gather out.txt file. "
+                "See 'pg_sandbox help report'.")
         pg_gather_out_absolute_path = os.path.abspath(positional_args[0])
 
     # All execution functions (except build) assume they are called starting on PGS_ROOT_DIR    
@@ -1996,6 +2001,11 @@ if __name__ == "__main__":
     # Execute main command routines
     if pgs_command == "build":
         pgserr.print_debug("Executing build")
+        if not positional_args:
+            pgserr.print_error_and_exit(
+                pgserr.ERR_INCORRECT_PARAMS,
+                "build requires a PostgreSQL version (e.g. '16.2') as a "
+                "positional argument. See 'pg_sandbox help build'.")
         version = positional_args[0]
         exec_build(version)
     elif pgs_command == "cluster":
