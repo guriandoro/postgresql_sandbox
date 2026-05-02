@@ -240,6 +240,23 @@ def create_handy_scripts():
     return 0
 
 
+def _persist_subprocess_log(log_dir, step_name, result):
+    """Write stdout/stderr of a completed subprocess to log_dir for later
+    troubleshooting. Failures to write are debug-logged but never fatal."""
+    base = step_name.replace(" ", "_").replace("/", "_").replace("(", "").replace(")", "").strip("._")
+    if not base:
+        base = "step"
+    try:
+        if not os.path.isdir(log_dir):
+            os.makedirs(log_dir)
+        with open(os.path.join(log_dir, base+".stdout.log"), "w") as f:
+            f.write(result.stdout or "")
+        with open(os.path.join(log_dir, base+".stderr.log"), "w") as f:
+            f.write(result.stderr or "")
+    except Exception as e:
+        pgserr.print_debug("Failed to persist log for "+step_name+": ", e)
+
+
 def exec_build(version):
     # 0- Check if temporary directories have been created
 
@@ -254,6 +271,11 @@ def exec_build(version):
     if os.path.isdir(src_dir) == False:
         pgserr.print_debug("Creating directory: "+src_dir)
         os.makedirs(src_dir)
+
+    # Per-version log directory; survives the src cleanup at the end of build
+    # so users can still inspect logs after a successful or failed build.
+    log_dir = os.path.join(PGS_BUILD_DIR, "logs", version)
+    print("Subprocess logs will be written to: "+log_dir)
 
     # 1- Get source code
     os.chdir(src_dir)
@@ -318,12 +340,14 @@ def exec_build(version):
         pgserr.print_debug("configure command: ",configure_command)
 
         configure_result = run(configure_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+        _persist_subprocess_log(log_dir, "configure", configure_result)
         if configure_result.returncode == 0:
             print(" ./configure command successful.")
         else:
             config_log_path = os.path.join(os.getcwd(), "config.log")
-            hint = ("Hint: inspect '"+config_log_path+
-                    "' for full ./configure diagnostics (missing headers, libs, etc.).")
+            hint = ("Hint: inspect '"+config_log_path+"' for full ./configure"
+                    " diagnostics (missing headers, libs, etc.).\n"
+                    "Captured stdout/stderr in: "+log_dir)
             pgserr.print_step_failure_and_exit(
                 pgserr.ERR_BUILD_FAILED, "./configure",
                 configure_result.stderr, hint)
@@ -340,11 +364,13 @@ def exec_build(version):
         pgserr.print_debug("make parallelism: -j", make_jobs)
         make_command = ["make", "-j"+str(make_jobs)]
         make_result = run(make_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+        _persist_subprocess_log(log_dir, "make", make_result)
         if make_result.returncode == 0:
             print(" make command successful.")
         else:
             pgserr.print_step_failure_and_exit(
-                pgserr.ERR_BUILD_FAILED, "make", make_result.stderr)
+                pgserr.ERR_BUILD_FAILED, "make", make_result.stderr,
+                "Captured stdout/stderr in: "+log_dir)
     except Exception as e:
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
@@ -353,11 +379,13 @@ def exec_build(version):
     try:
         make_install_command = ["make", "install"]
         make_install_result = run(make_install_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+        _persist_subprocess_log(log_dir, "make install", make_install_result)
         if make_install_result.returncode == 0:
             print(" make install command successful.")
         else:
             pgserr.print_step_failure_and_exit(
-                pgserr.ERR_BUILD_FAILED, "make install", make_install_result.stderr)
+                pgserr.ERR_BUILD_FAILED, "make install", make_install_result.stderr,
+                "Captured stdout/stderr in: "+log_dir)
     except Exception as e:
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
@@ -368,11 +396,13 @@ def exec_build(version):
         try:
             make_contrib_command = ["make", "-j"+str(make_jobs)]
             make_contrib_result = run(make_contrib_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+            _persist_subprocess_log(log_dir, "make_contrib", make_contrib_result)
             if make_contrib_result.returncode == 0:
                 print(" make contrib command successful.")
             else:
                 pgserr.print_step_failure_and_exit(
-                    pgserr.ERR_BUILD_FAILED, "make (contrib)", make_contrib_result.stderr)
+                    pgserr.ERR_BUILD_FAILED, "make (contrib)", make_contrib_result.stderr,
+                    "Captured stdout/stderr in: "+log_dir)
         except Exception as e:
             pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
@@ -381,22 +411,24 @@ def exec_build(version):
     try:
         make_install_contrib_command = ["make", "install"]
         make_install_contrib_result = run(make_install_contrib_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+        _persist_subprocess_log(log_dir, "make_install_contrib", make_install_contrib_result)
         if make_install_contrib_result.returncode == 0:
             print(" make install contrib command successful.")
         else:
             pgserr.print_step_failure_and_exit(
-                pgserr.ERR_BUILD_FAILED, "make install (contrib)", make_install_contrib_result.stderr)
+                pgserr.ERR_BUILD_FAILED, "make install (contrib)", make_install_contrib_result.stderr,
+                "Captured stdout/stderr in: "+log_dir)
     except Exception as e:
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, e)
 
     print("Binaries installed in "+PGS_BIN_DIR)
+    print("Build logs preserved in: "+log_dir)
 
     # 8- Remove src directory
     print("Removing source code directory.")
     os.chdir(os.path.join(src_dir,".."))
     shutil.rmtree(src_dir)
 
-    # TODO have stdout/stderr printed to files for each subprocess, in case troubleshooting is needed
     return 0
 
 
