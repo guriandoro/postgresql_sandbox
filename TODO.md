@@ -41,11 +41,16 @@ Sandbox project.
 - **File**: `pg_sandbox` (lines 226-227, 259, in `exec_build`)
 - **Issues**:
   - `--without-icu` is hardcoded in the `./configure` command
+  - `--with-openssl` was previously hardcoded; it's now removed/commented out
+    because it's not portable across all build environments
   - No way to pass extra parameterized `./configure` options
   - `make -j8` is hardcoded instead of using all available cores
 - **Tasks**:
   - Add a parameter to enable/disable ICU
-  - Allow user-supplied extra `./configure` options
+  - Add `--with-openssl` as an optional CLI argument to the `build` command
+    (off by default), so users that have OpenSSL headers available can opt in
+    without editing the source
+  - Allow user-supplied extra `./configure` options (generic pass-through)
   - Use `os.cpu_count()` (or similar) instead of `-j8`. Don't use all available, round to about half
 - **Impact**: Medium - affects build flexibility and performance
 
