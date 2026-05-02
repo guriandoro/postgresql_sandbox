@@ -7,6 +7,7 @@ Commands:
     cluster            provision/inspect/destroy a primary + N standby cluster ("cluster deploy|status|destroy")
     deploy             initialize the PostgreSQL instance, and start it (or attach as a standby with --replicate-from)
     destroy            stop the PostgreSQL instance, and delete all directories
+    global_status      list every sandbox under PGS_ROOT_DIR with its running/stopped state and role
     help               print this message and exit
     promote            promote a standby sandbox to a standalone primary
     report             generate pg_gather report from out.txt output file.
@@ -202,6 +203,30 @@ Options:
 
 Example:
     pg_sandbox destroy -s sbox_16 -f
+""",
+
+    "global_status": """Usage:
+    pg_sandbox global_status
+
+Lists every sandbox directory under PGS_ROOT_DIR (~/postgresql-sandboxes/),
+grouping members of any cluster manifest under that cluster's header and
+listing standalone sandboxes separately. Each sandbox is reported as a
+single line: state (running/stopped/unknown/missing), name, role, host:port.
+
+No SQL is issued. Only `pg_ctl status` is consulted, so the command is
+fast and works against sandboxes whose binaries have moved or whose data
+directories were partially deleted (those show up as `unknown`). Members
+listed in a cluster manifest but no longer present on disk show up as
+`missing`.
+
+Standby rows include a trailing parenthetical with their replication
+source and slot (if persisted in the env file).
+
+Options:
+    (none)
+
+Example:
+    pg_sandbox global_status
 """,
 
     "report": """Usage:

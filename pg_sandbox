@@ -1267,6 +1267,218 @@ def exec_cluster_destroy():
     return 0
 
 
+# --- Global status helpers ------------------------------------------------
+
+def _safe_pg_ctl_status(bin_dir, datadir_abs):
+    """Return 'running', 'stopped' or 'unknown' without ever exiting.
+
+    Walks bin_dir for pg_ctl directly (instead of going through
+    get_binary_path) so we can keep producing output for the rest of the
+    sandboxes when one of them has a stale or moved binary directory."""
+    if not bin_dir or not os.path.isdir(bin_dir):
+        return "unknown"
+    if not datadir_abs or not os.path.isdir(datadir_abs):
+        return "unknown"
+    pgctl_path = None
+    try:
+        for root, dirs, files in os.walk(bin_dir):
+            if "pg_ctl" in files:
+                pgctl_path = os.path.join(root, "pg_ctl")
+                break
+    except Exception:
+        return "unknown"
+    if not pgctl_path:
+        return "unknown"
+    try:
+        result = run([pgctl_path, "status", "-D", datadir_abs],
+                     stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    except Exception:
+        return "unknown"
+    return "running" if result.returncode == 0 else "stopped"
+
+
+def _iter_sandbox_dirs(root):
+    """Sorted list of dir names directly under root that hold a sandbox env."""
+    if not root or not os.path.isdir(root):
+        return []
+    found = []
+    try:
+        with os.scandir(root) as it:
+            for entry in it:
+                if not entry.is_dir():
+                    continue
+                env_path = os.path.join(entry.path, PGS_ENV_FILE)
+                if os.path.isfile(env_path):
+                    found.append(entry.name)
+    except OSError:
+        return []
+    found.sort()
+    return found
+
+
+def _iter_cluster_manifests(root):
+    """Return (manifests, warnings) for every '*.cluster.json' under root.
+
+    Manifests are sorted by filename and each one is augmented with a
+    synthesized 'name' field if missing. Files that fail to parse are
+    skipped and surfaced as warnings instead of aborting the listing."""
+    manifests = []
+    warnings = []
+    if not root or not os.path.isdir(root):
+        return manifests, warnings
+    try:
+        with os.scandir(root) as it:
+            entries = [e for e in it
+                       if e.is_file() and e.name.endswith(".cluster.json")]
+    except OSError:
+        return manifests, warnings
+    entries.sort(key=lambda e: e.name)
+    for entry in entries:
+        try:
+            with open(entry.path) as f:
+                data = json.load(f)
+        except Exception as e:
+            warnings.append("Could not read cluster manifest '"+entry.path+"': "+str(e))
+            continue
+        if "name" not in data or not data["name"]:
+            data["name"] = entry.name[:-len(".cluster.json")]
+        manifests.append(data)
+    return manifests, warnings
+
+
+def _read_sandbox_env_safe(sandbox_dir):
+    """Non-fatal counterpart to _read_sandbox_env. Returns None on missing
+    or unreadable env files."""
+    env_path = os.path.join(os.path.expanduser(PGS_ROOT_DIR),
+                            sandbox_dir, PGS_ENV_FILE)
+    if not os.path.isfile(env_path):
+        return None
+    try:
+        with open(env_path) as f:
+            return json.load(f)
+    except Exception:
+        return None
+
+
+def _format_sandbox_line(sandbox_dir, indent="  "):
+    """Build one compact line describing sandbox_dir for global_status."""
+    state_w = 9
+    name_w = 24
+    role_w = 9
+    hp_w = 22
+
+    sb_path = os.path.join(os.path.expanduser(PGS_ROOT_DIR), sandbox_dir)
+    if not os.path.isdir(sb_path):
+        return (indent
+                + "missing".ljust(state_w)
+                + sandbox_dir.ljust(name_w)
+                + "-".ljust(role_w)
+                + "-".ljust(hp_w)
+                + " (sandbox dir not found)")
+
+    env = _read_sandbox_env_safe(sandbox_dir)
+    if env is None:
+        return (indent
+                + "unknown".ljust(state_w)
+                + sandbox_dir.ljust(name_w)
+                + "-".ljust(role_w)
+                + "-".ljust(hp_w)
+                + " (env missing or unreadable)")
+
+    bin_dir = env.get("PGS_BIN", "")
+    host = env.get("PGS_HOST", "?")
+    port = env.get("PGS_PORT", "?")
+    role = env.get("PGS_ROLE", "primary") or "primary"
+    datadir_abs = _sandbox_path(sandbox_dir, env.get("PGS_DATADIR", "data"))
+
+    state = _safe_pg_ctl_status(bin_dir, datadir_abs)
+    hostport = str(host)+":"+str(port)
+
+    suffix = ""
+    if state == "unknown":
+        suffix = " (env or bin missing)"
+    elif role == "standby":
+        src = env.get("PGS_REPLICATE_FROM", "")
+        slot = env.get("PGS_SLOT_NAME", "")
+        bits = []
+        if src:
+            bits.append("src="+src)
+        if slot:
+            bits.append("slot="+slot)
+        if bits:
+            suffix = " ("+", ".join(bits)+")"
+
+    return (indent
+            + state.ljust(state_w)
+            + sandbox_dir.ljust(name_w)
+            + role.ljust(role_w)
+            + hostport.ljust(hp_w)
+            + suffix)
+
+
+def _print_sandbox_line(sandbox_dir, indent="  "):
+    print(_format_sandbox_line(sandbox_dir, indent))
+
+
+def _print_cluster_block(manifest, indent="  "):
+    name = manifest.get("name", "?")
+    primary = manifest.get("primary", "") or ""
+    standbys = manifest.get("standbys", []) or []
+    sync_count = manifest.get("sync_count", 0)
+    print("Cluster '"+name+"' (primary="+(primary or "?")
+          +", standbys="+str(len(standbys))
+          +", sync_count="+str(sync_count)+"):")
+    if primary:
+        _print_sandbox_line(primary, indent)
+    for sb in standbys:
+        _print_sandbox_line(sb, indent)
+
+
+def exec_global_status():
+    """List every sandbox under PGS_ROOT_DIR with its running/stopped state.
+
+    Cluster members are grouped under their manifest header; standalone
+    sandboxes follow. No SQL is issued; only `pg_ctl status` is consulted."""
+    root = os.path.expanduser(PGS_ROOT_DIR)
+    print("PostgreSQL Sandbox global status (root: "+root+")")
+    print("="*64)
+
+    manifests, warnings = _iter_cluster_manifests(root)
+    all_dirs = _iter_sandbox_dirs(root)
+
+    cluster_members = set()
+    for m in manifests:
+        primary = m.get("primary", "") or ""
+        if primary:
+            cluster_members.add(primary)
+        cluster_members.update(m.get("standbys", []) or [])
+
+    if not manifests and not all_dirs:
+        print("(no sandboxes found)")
+        for w in warnings:
+            print("WARNING: "+w)
+        return 0
+
+    for m in manifests:
+        _print_cluster_block(m)
+        print()
+
+    standalones = [d for d in all_dirs if d not in cluster_members]
+    print("Standalone sandboxes:")
+    if not standalones:
+        print("  (none)")
+    else:
+        for sb in standalones:
+            _print_sandbox_line(sb)
+
+    if warnings:
+        print()
+        print("Warnings:")
+        for w in warnings:
+            print("  "+w)
+    return 0
+
+
 def exec_destroy():
     # 0- stop the sandbox
     if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
@@ -1719,7 +1931,7 @@ if __name__ == "__main__":
     pgs_command = args[1]
     pgserr.print_debug("Main command: ", pgs_command)
 
-    command_list = ['build','cluster','deploy','destroy','help', '--help', '-h', 'promote', 'report', 'restart','run','setenv','start','status','stop','use']
+    command_list = ['build','cluster','deploy','destroy','global_status','help', '--help', '-h', 'promote', 'report', 'restart','run','setenv','start','status','stop','use']
 
     if pgs_command not in command_list:
         pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND, pgserr.ERR_INCORRECT_COMMAND_MESSAGE)
@@ -1811,6 +2023,9 @@ if __name__ == "__main__":
     elif pgs_command == "status":
         pgserr.print_debug("Executing status")
         exec_status()
+    elif pgs_command == "global_status":
+        pgserr.print_debug("Executing global_status")
+        exec_global_status()
     elif pgs_command == "stop":
         pgserr.print_debug("Executing stop")
         if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
