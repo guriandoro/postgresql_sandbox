@@ -17,6 +17,12 @@ ERR_OUT_FILE_NOT_EXISTS = 12
 ERR_SUBCOMMAND_NOT_SPECIFIED = 13
 ERR_BUILD_FAILED = 14
 ERR_BIN_NOT_FOUND = 15
+ERR_REPL_SOURCE_NOT_RUNNING = 16
+ERR_REPL_BOOTSTRAP_FAILED = 17
+ERR_BASEBACKUP_FAILED = 18
+ERR_NOT_A_STANDBY = 19
+ERR_CLUSTER_EXISTS = 20
+ERR_CLUSTER_MANIFEST_MISSING = 21
 
 # Error messages
 # ERR_GENERIC_ERROR_MESSAGE = comes from generic exception
@@ -34,6 +40,12 @@ ERR_OUT_FILE_NOT_EXISTS_MESSAGE = "The chosen out.txt file does not exist: "
 ERR_SUBCOMMAND_NOT_SPECIFIED_MESSAGE = "Subcommand not specified. Check usage with 'help' command."
 ERR_BUILD_FAILED_MESSAGE = "PostgreSQL build step failed."
 ERR_BIN_NOT_FOUND_MESSAGE = "Required PostgreSQL binary could not be located. Make sure 'pg_sandbox build' has been run for the chosen version, or pass --bin to point to a valid binary directory."
+ERR_REPL_SOURCE_NOT_RUNNING_MESSAGE = "Replication source sandbox is not running. Start it before attaching a standby."
+ERR_REPL_BOOTSTRAP_FAILED_MESSAGE = "Failed to prepare the source instance for replication (wal_level, replication user, pg_hba, etc.)."
+ERR_BASEBACKUP_FAILED_MESSAGE = "pg_basebackup failed while cloning the source instance."
+ERR_NOT_A_STANDBY_MESSAGE = "The target sandbox is not a standby; only standbys can be promoted."
+ERR_CLUSTER_EXISTS_MESSAGE = "A cluster with that name (or one of its member sandbox directories) already exists."
+ERR_CLUSTER_MANIFEST_MISSING_MESSAGE = "Cluster manifest file not found under the sandbox root directory."
 
 # Functions
 def print_and_exit(message):

@@ -212,3 +212,56 @@ Reply "yes" to all questions when generating the pg_gather report
 ```
 pg_sandbox report -f out.txt
 ```
+
+## Physical replication
+
+Deploy a primary first.
+```
+pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-primary
+```
+
+Attach a streaming standby. The source is prepared on demand (wal_level, max_wal_senders, replication role, pg_hba.conf) and a physical replication slot is created via `pg_basebackup -C --slot=...`.
+```
+pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-s1 \
+    --replicate-from pg-16-primary --slot pg_16_s1_slot
+```
+
+Attach a synchronous standby. `--sync` appends the standby's name to `synchronous_standby_names` on the primary using the FIRST quorum form.
+```
+pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-s2 \
+    --replicate-from pg-16-primary --slot pg_16_s2_slot --sync
+```
+
+Cascade off an existing standby instead of the primary.
+```
+pg_sandbox deploy -b /opt/postgresql/16.2 -s pg-16-s1c \
+    --replicate-from pg-16-s1 --slot pg_16_s1c_slot
+```
+
+Inspect replication state on either side.
+```
+pg_sandbox status -s pg-16-primary
+pg_sandbox status -s pg-16-s1
+```
+
+Promote a standby to a standalone primary.
+```
+pg_sandbox promote -s pg-16-s2
+```
+
+## Clusters (one-shot replication topology)
+
+Deploy a cluster with a primary and N standbys, the first K of which are synchronous, all in one command. Members live as regular sandboxes named `<cluster>_p`, `<cluster>_s1`, `<cluster>_s2`, ...
+```
+pg_sandbox cluster deploy -s rep -b /opt/postgresql/16.2 -N 2 --sync-count 1
+```
+
+Show consolidated status for every member of the cluster.
+```
+pg_sandbox cluster status -s rep
+```
+
+Destroy the entire cluster (best-effort drops slots on the primary first, then stops + removes standbys, then the primary, then the manifest).
+```
+pg_sandbox cluster destroy -s rep -f
+```

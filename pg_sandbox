@@ -9,6 +9,7 @@ import stat
 import shutil
 import urllib.request
 import socket
+import time
 
 import pg_sandbox_errors as pgserr
 import pg_sandbox_help as pgshlp
@@ -44,6 +45,17 @@ def set_defaults():
     globals()["pgs_with_icu"] = 0
     globals()["pgs_with_openssl"] = 0
     globals()["pgs_configure_opts"] = ""
+    # replication-related options (default to non-replication mode so existing
+    # workflows are unaffected).
+    globals()["pgs_role"] = "primary"
+    globals()["pgs_replicate_from"] = ""
+    globals()["pgs_slot_name"] = ""
+    globals()["pgs_repl_user"] = "replicator"
+    globals()["pgs_cluster"] = ""
+    globals()["pgs_sync"] = 0
+    globals()["pgs_nodes"] = 0
+    globals()["pgs_sync_count"] = 0
+    globals()["pgs_slot_prefix"] = ""
 
 
 def read_env():
@@ -60,6 +72,12 @@ def read_env():
             globals()["pgs_port_is_default"] = 0
             globals()["pgs_sandbox_dir"] = data["PGS_SANDBOX_DIR"]
             globals()["pgs_user"] = data["PGS_USER"]
+            # Replication metadata is optional so old env files keep working.
+            globals()["pgs_role"] = data.get("PGS_ROLE", "primary")
+            globals()["pgs_replicate_from"] = data.get("PGS_REPLICATE_FROM", "")
+            globals()["pgs_slot_name"] = data.get("PGS_SLOT_NAME", "")
+            globals()["pgs_repl_user"] = data.get("PGS_REPL_USER", "replicator")
+            globals()["pgs_cluster"] = data.get("PGS_CLUSTER", "")
             file.close()
 
 
@@ -74,6 +92,25 @@ def write_env(dest_file):
         "PGS_SANDBOX_DIR": globals()["pgs_sandbox_dir"],
         "PGS_USER": globals()["pgs_user"]
     }
+
+    # Only persist replication metadata when it carries a non-default value.
+    # This keeps env files for plain primaries identical to the previous
+    # format, so users browsing them don't see noise.
+    role = globals().get("pgs_role", "primary")
+    if role and role != "primary":
+        data["PGS_ROLE"] = role
+    replicate_from = globals().get("pgs_replicate_from", "")
+    if replicate_from:
+        data["PGS_REPLICATE_FROM"] = replicate_from
+    slot_name = globals().get("pgs_slot_name", "")
+    if slot_name:
+        data["PGS_SLOT_NAME"] = slot_name
+    repl_user = globals().get("pgs_repl_user", "replicator")
+    if repl_user and repl_user != "replicator":
+        data["PGS_REPL_USER"] = repl_user
+    cluster = globals().get("pgs_cluster", "")
+    if cluster:
+        data["PGS_CLUSTER"] = cluster
 
     try:
         with open(dest_file, "w") as file:
@@ -168,9 +205,11 @@ def _validate_port(opt_name, arg):
 # Returns an array with all the positional arguments (unprocessed).
 def parse_opts():
     try:
-        short_opts = "b:d:D:fh:l:np:s:U:?"
+        # NOTE: '-n' is already taken by --no-dsn, so --nodes uses '-N'.
+        short_opts = "b:d:D:fh:l:nN:p:s:U:?"
         long_opts = ["bin=","dbname=","datadir=","force","host=","log=","no-dsn","port=","sandbox-dir=","user=","help",
-                     "with-icu","with-openssl","configure-opts="]
+                     "with-icu","with-openssl","configure-opts=",
+                     "replicate-from=","slot=","sync","nodes=","sync-count=","slot-prefix="]
 
         opts, args = getopt.getopt(sys.argv[2:], short_opts, long_opts)
 
@@ -209,6 +248,36 @@ def parse_opts():
             globals()["pgs_with_openssl"] = 1
         elif opt == '--configure-opts':
             globals()["pgs_configure_opts"] = _validate_str(opt, arg)
+        elif opt == '--replicate-from':
+            globals()["pgs_replicate_from"] = _validate_path(opt, arg)
+        elif opt == '--slot':
+            globals()["pgs_slot_name"] = _validate_str(opt, arg)
+        elif opt == '--sync':
+            globals()["pgs_sync"] = 1
+        elif opt in ['-N','--nodes']:
+            val = _validate_str(opt, arg)
+            try:
+                n = int(val)
+            except ValueError:
+                pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                            opt+" must be a positive integer.")
+            if n < 1:
+                pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                            opt+" must be a positive integer.")
+            globals()["pgs_nodes"] = n
+        elif opt == '--sync-count':
+            val = _validate_str(opt, arg)
+            try:
+                k = int(val)
+            except ValueError:
+                pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                            opt+" must be a non-negative integer.")
+            if k < 0:
+                pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+                                            opt+" must be a non-negative integer.")
+            globals()["pgs_sync_count"] = k
+        elif opt == '--slot-prefix':
+            globals()["pgs_slot_prefix"] = _validate_str(opt, arg)
 
     return args
 
@@ -444,28 +513,49 @@ def _is_port_in_use(port):
         return True
 
 
+def _allocate_port(initial_port, port_is_default):
+    """Pick a free TCP port, falling back to the next 100 ports when the
+    requested port is busy and the caller did not explicitly choose it.
+
+    Returns the chosen port (string). Exits cleanly with ERR_PORT_IN_USE if
+    nothing is free in the fallback window.
+    """
+    chosen_port = int(initial_port)
+    if not _is_port_in_use(chosen_port):
+        return str(chosen_port)
+
+    if not port_is_default:
+        pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
+
+    print("Port "+str(chosen_port)+" is in use; searching for an alternate free port...")
+    for candidate in range(chosen_port + 1, min(chosen_port + 101, 65536)):
+        if not _is_port_in_use(candidate):
+            print("Using port "+str(candidate)+" instead.")
+            return str(candidate)
+    pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
+
+
 def exec_deploy():
+    """Dispatcher: standalone primary vs. streaming standby.
+
+    The standby path (--replicate-from set) defers to _deploy_standby; the
+    primary path is the historical _deploy_primary body.
+    """
+    if globals().get("pgs_replicate_from", ""):
+        return _deploy_standby()
+    return _deploy_primary()
+
+
+def _deploy_primary():
     # 0- Check for compulsory variables defined
     check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir", "pgs_datadir", "pgs_user", "pgs_log", "pgs_port"])
 
+    globals()["pgs_role"] = "primary"
+
     # check if port is not already in use; if it is and the user didn't
     # explicitly choose a port, try the next 100 ports before giving up.
-    chosen_port = int(globals()["pgs_port"])
-    if _is_port_in_use(chosen_port):
-        port_is_default = globals().get("pgs_port_is_default", 1) == 1
-        if not port_is_default:
-            pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
-
-        print("Port "+str(chosen_port)+" is in use; searching for an alternate free port...")
-        fallback = None
-        for candidate in range(chosen_port + 1, min(chosen_port + 101, 65536)):
-            if not _is_port_in_use(candidate):
-                fallback = candidate
-                break
-        if fallback is None:
-            pgserr.print_error_and_exit(pgserr.ERR_PORT_IN_USE, pgserr.ERR_PORT_IN_USE_MESSAGE)
-        print("Using port "+str(fallback)+" instead.")
-        globals()["pgs_port"] = str(fallback)
+    globals()["pgs_port"] = _allocate_port(globals()["pgs_port"],
+                                           globals().get("pgs_port_is_default", 1) == 1)
 
     # 1- Create directory or error out if it exists
     if os.path.exists(globals()["pgs_sandbox_dir"]):
@@ -514,6 +604,668 @@ def exec_deploy():
     
     print("Database started. Listening on port "+globals()["pgs_port"])
     return 0
+
+
+# --- Replication helpers --------------------------------------------------
+
+def _read_sandbox_env(sandbox_dir):
+    """Return the parsed JSON env dict for sandbox_dir.
+
+    sandbox_dir is interpreted relative to PGS_ROOT_DIR (which matches how
+    every other command in this script consumes the value)."""
+    env_path = os.path.join(os.path.expanduser(PGS_ROOT_DIR),
+                            sandbox_dir, PGS_ENV_FILE)
+    if not os.path.isfile(env_path):
+        pgserr.print_error_and_exit(
+            pgserr.ERR_SBOXDIR_NOT_EXISTS,
+            "Sandbox env file '"+env_path+"' not found for sandbox '"+sandbox_dir+"'.")
+    with open(env_path) as f:
+        return json.load(f)
+
+
+def _sandbox_path(sandbox_dir, *parts):
+    """Build an absolute path inside sandbox_dir under PGS_ROOT_DIR."""
+    return os.path.join(os.path.expanduser(PGS_ROOT_DIR), sandbox_dir, *parts)
+
+
+def _psql_oneshot(bin_dir, host, port, user, dbname, sql, return_output=False):
+    """Run a single 'psql -c <sql>' against the given DSN.
+
+    Uses -X (no .psqlrc), -A (unaligned), -t (tuples-only) so callers get
+    bare values back when return_output=True. Returns either an int return
+    code, or a (returncode, stdout, stderr) tuple."""
+    psql_path = get_binary_path("psql", bin_dir)
+    cmd = [psql_path,
+           "-h", str(host),
+           "-p", str(port),
+           "-U", str(user),
+           "-d", str(dbname),
+           "-X", "-A", "-t", "-c", sql]
+    pgserr.print_debug("psql oneshot command: ", cmd)
+    result = run(cmd, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    if return_output:
+        return (result.returncode,
+                (result.stdout or "").strip(),
+                (result.stderr or "").strip())
+    return result.returncode
+
+
+def _pg_ctl_is_running(bin_dir, datadir_abs):
+    pgctl = get_binary_path("pg_ctl", bin_dir)
+    result = run([pgctl, "status", "-D", datadir_abs],
+                 stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    return result.returncode == 0
+
+
+def _pg_ctl_reload(bin_dir, datadir_abs):
+    pgctl = get_binary_path("pg_ctl", bin_dir)
+    result = run([pgctl, "reload", "-D", datadir_abs],
+                 stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    if result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "pg_ctl reload failed: "+(result.stderr or "").strip())
+
+
+def _pg_ctl_restart_inplace(bin_dir, datadir_abs, port, log_abs):
+    """Restart a running instance preserving its port + log file location."""
+    pgctl = get_binary_path("pg_ctl", bin_dir)
+    cmd = [pgctl, "restart",
+           "-D", datadir_abs,
+           "-l", log_abs,
+           "-mf",
+           "-o", "\"-p "+str(port)+"\""]
+    pgserr.print_debug("pg_ctl restart command: ", cmd)
+    result = run(cmd, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    if result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "pg_ctl restart failed: "+(result.stderr or "").strip())
+
+
+def _ensure_pg_hba_replication_entry(datadir_abs, repl_user):
+    """Append a 'host replication <user> 127.0.0.1/32 trust' line if missing.
+
+    Returns True if a line was added, False if it was already present.
+    Sandbox auth is trust on localhost by default, so we keep the same
+    posture for replication."""
+    hba_path = os.path.join(datadir_abs, "pg_hba.conf")
+    needle = "host replication "+repl_user+" 127.0.0.1/32 trust"
+    needle_v6 = "host replication "+repl_user+" ::1/128 trust"
+    try:
+        with open(hba_path, "r") as f:
+            content = f.read()
+    except Exception as e:
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+            "Could not read pg_hba.conf at '"+hba_path+"': "+str(e))
+
+    added = False
+    appended = []
+    if needle not in content:
+        appended.append(needle+"\n")
+        added = True
+    if needle_v6 not in content:
+        appended.append(needle_v6+"\n")
+        added = True
+    if added:
+        try:
+            with open(hba_path, "a") as f:
+                f.write("# Added by pg_sandbox for physical replication\n")
+                for line in appended:
+                    f.write(line)
+        except Exception as e:
+            pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+                "Could not append to pg_hba.conf at '"+hba_path+"': "+str(e))
+    return added
+
+
+def _ensure_primary_ready_for_replication(src_sandbox_dir, repl_user="replicator"):
+    """Idempotent prep so src_sandbox_dir can serve a streaming standby.
+
+    Adjusts wal_level, max_wal_senders, max_replication_slots via ALTER
+    SYSTEM (restarting only if wal_level had to change), creates the
+    replication role if missing, and adds a localhost replication entry to
+    pg_hba.conf (reloading the config). On any failure, exits with
+    ERR_REPL_BOOTSTRAP_FAILED."""
+    env = _read_sandbox_env(src_sandbox_dir)
+    src_bin = env["PGS_BIN"]
+    src_host = env["PGS_HOST"]
+    src_port = env["PGS_PORT"]
+    src_user = env["PGS_USER"]
+    src_datadir_abs = _sandbox_path(src_sandbox_dir, env["PGS_DATADIR"])
+    src_log_abs = _sandbox_path(src_sandbox_dir, env["PGS_LOG"])
+
+    if not _pg_ctl_is_running(src_bin, src_datadir_abs):
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_SOURCE_NOT_RUNNING,
+            "Source sandbox '"+src_sandbox_dir+"' is not running. "
+            +pgserr.ERR_REPL_SOURCE_NOT_RUNNING_MESSAGE)
+
+    def _show(setting):
+        rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                     "postgres", "SHOW "+setting+";",
+                                     return_output=True)
+        if rc != 0:
+            pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+                "Failed to read setting '"+setting+"' from source: "+err)
+        return out.strip()
+
+    def _alter(sql):
+        rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                     "postgres", sql, return_output=True)
+        if rc != 0:
+            pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+                "Failed to apply '"+sql+"' on source: "+err)
+
+    needs_restart = False
+    wal_level = _show("wal_level").lower()
+    if wal_level == "minimal":
+        # 'replica' is the lowest setting that supports streaming standbys;
+        # it persists across a restart via ALTER SYSTEM.
+        _alter("ALTER SYSTEM SET wal_level = 'replica';")
+        needs_restart = True
+        print("Source '"+src_sandbox_dir+"': wal_level set to 'replica' (restart required).")
+
+    try:
+        if int(_show("max_wal_senders")) < 10:
+            _alter("ALTER SYSTEM SET max_wal_senders = 10;")
+            print("Source '"+src_sandbox_dir+"': max_wal_senders raised to 10 (restart required).")
+            needs_restart = True
+    except ValueError:
+        pass
+
+    try:
+        if int(_show("max_replication_slots")) < 10:
+            _alter("ALTER SYSTEM SET max_replication_slots = 10;")
+            print("Source '"+src_sandbox_dir+"': max_replication_slots raised to 10 (restart required).")
+            needs_restart = True
+    except ValueError:
+        pass
+
+    role_exists_sql = ("SELECT 1 FROM pg_roles WHERE rolname = "
+                       +"'"+repl_user.replace("'", "''")+"';")
+    rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                 "postgres", role_exists_sql,
+                                 return_output=True)
+    if rc != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+            "Failed to check replication role on source: "+err)
+    if out.strip() != "1":
+        _alter("CREATE ROLE "+repl_user+" WITH REPLICATION LOGIN;")
+        print("Source '"+src_sandbox_dir+"': created replication role '"+repl_user+"'.")
+
+    hba_added = _ensure_pg_hba_replication_entry(src_datadir_abs, repl_user)
+    if hba_added:
+        _pg_ctl_reload(src_bin, src_datadir_abs)
+        print("Source '"+src_sandbox_dir+"': pg_hba.conf updated and config reloaded.")
+
+    if needs_restart:
+        print("Restarting source '"+src_sandbox_dir+"' to apply replication settings...")
+        _pg_ctl_restart_inplace(src_bin, src_datadir_abs, src_port, src_log_abs)
+        print("Source '"+src_sandbox_dir+"': restarted.")
+
+
+def _set_synchronous_standby_on_primary(src_sandbox_dir, app_name):
+    """Append app_name to synchronous_standby_names on the primary and reload.
+
+    Uses the FIRST list form so the order of additions defines the sync
+    quorum priority. Idempotent (no-op if app_name is already present)."""
+    env = _read_sandbox_env(src_sandbox_dir)
+    src_bin = env["PGS_BIN"]
+    src_host = env["PGS_HOST"]
+    src_port = env["PGS_PORT"]
+    src_user = env["PGS_USER"]
+    src_datadir_abs = _sandbox_path(src_sandbox_dir, env["PGS_DATADIR"])
+
+    rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                 "postgres",
+                                 "SHOW synchronous_standby_names;",
+                                 return_output=True)
+    if rc != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+            "Failed to read synchronous_standby_names on source: "+err)
+    current = (out or "").strip()
+
+    existing_names = []
+    if current and current.upper().startswith("FIRST"):
+        # Format is: FIRST n (a, b, c)
+        try:
+            inner = current[current.index("(")+1:current.rindex(")")]
+            existing_names = [n.strip() for n in inner.split(",") if n.strip()]
+        except ValueError:
+            existing_names = []
+    elif current:
+        existing_names = [n.strip() for n in current.split(",") if n.strip()]
+
+    if app_name in existing_names:
+        return
+
+    existing_names.append(app_name)
+    new_value = "FIRST "+str(len(existing_names))+" ("+", ".join(existing_names)+")"
+    sql = "ALTER SYSTEM SET synchronous_standby_names = '"+new_value+"';"
+    rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                 "postgres", sql, return_output=True)
+    if rc != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_BOOTSTRAP_FAILED,
+            "Failed to set synchronous_standby_names on source: "+err)
+    _pg_ctl_reload(src_bin, src_datadir_abs)
+    print("Source '"+src_sandbox_dir+"': synchronous_standby_names = "+new_value)
+
+
+def _drop_replication_slot_on_source(src_sandbox_dir, slot_name):
+    """Best-effort drop of a physical slot on src_sandbox_dir.
+
+    Used during destroy to avoid leaking slots that would otherwise pin WAL
+    on the source forever. Failures here are debug-logged, never fatal."""
+    if not slot_name:
+        return
+    try:
+        env = _read_sandbox_env(src_sandbox_dir)
+    except SystemExit:
+        return
+    src_bin = env["PGS_BIN"]
+    src_host = env["PGS_HOST"]
+    src_port = env["PGS_PORT"]
+    src_user = env["PGS_USER"]
+    src_datadir_abs = _sandbox_path(src_sandbox_dir, env["PGS_DATADIR"])
+    if not _pg_ctl_is_running(src_bin, src_datadir_abs):
+        pgserr.print_debug("Source '"+src_sandbox_dir+"' not running; skipping slot drop for '"+slot_name+"'.")
+        return
+    sql = ("SELECT pg_drop_replication_slot('"+slot_name.replace("'","''")
+           +"') WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name = '"
+           +slot_name.replace("'","''")+"');")
+    rc, out, err = _psql_oneshot(src_bin, src_host, src_port, src_user,
+                                 "postgres", sql, return_output=True)
+    if rc != 0:
+        pgserr.print_debug("Best-effort slot drop on '"+src_sandbox_dir+"' failed: ", err)
+    else:
+        print("Dropped replication slot '"+slot_name+"' on source '"+src_sandbox_dir+"'.")
+
+
+def _rewrite_standby_auto_conf(datadir_abs, port, primary_conninfo, slot_name):
+    """Strip pg_basebackup-generated lines for port/primary_conninfo/primary_slot_name
+    from postgresql.auto.conf and append our canonical values.
+
+    pg_basebackup -R writes primary_conninfo automatically; we override it
+    so we control application_name (needed for synchronous_standby_names)
+    and the chosen TCP port."""
+    auto_path = os.path.join(datadir_abs, "postgresql.auto.conf")
+    keys_to_strip = ("port", "primary_conninfo", "primary_slot_name")
+    kept_lines = []
+    if os.path.isfile(auto_path):
+        try:
+            with open(auto_path, "r") as f:
+                for line in f:
+                    stripped = line.strip()
+                    if (not stripped) or stripped.startswith("#"):
+                        kept_lines.append(line)
+                        continue
+                    key = stripped.split("=", 1)[0].strip().lower()
+                    if key in keys_to_strip:
+                        continue
+                    kept_lines.append(line)
+        except Exception as e:
+            pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+                "Could not read postgresql.auto.conf at '"+auto_path+"': "+str(e))
+
+    try:
+        with open(auto_path, "w") as f:
+            for line in kept_lines:
+                f.write(line)
+            f.write("# Added by pg_sandbox for physical replication\n")
+            f.write("port = "+str(port)+"\n")
+            escaped_conninfo = primary_conninfo.replace("'", "''")
+            f.write("primary_conninfo = '"+escaped_conninfo+"'\n")
+            if slot_name:
+                f.write("primary_slot_name = '"+slot_name.replace("'","''")+"'\n")
+    except Exception as e:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "Could not rewrite postgresql.auto.conf at '"+auto_path+"': "+str(e))
+
+
+def _deploy_standby():
+    """Provision a streaming standby sandbox attached to pgs_replicate_from."""
+    check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir", "pgs_datadir",
+                                   "pgs_user", "pgs_log", "pgs_port",
+                                   "pgs_replicate_from"])
+
+    src_sandbox_dir = globals()["pgs_replicate_from"]
+    repl_user = globals().get("pgs_repl_user", "replicator") or "replicator"
+
+    src_env = _read_sandbox_env(src_sandbox_dir)
+    src_bin = src_env["PGS_BIN"]
+    src_host = src_env["PGS_HOST"]
+    src_port = src_env["PGS_PORT"]
+    src_datadir_abs = _sandbox_path(src_sandbox_dir, src_env["PGS_DATADIR"])
+
+    if not _pg_ctl_is_running(src_bin, src_datadir_abs):
+        pgserr.print_error_and_exit(pgserr.ERR_REPL_SOURCE_NOT_RUNNING,
+            pgserr.ERR_REPL_SOURCE_NOT_RUNNING_MESSAGE)
+
+    _ensure_primary_ready_for_replication(src_sandbox_dir, repl_user)
+
+    globals()["pgs_role"] = "standby"
+    globals()["pgs_repl_user"] = repl_user
+    globals()["pgs_port"] = _allocate_port(globals()["pgs_port"],
+                                           globals().get("pgs_port_is_default", 1) == 1)
+
+    new_sandbox_dir = globals()["pgs_sandbox_dir"]
+    if os.path.exists(new_sandbox_dir):
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_EXISTS, pgserr.ERR_SBOXDIR_EXISTS_MESSAGE)
+
+    os.makedirs(new_sandbox_dir)
+    os.chdir(new_sandbox_dir)
+
+    write_env(PGS_ENV_FILE)
+
+    pg_basebackup_path = get_binary_path("pg_basebackup", globals()["pgs_bin"])
+    pgserr.print_debug("pg_basebackup bin path: ", pg_basebackup_path)
+
+    app_name = os.path.basename(new_sandbox_dir.rstrip("/")) or new_sandbox_dir
+    conninfo = ("host="+str(src_host)+" port="+str(src_port)
+                +" user="+repl_user+" application_name="+app_name)
+
+    bb_cmd = [pg_basebackup_path,
+              "-d", conninfo,
+              "-D", globals()["pgs_datadir"],
+              "-X", "stream",
+              "-R",
+              "-P"]
+    slot_name = globals().get("pgs_slot_name", "")
+    if slot_name:
+        bb_cmd.extend(["-C", "--slot="+slot_name])
+
+    pgserr.print_debug("pg_basebackup command: ", bb_cmd)
+    bb_result = run(bb_cmd, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    if bb_result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_BASEBACKUP_FAILED,
+            (pgserr.ERR_BASEBACKUP_FAILED_MESSAGE+"\n"+(bb_result.stderr or "")).strip())
+
+    print("Standby data directory cloned via pg_basebackup from '"+src_sandbox_dir+"'.")
+
+    new_datadir_abs = os.path.abspath(globals()["pgs_datadir"])
+    _rewrite_standby_auto_conf(new_datadir_abs, globals()["pgs_port"],
+                               conninfo, slot_name)
+
+    create_handy_scripts()
+
+    pgctl_bin_path = get_binary_path("pg_ctl", globals()["pgs_bin"])
+    start_command = [pgctl_bin_path,
+                     "start",
+                     "-D", globals()["pgs_datadir"],
+                     "-l", globals()["pgs_log"],
+                     "-o", "\"-p "+globals()["pgs_port"]+"\""]
+    pgserr.print_debug("standby start command: ", start_command)
+    start_result = run(start_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
+    if start_result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, start_result.stderr)
+
+    print("Standby started. Listening on port "+globals()["pgs_port"]
+          +" (replicating from '"+src_sandbox_dir+"').")
+
+    if globals().get("pgs_sync", 0) == 1:
+        _set_synchronous_standby_on_primary(src_sandbox_dir, app_name)
+        print("Standby '"+app_name+"' registered as a synchronous standby on '"+src_sandbox_dir+"'.")
+
+    return 0
+
+
+# --- Cluster commands -----------------------------------------------------
+
+def _cluster_manifest_path(cluster_name):
+    return os.path.join(os.path.expanduser(PGS_ROOT_DIR),
+                        cluster_name+".cluster.json")
+
+
+def _read_cluster_manifest(cluster_name):
+    path = _cluster_manifest_path(cluster_name)
+    if not os.path.isfile(path):
+        pgserr.print_error_and_exit(pgserr.ERR_CLUSTER_MANIFEST_MISSING,
+            pgserr.ERR_CLUSTER_MANIFEST_MISSING_MESSAGE+" Path: "+path)
+    with open(path) as f:
+        return json.load(f)
+
+
+def _reset_per_member_globals():
+    """Restore the deploy-time defaults that _deploy_primary / _deploy_standby
+    consume from globals, so each iteration in a cluster deploy starts from
+    a clean slate (instead of inheriting whatever the previous member ended
+    up with)."""
+    globals()["pgs_dbname"] = "postgres"
+    globals()["pgs_datadir"] = "data"
+    globals()["pgs_log"] = "server.log"
+    globals()["pgs_host"] = "127.0.0.1"
+    globals()["pgs_user"] = "postgres"
+    globals()["pgs_repl_user"] = "replicator"
+    globals()["pgs_replicate_from"] = ""
+    globals()["pgs_slot_name"] = ""
+    globals()["pgs_sync"] = 0
+    globals()["pgs_role"] = "primary"
+
+
+def exec_cluster(subcommand):
+    """Dispatch for `pg_sandbox cluster <subcommand> ...`."""
+    if not subcommand:
+        pgserr.print_error_and_exit(pgserr.ERR_SUBCOMMAND_NOT_SPECIFIED,
+            "cluster requires a subcommand: deploy | status | destroy.")
+    if subcommand == "deploy":
+        return exec_cluster_deploy()
+    if subcommand == "status":
+        return exec_cluster_status()
+    if subcommand == "destroy":
+        return exec_cluster_destroy()
+    pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND,
+        "Unknown cluster subcommand '"+subcommand+"'. Expected: deploy | status | destroy.")
+
+
+def exec_cluster_deploy():
+    check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir"])
+    cluster_name = globals()["pgs_sandbox_dir"]
+    n = globals().get("pgs_nodes", 0)
+    if n < 1:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+            "cluster deploy requires --nodes/-N >= 1.")
+    sync_count = globals().get("pgs_sync_count", 0)
+    if sync_count > n:
+        pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
+            "--sync-count cannot exceed --nodes.")
+    slot_prefix = globals().get("pgs_slot_prefix", "") or cluster_name
+
+    root = os.path.expanduser(PGS_ROOT_DIR)
+    manifest_path = _cluster_manifest_path(cluster_name)
+    if os.path.exists(manifest_path):
+        pgserr.print_error_and_exit(pgserr.ERR_CLUSTER_EXISTS,
+            pgserr.ERR_CLUSTER_EXISTS_MESSAGE+" Manifest already at: "+manifest_path)
+
+    primary_name = cluster_name+"_p"
+    standby_names = [cluster_name+"_s"+str(i) for i in range(1, n+1)]
+    for member in [primary_name]+standby_names:
+        if os.path.exists(os.path.join(root, member)):
+            pgserr.print_error_and_exit(pgserr.ERR_CLUSTER_EXISTS,
+                "Member sandbox dir '"+member+"' already exists under "+root)
+
+    bin_dir = globals()["pgs_bin"]
+    base_port_str = globals()["pgs_port"]
+    base_port_is_default = globals().get("pgs_port_is_default", 1)
+
+    print("=== Deploying cluster '"+cluster_name+"' (1 primary + "+str(n)+" standbys) ===")
+
+    # 1) Primary
+    _reset_per_member_globals()
+    globals()["pgs_bin"] = bin_dir
+    globals()["pgs_sandbox_dir"] = primary_name
+    globals()["pgs_cluster"] = cluster_name
+    globals()["pgs_port"] = base_port_str
+    globals()["pgs_port_is_default"] = base_port_is_default
+    _deploy_primary()
+    primary_port = globals()["pgs_port"]
+    os.chdir(root)
+
+    # 2) Standbys
+    slots = {}
+    for i, sb_name in enumerate(standby_names, start=1):
+        slot_name = slot_prefix+"_s"+str(i)
+        slots[sb_name] = slot_name
+        is_sync = (i <= sync_count)
+
+        _reset_per_member_globals()
+        globals()["pgs_bin"] = bin_dir
+        globals()["pgs_sandbox_dir"] = sb_name
+        globals()["pgs_cluster"] = cluster_name
+        globals()["pgs_replicate_from"] = primary_name
+        globals()["pgs_slot_name"] = slot_name
+        globals()["pgs_sync"] = 1 if is_sync else 0
+        # Probe a port near the primary's, but allow auto-fallback if busy.
+        globals()["pgs_port"] = str(int(primary_port)+i)
+        globals()["pgs_port_is_default"] = 1
+        _deploy_standby()
+        os.chdir(root)
+
+    # 3) Manifest
+    manifest = {
+        "name": cluster_name,
+        "bin": bin_dir,
+        "primary": primary_name,
+        "standbys": standby_names,
+        "slots": slots,
+        "sync_count": sync_count,
+    }
+    try:
+        with open(manifest_path, "w") as f:
+            json.dump(manifest, f, indent=2)
+    except Exception as e:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "Failed to write cluster manifest at '"+manifest_path+"': "+str(e))
+    print("Cluster manifest written to: "+manifest_path)
+    print("Cluster '"+cluster_name+"' deployed successfully.")
+    return 0
+
+
+def _print_replication_status_for_member(label, sandbox_dir):
+    """Print connection + replication info for a single cluster member."""
+    try:
+        env = _read_sandbox_env(sandbox_dir)
+    except SystemExit:
+        print("["+label+"] '"+sandbox_dir+"': env file missing.")
+        return
+    bin_dir = env["PGS_BIN"]
+    host = env["PGS_HOST"]
+    port = env["PGS_PORT"]
+    user = env["PGS_USER"]
+    datadir_abs = _sandbox_path(sandbox_dir, env["PGS_DATADIR"])
+    role = env.get("PGS_ROLE", "primary")
+    if not _pg_ctl_is_running(bin_dir, datadir_abs):
+        print("["+label+"] '"+sandbox_dir+"' (role="+role+"): NOT running")
+        return
+    print("["+label+"] '"+sandbox_dir+"' (role="+role+") running on "+host+":"+port)
+    if role == "primary":
+        sql = ("SELECT application_name, state, sync_state, "
+               "write_lag, flush_lag, replay_lag "
+               "FROM pg_stat_replication;")
+        rc, out, err = _psql_oneshot(bin_dir, host, port, user, "postgres",
+                                     sql, return_output=True)
+        if rc != 0:
+            print("  pg_stat_replication unavailable: "+err)
+        else:
+            print("  pg_stat_replication (app|state|sync|write_lag|flush_lag|replay_lag):")
+            if not out:
+                print("    (no connected standbys)")
+            else:
+                for line in out.splitlines():
+                    print("    "+line)
+    else:
+        rc, out, err = _psql_oneshot(bin_dir, host, port, user, "postgres",
+                                     "SELECT pg_is_in_recovery();",
+                                     return_output=True)
+        if rc == 0:
+            print("  pg_is_in_recovery: "+out)
+        sql = ("SELECT status, sender_host, sender_port, "
+               "slot_name, latest_end_lsn FROM pg_stat_wal_receiver;")
+        rc, out, err = _psql_oneshot(bin_dir, host, port, user, "postgres",
+                                     sql, return_output=True)
+        if rc != 0:
+            print("  pg_stat_wal_receiver unavailable: "+err)
+        else:
+            print("  pg_stat_wal_receiver (status|sender_host|sender_port|slot|latest_end_lsn):")
+            if not out:
+                print("    (no walreceiver — standby not streaming)")
+            else:
+                for line in out.splitlines():
+                    print("    "+line)
+
+
+def exec_cluster_status():
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    cluster_name = globals()["pgs_sandbox_dir"]
+    manifest = _read_cluster_manifest(cluster_name)
+    print("Cluster: "+manifest["name"])
+    print("  Primary:   "+manifest["primary"])
+    print("  Standbys:  "+(", ".join(manifest.get("standbys", [])) or "(none)"))
+    print("  Sync cnt:  "+str(manifest.get("sync_count", 0)))
+    print()
+    _print_replication_status_for_member("primary", manifest["primary"])
+    print()
+    for sb in manifest.get("standbys", []):
+        _print_replication_status_for_member("standby", sb)
+        print()
+    return 0
+
+
+def exec_cluster_destroy():
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    cluster_name = globals()["pgs_sandbox_dir"]
+    manifest = _read_cluster_manifest(cluster_name)
+    primary = manifest["primary"]
+    standbys = manifest.get("standbys", [])
+    slots = manifest.get("slots", {})
+
+    if not globals().get("pgs_force", 0):
+        confirm = input("Destroy cluster '"+cluster_name+"' (primary '"+primary
+                        +"' + "+str(len(standbys))+" standbys)? [y/N]: ")
+        if confirm.lower() != "y":
+            print("Aborted.")
+            return 0
+
+    root = os.path.expanduser(PGS_ROOT_DIR)
+
+    # 1) Best-effort: drop replication slots on the primary while it is
+    #    still up, so we don't leak slots that pin WAL.
+    for sb in standbys:
+        slot = slots.get(sb)
+        if slot:
+            _drop_replication_slot_on_source(primary, slot)
+
+    # 2) Stop + remove standbys.
+    for sb in standbys:
+        sb_path = os.path.join(root, sb)
+        if not os.path.exists(sb_path):
+            continue
+        print("Destroying standby '"+sb+"'")
+        globals()["pgs_sandbox_dir"] = sb
+        globals()["pgs_force"] = 1
+        try:
+            exec_destroy()
+        except SystemExit:
+            pass
+        os.chdir(root)
+
+    # 3) Stop + remove primary.
+    primary_path = os.path.join(root, primary)
+    if os.path.exists(primary_path):
+        print("Destroying primary '"+primary+"'")
+        globals()["pgs_sandbox_dir"] = primary
+        globals()["pgs_force"] = 1
+        try:
+            exec_destroy()
+        except SystemExit:
+            pass
+        os.chdir(root)
+
+    # 4) Remove the manifest itself.
+    try:
+        os.remove(_cluster_manifest_path(cluster_name))
+    except FileNotFoundError:
+        pass
+    print("Cluster '"+cluster_name+"' destroyed.")
+    return 0
+
 
 def exec_destroy():
     # 0- stop the sandbox
@@ -772,9 +1524,110 @@ def exec_status():
     pgserr.print_debug("status command return code: ", status_result.returncode)
     if status_result.stderr != '':
         pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, status_result.stderr)
+
+    print(status_result.stdout)
+
+    # 3- replication info (only when the instance is actually running, so we
+    # don't spam the user with connection failures when reporting status of
+    # a stopped sandbox).
+    if status_result.returncode == 0:
+        role = globals().get("pgs_role", "primary") or "primary"
+        bin_dir = globals()["pgs_bin"]
+        host = globals()["pgs_host"]
+        port = globals()["pgs_port"]
+        user = globals()["pgs_user"]
+        if role == "primary":
+            sql = ("SELECT application_name, state, sync_state, "
+                   "write_lag, flush_lag, replay_lag "
+                   "FROM pg_stat_replication;")
+            rc, out, err = _psql_oneshot(bin_dir, host, port, user, "postgres",
+                                         sql, return_output=True)
+            if rc == 0:
+                print("Role: primary")
+                print("pg_stat_replication (app|state|sync|write_lag|flush_lag|replay_lag):")
+                if not out:
+                    print("  (no connected standbys)")
+                else:
+                    for line in out.splitlines():
+                        print("  "+line)
+        else:
+            print("Role: standby (replicating from '"
+                  +(globals().get("pgs_replicate_from","?"))+"')")
+            rc, out, err = _psql_oneshot(bin_dir, host, port, user, "postgres",
+                                         "SELECT pg_is_in_recovery();",
+                                         return_output=True)
+            if rc == 0:
+                print("pg_is_in_recovery: "+out)
+            sql = ("SELECT status, sender_host, sender_port, slot_name, "
+                   "latest_end_lsn FROM pg_stat_wal_receiver;")
+            rc, out, err = _psql_oneshot(bin_dir, host, port, user, "postgres",
+                                         sql, return_output=True)
+            if rc == 0:
+                print("pg_stat_wal_receiver (status|sender_host|sender_port|slot|latest_end_lsn):")
+                if not out:
+                    print("  (no walreceiver — standby not streaming)")
+                else:
+                    for line in out.splitlines():
+                        print("  "+line)
+    return 0
+
+
+def exec_promote():
+    """Promote a standby sandbox to a standalone primary.
+
+    Runs `pg_ctl promote` and waits up to ~30s for the instance to leave
+    recovery (`pg_is_in_recovery() = false`). Updates the env file to clear
+    standby-only metadata so subsequent commands treat it as a primary."""
+    check_compulsory_global_vars(["pgs_sandbox_dir"])
+    try:
+        os.chdir(globals()["pgs_sandbox_dir"])
+    except FileNotFoundError:
+        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+
+    read_env()
+    check_compulsory_global_vars(["pgs_bin", "pgs_datadir", "pgs_host", "pgs_port", "pgs_user"])
+
+    role = globals().get("pgs_role", "primary") or "primary"
+    if role != "standby":
+        pgserr.print_error_and_exit(pgserr.ERR_NOT_A_STANDBY,
+            pgserr.ERR_NOT_A_STANDBY_MESSAGE)
+
+    pgctl_bin_path = get_binary_path("pg_ctl", globals()["pgs_bin"])
+    promote_cmd = [pgctl_bin_path, "promote", "-D", globals()["pgs_datadir"]]
+    pgserr.print_debug("promote command: ", promote_cmd)
+    promote_result = run(promote_cmd, stdout=PIPE, stderr=PIPE, universal_newlines=True)
+    if promote_result.returncode != 0:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+            "pg_ctl promote failed: "+(promote_result.stderr or "").strip())
+
+    # Wait up to ~30s for recovery to end.
+    deadline = time.time()+30
+    in_recovery = "t"
+    while time.time() < deadline:
+        rc, out, err = _psql_oneshot(globals()["pgs_bin"], globals()["pgs_host"],
+                                     globals()["pgs_port"], globals()["pgs_user"],
+                                     "postgres",
+                                     "SELECT pg_is_in_recovery();",
+                                     return_output=True)
+        if rc == 0:
+            in_recovery = (out or "").strip().lower()
+            if in_recovery in ("f", "false"):
+                break
+        time.sleep(0.5)
+
+    if in_recovery in ("f", "false"):
+        print("Promotion completed; pg_is_in_recovery() = false.")
     else:
-        print(status_result.stdout)
-        return 0
+        print("Promotion issued, but the instance is still in recovery after 30s. "
+              "Check the server log: "+globals()["pgs_log"])
+
+    # Update env to reflect the new role.
+    globals()["pgs_role"] = "primary"
+    globals()["pgs_replicate_from"] = ""
+    globals()["pgs_slot_name"] = ""
+    write_env(PGS_ENV_FILE)
+    print("Sandbox '"+globals()["pgs_sandbox_dir"]+"' env updated: role=primary.")
+    return 0
 
 
 def exec_stop():
@@ -866,7 +1719,7 @@ if __name__ == "__main__":
     pgs_command = args[1]
     pgserr.print_debug("Main command: ", pgs_command)
 
-    command_list = ['build','deploy','destroy','help', '--help', '-h', 'report', 'restart','run','setenv','start','status','stop','use']
+    command_list = ['build','cluster','deploy','destroy','help', '--help', '-h', 'promote', 'report', 'restart','run','setenv','start','status','stop','use']
 
     if pgs_command not in command_list:
         pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND, pgserr.ERR_INCORRECT_COMMAND_MESSAGE)
@@ -875,6 +1728,17 @@ if __name__ == "__main__":
     set_defaults()
     # before we parse the command-line options, we will read the environment file, if any
     read_env()
+
+    # 'cluster' has its own subcommand (deploy|status|destroy) right after the
+    # main command. Python's getopt stops processing options on the first
+    # non-option arg, so we lift the cluster subcommand out of sys.argv up
+    # front; otherwise '-s', '-b', ... after 'cluster deploy' would be left
+    # unparsed.
+    cluster_subcommand = None
+    if pgs_command == "cluster":
+        if len(sys.argv) >= 3 and not sys.argv[2].startswith("-"):
+            cluster_subcommand = sys.argv.pop(2)
+
     # parse command-line options (this overrides whatever was read from the env file)
     # we are left with positional arguments, in case the command was "run"
     positional_args = parse_opts()
@@ -912,12 +1776,18 @@ if __name__ == "__main__":
         pgserr.print_debug("Executing build")
         version = positional_args[0]
         exec_build(version)
+    elif pgs_command == "cluster":
+        pgserr.print_debug("Executing cluster")
+        exec_cluster(cluster_subcommand)
     elif pgs_command == "deploy":
         pgserr.print_debug("Executing deploy")
         exec_deploy()
     elif pgs_command == "destroy":
         pgserr.print_debug("Executing destroy")
         exec_destroy()
+    elif pgs_command == "promote":
+        pgserr.print_debug("Executing promote")
+        exec_promote()
     elif pgs_command == "report":
         pgserr.print_debug("Executing report")
         exec_report(positional_args, pg_gather_out_absolute_path)
