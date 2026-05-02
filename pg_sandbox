@@ -2018,7 +2018,10 @@ def exec_use(argv):
 
     psql_result = run(psql_command, universal_newlines=True)
     pgserr.print_debug("psql command return code: ", psql_result.returncode)
-    # No need to check errors here, errors will be printed through stderr.
+    # Errors are surfaced by psql itself on stderr; we just propagate its
+    # return code so the caller (e.g. shell scripts wrapping pg_sandbox use)
+    # can react to non-zero results.
+    return psql_result.returncode
 
 
 if __name__ == "__main__":
