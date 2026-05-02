@@ -4,6 +4,7 @@ import sys
 import getopt
 import os
 import json
+import shlex
 import stat
 import shutil
 import urllib.request
@@ -35,6 +36,10 @@ def set_defaults():
     globals()["pgs_user"] = "postgres"
     globals()["pgs_help"] = 0
     globals()["pgs_force"] = 0
+    # build command options (off by default to preserve previous behavior)
+    globals()["pgs_with_icu"] = 0
+    globals()["pgs_with_openssl"] = 0
+    globals()["pgs_configure_opts"] = ""
 
 
 def read_env():
@@ -158,7 +163,8 @@ def _validate_port(opt_name, arg):
 def parse_opts():
     try:
         short_opts = "b:d:D:fh:l:np:s:U:?"
-        long_opts = ["bin=","dbname=","datadir=","force","host=","log=","no-dsn","port=","sandbox-dir=","user=","help"]
+        long_opts = ["bin=","dbname=","datadir=","force","host=","log=","no-dsn","port=","sandbox-dir=","user=","help",
+                     "with-icu","with-openssl","configure-opts="]
 
         opts, args = getopt.getopt(sys.argv[2:], short_opts, long_opts)
 
@@ -190,6 +196,12 @@ def parse_opts():
             globals()["pgs_user"] = _validate_str(opt, arg)
         elif opt in ['-?','--help']:
             globals()["pgs_help"] = 1
+        elif opt == '--with-icu':
+            globals()["pgs_with_icu"] = 1
+        elif opt == '--with-openssl':
+            globals()["pgs_with_openssl"] = 1
+        elif opt == '--configure-opts':
+            globals()["pgs_configure_opts"] = _validate_str(opt, arg)
 
     return args
 
@@ -267,21 +279,34 @@ def exec_build(version):
     print("Running configure script.")
     try:
         configure_prefix = os.path.join(PGS_BIN_DIR,version)
-        # TODO: We are hardcoding --without-icu for now, but we should add a parameter to allow it
-        # TODO: add parameterized extra configs
 
-        # If the debug environment variable is set, include extra flags
-        if os.getenv("PGS_BUILD_DEBUG") == "1":
-            configure_command = ["./configure", "--prefix="+configure_prefix,"--without-icu","--enable-cassert","--enable-debug","CFLAGS=-ggdb -Og -g3 -fno-omit-frame-pointer"]
+        configure_command = ["./configure", "--prefix=" + configure_prefix]
+
+        # ICU is opt-in via --with-icu (preserves the historical default of
+        # --without-icu, which was hardcoded for portability across distros).
+        if globals().get("pgs_with_icu", 0) == 1:
+            configure_command.append("--with-icu")
         else:
-            #configure_command = ["./configure", "--prefix="+configure_prefix,"--without-icu"]
-            configure_command = [
-                "./configure",
-                "--prefix=" + configure_prefix,
-                "--without-icu"
-            ]
-            #    "--with-openssl"
-            #]
+            configure_command.append("--without-icu")
+
+        # OpenSSL is opt-in via --with-openssl. Most distros need libssl-dev
+        # (or equivalent) headers installed for this to succeed.
+        if globals().get("pgs_with_openssl", 0) == 1:
+            configure_command.append("--with-openssl")
+
+        # Generic pass-through for any extra ./configure flags, e.g.
+        # --configure-opts="--enable-tap-tests --with-llvm".
+        extra_opts = globals().get("pgs_configure_opts", "")
+        if extra_opts:
+            configure_command.extend(shlex.split(extra_opts))
+
+        # If the debug environment variable is set, include extra debug flags.
+        if os.getenv("PGS_BUILD_DEBUG") == "1":
+            configure_command.extend([
+                "--enable-cassert",
+                "--enable-debug",
+                "CFLAGS=-ggdb -Og -g3 -fno-omit-frame-pointer",
+            ])
 
         pgserr.print_debug("configure command: ",configure_command)
 
@@ -301,8 +326,12 @@ def exec_build(version):
     # 4- Compile postgres source
     print("Running make command.")
     try:
-        # TODO: remove -j8 so we can have it use all available cores
-        make_command = ["make", "-j8"]
+        # Use about half the available cores (rounded up, min 1) so we don't
+        # starve the rest of the system during long builds.
+        cpu_total = os.cpu_count() or 2
+        make_jobs = max(1, (cpu_total + 1) // 2)
+        pgserr.print_debug("make parallelism: -j", make_jobs)
+        make_command = ["make", "-j"+str(make_jobs)]
         make_result = run(make_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
         if make_result.returncode == 0:
             print(" make command successful.")
@@ -330,7 +359,7 @@ def exec_build(version):
         os.chdir("contrib")
         print("Running make command for contrib packages")
         try:
-            make_contrib_command = ["make", "-j8"]
+            make_contrib_command = ["make", "-j"+str(make_jobs)]
             make_contrib_result = run(make_contrib_command, stdout=PIPE, stderr=PIPE, universal_newlines=True)
             if make_contrib_result.returncode == 0:
                 print(" make contrib command successful.")
