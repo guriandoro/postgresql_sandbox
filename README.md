@@ -64,6 +64,43 @@ Other replication-related commands:
 
 The per-sandbox env file (`pg_sandbox.env`) gains optional fields when a sandbox participates in replication: `PGS_ROLE`, `PGS_REPLICATE_FROM`, `PGS_SLOT_NAME`, `PGS_REPL_USER`, `PGS_CLUSTER`. Plain primaries continue to be persisted with the original field set.
 
+# Logical replication
+
+`pg_sandbox` also supports logical replication: a fresh primary subscribes to a publication on another sandbox via `CREATE SUBSCRIPTION`. Unlike physical replication, subscribers are independent primaries (not `pg_basebackup` clones), DDL is not replicated, and a subscription is per-database.
+
+Three entry points cover the common cases:
+
+- Publish on an existing sandbox, then attach a subscriber sandbox:
+  ```
+  pg_sandbox deploy   -b /opt/postgresql/18.3 -s pg-18-pub
+  pg_sandbox publish  -s pg-18-pub --pub-name app_pub --all-tables
+
+  pg_sandbox deploy   -b /opt/postgresql/18.3 -s pg-18-sub \
+      --subscribe-to pg-18-pub --pub-name app_pub --copy-schema
+  ```
+  `--copy-schema` runs `pg_dump --schema-only | psql` from publisher to subscriber before `CREATE SUBSCRIPTION` (logical replication does NOT replicate DDL, so the subscriber needs matching tables before the initial copy can land).
+
+- Subscribe an already-deployed sandbox to a remote publication:
+  ```
+  pg_sandbox deploy    -b /opt/postgresql/18.3 -s pg-18-sub
+  pg_sandbox subscribe -s pg-18-sub --from pg-18-pub --pub-name app_pub --copy-schema
+  ```
+
+- One-shot logical cluster (1 publisher + N subscribers, defaults to `FOR ALL TABLES`):
+  ```
+  pg_sandbox cluster deploy -s lrep -b /opt/postgresql/18.3 -N 2 --logical --copy-schema
+  pg_sandbox cluster status -s lrep
+  pg_sandbox cluster destroy -s lrep -f
+  ```
+  This creates `<PGS_ROOT_DIR>/lrep/lrep_p` (publisher), `lrep_s1`, `lrep_s2` (subscribers), and a manifest with `mode: "logical"`, `publication`, `dbname`, `subscriptions`. `cluster destroy` best-effort drops each subscription on the subscriber and the publication on the publisher before tearing members down, so logical slots don't leak.
+
+Notes:
+
+- `--sync` (deploy/subscribe) and `--sync-count` (cluster) work in logical mode the same way they do in physical mode: subscriptions carry `application_name=<sub_name>` so they can match `synchronous_standby_names` on the publisher.
+- `pg_sandbox status -s NAME` prints `pg_publication`, `pg_subscription`, and `pg_stat_subscription` whenever they have rows, so the same command surfaces both physical and logical replication state.
+- `destroy` best-effort runs `DROP SUBSCRIPTION` against a subscriber sandbox (recorded via `PGS_SUBSCRIPTION_NAME`) before stopping it, mirroring how today's destroy best-effort drops physical slots.
+- New optional env keys persisted when a sandbox participates in logical replication: `PGS_SUBSCRIBE_FROM`, `PGS_SUBSCRIPTION_NAME`, `PGS_PUBLICATION_NAME`, `PGS_SUBSCRIPTION_DBNAME`, `PGS_PUBLICATIONS`.
+
 # Demo file with examples
 
 To read more on how to use the different functionality provided by pg_sandbox, you can check the [Demo](DEMO.md) file.
