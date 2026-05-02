@@ -632,9 +632,14 @@ def exec_report(argv, pg_gather_out_absolute_path):
     (res_code, res_out) = exec_run(["psql","-X","-f",gather_report_path], True)
 
     res_dir = os.path.dirname(pg_gather_out_absolute_path)
-    # TODO: To support doing many reports in batch and not overriding the files, we are prepending the pg_gather filename.
-    # TODO: Try it out and see if we should do anything better.
-    res_file_name = pg_gather_out+"_GatherReport.html"
+    # Derive the report filename from the input file's basename (without its
+    # extension) so batch runs over multiple out.txt files don't clobber each
+    # other and the resulting filename stays clean (e.g. 'out.txt' yields
+    # 'out.GatherReport.html', 'prod_2026.txt' yields 'prod_2026.GatherReport.html').
+    base_stem, _ = os.path.splitext(os.path.basename(pg_gather_out_absolute_path))
+    if not base_stem:
+        base_stem = "report"
+    res_file_name = base_stem + ".GatherReport.html"
     res_file = os.path.join(res_dir,res_file_name)
     pgserr.print_debug("resulting file path: "+res_file)
     with open(res_file, 'w') as f:
