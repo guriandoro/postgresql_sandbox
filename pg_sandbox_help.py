@@ -4,6 +4,7 @@ def print_general_help():
 
 Commands:
     build              compile PostgreSQL for the given major.minor version (as first argument after "build")
+    cleanup-install-versions  remove install tree(s) under PGS_BIN_DIR, or prune installs not referenced by any sandbox
     cluster            provision/inspect/destroy a primary + N standby (or subscriber) cluster ("cluster deploy|status|destroy")
     deploy             initialize the PostgreSQL instance, and start it (or attach as a standby with --replicate-from, or as a subscriber with --subscribe-to)
     destroy            stop the PostgreSQL instance, and delete all directories
@@ -94,6 +95,35 @@ Environment:
 
 Example:
     pg_sandbox build --with-openssl --configure-opts="--enable-tap-tests" 18.3
+""",
+
+    "cleanup-install-versions": """Usage:
+    pg_sandbox cleanup-install-versions [-f] [NAME ...]
+    pg_sandbox cleanup-install-versions [-f]
+
+Removes one or more PostgreSQL install directories from PGS_BIN_DIR
+(default /opt/postgresql/). Each NAME must be a single subdirectory
+name (not a path), for example '18.3' or '2026.05.05-84a231c'.
+
+Refuses to delete any directory whose real path matches PGS_BIN in a
+sandbox's pg_sandbox.env (including cluster members), or that is a
+prefix of a referenced install tree.
+
+With no NAME arguments, lists every install under PGS_BIN_DIR that looks
+like PostgreSQL (has bin/postgres or bin/pg_ctl) and is not referenced
+by any sandbox, then prompts once to delete them all (skipped if none).
+
+Options:
+    -f, --force        skip confirmation prompts (still refuses in-use installs)
+
+Environment:
+    PGS_BIN_DIR        install location root (default /opt/postgresql/)
+    PGS_ROOT_DIR       walked to discover which installs are referenced
+
+Examples:
+    pg_sandbox cleanup-install-versions 2026.05.05-84a231c
+    pg_sandbox cleanup-install-versions -f 18.2 18.1
+    pg_sandbox cleanup-install-versions
 """,
 
     "deploy": """Usage:

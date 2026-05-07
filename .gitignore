@@ -1,3 +1,13 @@
 # Python bytecode caches (regenerated on import; interpreter-version specific)
 __pycache__/
 *.pyc
+
+# Standalone binary produced by build/build_executable.sh (PyInstaller --onefile)
+bin/pg_sandbox
+
+# PyInstaller working directory and generated spec (under build/)
+build/pyinstaller-work/
+build/pg_sandbox.spec
+
+# Local venv created by build/build_executable.sh when PyInstaller is missing (PEP 668)
+build/.venv/

@@ -3,6 +3,29 @@ A simple-to-use PostgreSQL sandbox helper.
 
 Check `pg_sandbox --help` for detailed usage information and tips.
 
+# Standalone executable (macOS / Linux)
+
+You can bundle the Python CLI (`pg_sandbox`, `pg_sandbox_help.py`, `pg_sandbox_errors.py`) into a **single executable** with [PyInstaller](https://pyinstaller.org/). PostgreSQL itself is **not** included; installs under `PGS_BIN_DIR` (or `-b`) are unchanged.
+
+**Requirements**
+
+- Build machine runs **macOS** or **Linux** (`build/build_executable.sh` does not support Windows).
+- **Python 3** on `PATH` (`venv` module required for the automatic PyInstaller bootstrap below).
+- Run the build **on each OS** (and CPU architecture) you distribute for — the binary is platform-specific.
+
+**Steps**
+
+```bash
+chmod +x build/build_executable.sh    # once, if needed
+./build/build_executable.sh
+```
+
+If `python3` does not already have PyInstaller (common on **Homebrew Python** / **PEP 668** systems where global `pip install` is blocked), the script creates **`build/.venv`**, installs PyInstaller there, and uses it for the bundle. You can still install PyInstaller yourself (`python3 -m pip install pyinstaller` in a venv or with your distro’s packaging) and the script will use that instead.
+
+The output is **`bin/pg_sandbox`**. Use it like the script version, for example `bin/pg_sandbox --help`.
+
+Intermediate PyInstaller files stay under `build/` (`pyinstaller-work/`, optional `pg_sandbox.spec`, and `.venv/` when auto-created). Those paths are listed in `.gitignore`; the binary under `bin/pg_sandbox` is ignored so only `bin/.gitkeep` is tracked.
+
 # Environment Variables
 
 The following environment variables can be used to customize the behavior of pg_sandbox:
