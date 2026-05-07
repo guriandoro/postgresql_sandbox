@@ -6,7 +6,7 @@ __pycache__/
 *.pyc
 
 # Standalone binary produced by build/build_executable.sh (PyInstaller --onefile)
-bin/pg_sandbox
+bin/pg_sandbox*
 
 # PyInstaller working directory and generated spec (under build/)
 build/pyinstaller-work/
