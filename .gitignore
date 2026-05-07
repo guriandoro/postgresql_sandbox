@@ -1,3 +1,6 @@
+# Cursor, Claude Code, etc. — local IDE metadata (match .cursor and similar .c* dot paths)
+.c*
+
 # Python bytecode caches (regenerated on import; interpreter-version specific)
 __pycache__/
 *.pyc
