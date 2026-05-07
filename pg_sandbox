@@ -2280,6 +2280,173 @@ def _print_cluster_block(manifest, indent="  "):
         _print_sandbox_line(sb, indent)
 
 
+def _collect_referenced_install_prefixes():
+    """Return realpaths of PGS_BIN values from every pg_sandbox.env under
+    PGS_ROOT_DIR (recursive, including cluster member sandboxes)."""
+    referenced = set()
+    root = os.path.realpath(os.path.expanduser(PGS_ROOT_DIR))
+    if not os.path.isdir(root):
+        return referenced
+    for dirpath, dirnames, filenames in os.walk(root):
+        if PGS_ENV_FILE not in filenames:
+            continue
+        env_path = os.path.join(dirpath, PGS_ENV_FILE)
+        try:
+            with open(env_path) as f:
+                data = json.load(f)
+        except Exception:
+            continue
+        bin_dir = data.get("PGS_BIN", "")
+        if not bin_dir:
+            continue
+        try:
+            referenced.add(os.path.realpath(os.path.expanduser(bin_dir)))
+        except OSError:
+            continue
+    return referenced
+
+
+def _is_pg_install_prefix(path):
+    """Heuristic: directory contains bin/postgres or bin/pg_ctl."""
+    if not os.path.isdir(path):
+        return False
+    for name in ("postgres", "pg_ctl"):
+        cand = os.path.join(path, "bin", name)
+        if os.path.isfile(cand) or os.path.islink(cand):
+            return True
+    return False
+
+
+def _cleanup_install_name_ok(name):
+    if not name or name in (".", ".."):
+        return False
+    if os.sep in name or "/" in name:
+        return False
+    return True
+
+
+def _remove_install_tree(target_abs, label, referenced, *, confirm_each=True):
+    """Remove a single install tree under PGS_BIN_DIR. Returns 'ok', 'skipped',
+    'refused', or 'error'."""
+    if target_abs in referenced:
+        pgserr.print_error(
+            pgserr.ERR_INCORRECT_PARAMS,
+            "Refusing to remove '"+label+"' because it matches PGS_BIN in a "
+            "sandbox (see pg_sandbox.env).")
+        return "refused"
+    for ref in referenced:
+        if ref.startswith(target_abs + os.sep):
+            pgserr.print_error(
+                pgserr.ERR_INCORRECT_PARAMS,
+                "Refusing to remove '"+label+"' because a sandbox references an "
+                "install under it ("+ref+").")
+            return "refused"
+    if (not _is_pg_install_prefix(target_abs) and
+            globals().get("pgs_force", 0) != 1):
+        if not _prompt_yes_no(
+                "'"+label+"' does not look like a PostgreSQL install "
+                "(no bin/postgres). Remove anyway? [y/N]: "):
+            print("Skipped '"+label+"'.")
+            return "skipped"
+    if (confirm_each and globals().get("pgs_force", 0) != 1):
+        if not _prompt_yes_no("Remove install tree '"+target_abs+"'? [y/N]: "):
+            print("Skipped '"+label+"'.")
+            return "skipped"
+    try:
+        shutil.rmtree(target_abs)
+        print("Removed: "+target_abs)
+        return "ok"
+    except OSError as e:
+        pgserr.print_error(
+            pgserr.ERR_GENERIC_ERROR,
+            "Could not remove '"+target_abs+"': "+str(e))
+        return "error"
+
+
+def exec_cleanup_install_versions(positional_names):
+    """Remove PostgreSQL install directory(ies) under PGS_BIN_DIR, or prune
+    every unreferenced install when no names are passed.
+
+    Positional arguments are subdirectory names (e.g. '18.3' or
+    '2026.05.05-84a231c'), not full paths."""
+    bin_root = os.path.realpath(os.path.expanduser(PGS_BIN_DIR))
+    referenced = _collect_referenced_install_prefixes()
+
+    if not os.path.isdir(bin_root):
+        print("PGS_BIN_DIR is missing or not a directory: "+bin_root)
+        return 0
+
+    if positional_names:
+        exit_nonzero = False
+        for name in positional_names:
+            if not _cleanup_install_name_ok(name):
+                pgserr.print_error(
+                    pgserr.ERR_INCORRECT_PARAMS,
+                    "Invalid install name (single directory name only): "+repr(name))
+                exit_nonzero = True
+                continue
+            target_abs = os.path.realpath(os.path.join(bin_root, name))
+            try:
+                if os.path.commonpath([bin_root, target_abs]) != bin_root:
+                    raise ValueError
+            except ValueError:
+                pgserr.print_error(
+                    pgserr.ERR_INCORRECT_PARAMS,
+                    "Install name resolves outside PGS_BIN_DIR: "+repr(name))
+                exit_nonzero = True
+                continue
+            if not os.path.isdir(target_abs):
+                print("(not found, skipping: "+target_abs+")")
+                continue
+            confirm = not (globals().get("pgs_force", 0) == 1)
+            outcome = _remove_install_tree(
+                target_abs, name, referenced, confirm_each=confirm)
+            if outcome in ("refused", "error"):
+                exit_nonzero = True
+        return 1 if exit_nonzero else 0
+
+    # No names: every unreferenced tree that looks like PostgreSQL.
+    candidates = []
+    try:
+        for entry in os.scandir(bin_root):
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            rp = os.path.realpath(entry.path)
+            if rp in referenced:
+                continue
+            if not _is_pg_install_prefix(rp):
+                continue
+            candidates.append((entry.name, rp))
+    except OSError as e:
+        pgserr.print_error_and_exit(
+            pgserr.ERR_GENERIC_ERROR,
+            "Could not list '"+bin_root+"': "+str(e))
+
+    candidates.sort(key=lambda x: x[0])
+    if not candidates:
+        print("No unreferenced PostgreSQL installs found under "+bin_root+".")
+        return 0
+
+    print("Unreferenced PostgreSQL installs under "+bin_root+":")
+    for name, rp in candidates:
+        print("  "+name+"  ("+rp+")")
+
+    bulk_confirm = (globals().get("pgs_force", 0) == 1 or
+                    _prompt_yes_no(
+                        "Remove all "+str(len(candidates))
+                        +" install tree(s)? [y/N]: "))
+    if not bulk_confirm:
+        print("Aborted.")
+        return 0
+
+    exit_nonzero = False
+    for name, rp in candidates:
+        outcome = _remove_install_tree(rp, name, referenced, confirm_each=False)
+        if outcome in ("refused", "error"):
+            exit_nonzero = True
+    return 1 if exit_nonzero else 0
+
+
 def exec_global_status():
     """List every sandbox under PGS_ROOT_DIR with its running/stopped state.
 
@@ -2983,7 +3150,7 @@ if __name__ == "__main__":
     pgs_command = args[1]
     pgserr.print_debug("Main command: ", pgs_command)
 
-    command_list = ['build','cluster','deploy','destroy','global_status','help', '--help', '-h', 'promote', 'publish', 'report', 'restart','run','setenv','start','status','stop','subscribe','use']
+    command_list = ['build','cleanup-install-versions','cluster','deploy','destroy','global_status','help', '--help', '-h', 'promote', 'publish', 'report', 'restart','run','setenv','start','status','stop','subscribe','use']
 
     if pgs_command not in command_list:
         pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND, pgserr.ERR_INCORRECT_COMMAND_MESSAGE)
@@ -3017,6 +3184,12 @@ if __name__ == "__main__":
         else:
             pgshlp.print_help(pgs_command)
         sys.exit(0)
+
+    # Does not use the sandbox root working directory; safe even when
+    # PGS_ROOT_DIR is missing (referenced-install scan is then empty).
+    if pgs_command == "cleanup-install-versions":
+        pgserr.print_debug("Executing cleanup-install-versions")
+        sys.exit(exec_cleanup_install_versions(positional_args))
 
     # For simplicity, we enforce using ~/postgresql-sandboxes/ as directory for all sandboxes.
     # If needed, change the PGS_ROOT_DIR constant above.
