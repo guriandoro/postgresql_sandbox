@@ -725,6 +725,9 @@ def _deploy_primary():
     # explicitly choose a port, try the next 100 ports before giving up.
     globals()["pgs_port"] = _allocate_port(globals()["pgs_port"],
                                            globals().get("pgs_port_is_default", 1) == 1)
+    
+    # Trying get the binary path for initdb, If this fails, it will stop without creating the sandbox directory.
+    initdb_bin_path = get_binary_path("initdb", globals()["pgs_bin"])
 
     # 1- Create directory or error out if it exists
     if os.path.exists(globals()["pgs_sandbox_dir"]):
@@ -737,7 +740,6 @@ def _deploy_primary():
     write_env(PGS_ENV_FILE)
 
     # 3- init postgres
-    initdb_bin_path = get_binary_path("initdb", globals()["pgs_bin"])
     pgserr.print_debug("initdb bin path: ", initdb_bin_path)
 
     #${PG_SBOX_BIN}/initdb -D ${PG_SBOX_DATADIR} -U ${PG_SBOX_USER}
@@ -1390,7 +1392,7 @@ def _drop_publication_on_source(src_sandbox_dir, pub_name, dbname=None):
 
 def _default_sub_name_for(sandbox_dir):
     """Derive a default subscription name from a sandbox directory name."""
-    base = os.path.basename(sandbox_dir.rstrip("/")) or sandbox_dir
+    base = (os.path.basename(sandbox_dir.rstrip("/")) or sandbox_dir).replace("-", "_")
     return base+"_sub"
 
 
@@ -1424,12 +1426,14 @@ def _deploy_standby():
     if os.path.exists(new_sandbox_dir):
         pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_EXISTS, pgserr.ERR_SBOXDIR_EXISTS_MESSAGE)
 
+    # Trying get the binary path for pg_basebackup, If this fails, it will stop without creating the sandbox directory.
+    pg_basebackup_path = get_binary_path("pg_basebackup", globals()["pgs_bin"])
+
     os.makedirs(new_sandbox_dir)
     os.chdir(new_sandbox_dir)
 
     write_env(PGS_ENV_FILE)
 
-    pg_basebackup_path = get_binary_path("pg_basebackup", globals()["pgs_bin"])
     pgserr.print_debug("pg_basebackup bin path: ", pg_basebackup_path)
 
     app_name = os.path.basename(new_sandbox_dir.rstrip("/")) or new_sandbox_dir
@@ -1614,8 +1618,13 @@ def exec_cluster(subcommand):
     pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND,
         "Unknown cluster subcommand '"+subcommand+"'. Expected: deploy | status | destroy.")
 
+def _check_binary_path_exits():
+    get_binary_path("initdb", globals()["pgs_bin"])
+
+    return True
 
 def exec_cluster_deploy():
+    _check_binary_path_exits()
     check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir"])
     cluster_name = globals()["pgs_sandbox_dir"]
     n = globals().get("pgs_nodes", 0)
