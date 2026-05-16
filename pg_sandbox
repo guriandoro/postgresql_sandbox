@@ -2198,6 +2198,129 @@ def _read_sandbox_env_safe(sandbox_dir):
         return None
 
 
+def _find_binary_path_safe(bin_name, root_path):
+    """Non-fatal counterpart to get_binary_path."""
+    if not root_path or not os.path.isdir(root_path):
+        return None
+    try:
+        for root, dirs, files in os.walk(root_path):
+            if bin_name in files:
+                return os.path.join(root, bin_name)
+    except Exception:
+        return None
+    return None
+
+
+def _iter_sandbox_dirs_recursive(root_abs):
+    """Return sorted sandbox dir names (relative to PGS_ROOT_DIR) under root_abs.
+
+    A directory containing PGS_ENV_FILE is considered a sandbox leaf and is
+    not descended into further."""
+    root = os.path.expanduser(PGS_ROOT_DIR)
+    found = []
+    stack = [root_abs]
+    while stack:
+        current = stack.pop()
+        try:
+            entries = list(os.scandir(current))
+        except OSError:
+            continue
+        names = {e.name for e in entries}
+        if PGS_ENV_FILE in names:
+            found.append(os.path.relpath(current, root))
+            continue
+        for entry in entries:
+            try:
+                if entry.is_dir(follow_symlinks=False):
+                    stack.append(entry.path)
+            except OSError:
+                continue
+    found.sort()
+    return found
+
+
+def _resolve_stop_targets(sandbox_dir):
+    """Return (targets, error_message). Targets are sandbox dirs relative to root."""
+    root = os.path.expanduser(PGS_ROOT_DIR)
+    base_abs = os.path.join(root, sandbox_dir)
+    if not os.path.exists(base_abs):
+        return ([], pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+    if not os.path.isdir(base_abs):
+        return ([], "Path '"+sandbox_dir+"' is not a directory.")
+
+    # Backward-compatible single-sandbox path.
+    if os.path.isfile(os.path.join(base_abs, PGS_ENV_FILE)):
+        return ([sandbox_dir], "")
+
+    targets = _iter_sandbox_dirs_recursive(base_abs)
+    if not targets:
+        return ([], "No sandboxes found under '"+sandbox_dir+"'.")
+    return (targets, "")
+
+
+def _stop_single_sandbox(sandbox_dir):
+    """Stop one sandbox and return a structured non-fatal result dict."""
+    result = {"sandbox_dir": sandbox_dir, "status": "failed", "error": ""}
+    root = os.path.expanduser(PGS_ROOT_DIR)
+    sb_abs = os.path.join(root, sandbox_dir)
+
+    if not os.path.isdir(sb_abs):
+        result["error"] = pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE
+        return result
+
+    env_path = os.path.join(sb_abs, PGS_ENV_FILE)
+    if not os.path.isfile(env_path):
+        result["error"] = "Sandbox env file '"+env_path+"' not found."
+        return result
+
+    try:
+        with open(env_path) as f:
+            data = json.load(f)
+    except Exception as e:
+        result["error"] = "Could not read environment file '"+env_path+"': "+str(e)
+        return result
+
+    required = ["PGS_BIN", "PGS_DATADIR", "PGS_SANDBOX_DIR"]
+    for key in required:
+        if key not in data:
+            result["error"] = "Required key '"+key+"' missing from env file '"+env_path+"'."
+            return result
+
+    pgctl_bin_path = _find_binary_path_safe("pg_ctl", data["PGS_BIN"])
+    if not pgctl_bin_path:
+        result["error"] = ("pg_ctl binary not found under '"+str(data["PGS_BIN"])+"'. "
+                           +pgserr.ERR_BIN_NOT_FOUND_MESSAGE)
+        return result
+
+    datadir_abs = _sandbox_path(sandbox_dir, data["PGS_DATADIR"])
+
+    status_command = [pgctl_bin_path, "status", "-D", datadir_abs]
+    pgserr.print_debug("status command: ", status_command)
+    status_result = run(status_command, stdout=PIPE, stdin=PIPE, stderr=PIPE,
+                        universal_newlines=True)
+    pgserr.print_debug("status command return code: ", status_result.returncode)
+    if status_result.returncode == 3:
+        result["status"] = "already_stopped"
+        return result
+    if status_result.returncode != 0:
+        result["error"] = (status_result.stderr or "").strip() or (
+            "pg_ctl status failed with code "+str(status_result.returncode)+".")
+        return result
+
+    stop_command = [pgctl_bin_path, "stop", "-D", datadir_abs, "-mf"]
+    pgserr.print_debug("stop command: ", stop_command)
+    stop_result = run(stop_command, stdout=PIPE, stdin=PIPE, stderr=PIPE,
+                      universal_newlines=True)
+    pgserr.print_debug("stop command return code: ", stop_result.returncode)
+    if stop_result.returncode != 0:
+        result["error"] = (stop_result.stderr or "").strip() or (
+            "pg_ctl stop failed with code "+str(stop_result.returncode)+".")
+        return result
+
+    result["status"] = "stopped"
+    return result
+
+
 def _format_sandbox_line(sandbox_dir, indent="  "):
     """Build one compact line describing sandbox_dir for global_status."""
     state_w = 9
@@ -2654,7 +2777,11 @@ def exec_destroy():
             _drop_subscription_on_target(sb_name, sub_name, dbname=sub_dbname)
 
     # 0b- stop the sandbox
-    if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
+    stop_rc = exec_stop()
+    if stop_rc == pgserr.ERR_GENERIC_ERROR:
+        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+                                    "Failed to stop sandbox before destroy.")
+    if stop_rc != pgserr.ERR_SBOX_ALREADY_STOPPED:
         print("Database stopped.")
     os.chdir(os.path.expanduser(PGS_ROOT_DIR))
 
@@ -3068,48 +3195,47 @@ def exec_promote():
 
 
 def exec_stop():
-    # 0- change to sandbox directory
     check_compulsory_global_vars(["pgs_sandbox_dir"])
-    try:
-        os.chdir(globals()["pgs_sandbox_dir"])
-    except FileNotFoundError:
-        pgserr.print_error_and_exit(pgserr.ERR_SBOXDIR_NOT_EXISTS, pgserr.ERR_SBOXDIR_NOT_EXISTS_MESSAGE)
+    sandbox_dir = globals()["pgs_sandbox_dir"]
+    targets, resolve_error = _resolve_stop_targets(sandbox_dir)
+    if resolve_error:
+        print("ERROR: "+resolve_error)
+        return pgserr.ERR_GENERIC_ERROR
 
-    # 1- read env file, if any, and check for other compulsory variables defined
-    read_env()
-    check_compulsory_global_vars(["pgs_bin", "pgs_datadir"])
+    stopped = 0
+    already_stopped = 0
+    failed = 0
+    single_target = (len(targets) == 1 and targets[0] == sandbox_dir)
 
-    pgctl_bin_path = get_binary_path("pg_ctl", globals()["pgs_bin"])
-    pgserr.print_debug("pg_ctl bin path: ",pgctl_bin_path)
+    if single_target:
+        stop_result = _stop_single_sandbox(sandbox_dir)
+        if stop_result["status"] == "stopped":
+            return 0
+        if stop_result["status"] == "already_stopped":
+            print("The database is already stopped.")
+            return pgserr.ERR_SBOX_ALREADY_STOPPED
+        print("ERROR: "+stop_result["error"])
+        return pgserr.ERR_GENERIC_ERROR
 
-    # 2- check if postgres is running
-    status_command = [pgctl_bin_path,
-                      "status",
-                      "-D", globals()["pgs_datadir"]]
-    pgserr.print_debug("status command: ", status_command)
+    for target in targets:
+        stop_result = _stop_single_sandbox(target)
+        label = stop_result["sandbox_dir"]
+        status = stop_result["status"]
+        if status == "stopped":
+            stopped += 1
+            print("["+label+"] stopped.")
+        elif status == "already_stopped":
+            already_stopped += 1
+            print("["+label+"] already stopped.")
+        else:
+            failed += 1
+            print("["+label+"] failed: "+stop_result["error"])
 
-    status_result = run(status_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
-    pgserr.print_debug("status command return code: ", status_result.returncode)
-    if status_result.returncode == 3:
-        print("The database is already stopped.")
-        return(pgserr.ERR_SBOX_ALREADY_STOPPED)
-    elif status_result.returncode != 0:
-        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, status_result.stderr)
-
-    # 3- stop postgres
-    #${PG_SBOX_BIN}/pg_ctl stop -D ${PG_SBOX_DATADIR} -mf
-    stop_command = [pgctl_bin_path,
-                    "stop",
-                    "-D", globals()["pgs_datadir"],
-                    "-mf"]
-    pgserr.print_debug("stop command: ", stop_command)
-
-    stop_result = run(stop_command, stdout=PIPE, stdin=PIPE, stderr=PIPE, universal_newlines=True)
-    pgserr.print_debug("stop command return code: ", stop_result.returncode)
-    if stop_result.returncode != 0:
-        pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR, stop_result.stderr)
-    else:
-        return(0)
+    print("Stop summary: stopped="+str(stopped)+", already_stopped="
+          +str(already_stopped)+", failed="+str(failed))
+    if failed > 0:
+        return pgserr.ERR_GENERIC_ERROR
+    return 0
 
 
 def exec_use(argv):
@@ -3254,7 +3380,11 @@ if __name__ == "__main__":
         exec_report(positional_args, pg_gather_out_absolute_path)
     elif pgs_command == "restart":
         pgserr.print_debug("Executing restart")
-        if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
+        stop_rc = exec_stop()
+        if stop_rc == pgserr.ERR_GENERIC_ERROR:
+            pgserr.print_error_and_exit(pgserr.ERR_GENERIC_ERROR,
+                                        "Failed to stop sandbox before restart.")
+        if stop_rc != pgserr.ERR_SBOX_ALREADY_STOPPED:
             print("Database stopped.")
         os.chdir(os.path.expanduser(PGS_ROOT_DIR))
         exec_start()
@@ -3281,7 +3411,10 @@ if __name__ == "__main__":
         exec_global_status()
     elif pgs_command == "stop":
         pgserr.print_debug("Executing stop")
-        if exec_stop() != pgserr.ERR_SBOX_ALREADY_STOPPED:
+        stop_rc = exec_stop()
+        if stop_rc == pgserr.ERR_GENERIC_ERROR:
+            sys.exit(pgserr.ERR_GENERIC_ERROR)
+        if stop_rc != pgserr.ERR_SBOX_ALREADY_STOPPED:
             pgserr.print_and_exit("Database stopped.")
     elif pgs_command == "use":
         pgserr.print_debug("Executing use")
