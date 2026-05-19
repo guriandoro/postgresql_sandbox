@@ -10,6 +10,7 @@ import shutil
 import urllib.request
 import socket
 import time
+import ast
 
 import pg_sandbox_errors as pgserr
 import pg_sandbox_help as pgshlp
@@ -3262,13 +3263,7 @@ def exec_use(argv):
                     ]+argv
     pgserr.print_debug("psql command: ", psql_command)
 
-    # psql_result = run(psql_command, universal_newlines=True)
-    # pgserr.print_debug("psql command return code: ", psql_result.returncode)
-    # Errors are surfaced by psql itself on stderr; we just propagate its
-    # return code so the caller (e.g. shell scripts wrapping pg_sandbox use)
-    # can react to non-zero results.
-    [print(x) for x in ast.literal_eval(str(psql_command))]
-    # print(psql_command)
+    [print(x) for x in ast.literal_eval(str(psql_command))]    
 
 if __name__ == "__main__":
     args = sys.argv
