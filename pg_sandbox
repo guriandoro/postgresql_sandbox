@@ -426,7 +426,7 @@ def create_handy_scripts():
             file.writelines(["#!/bin/bash\n", sys.argv[0]+" stop\n"])
             os.chmod("stop",user_group_rwx)
         with open("use", "w") as file:
-            file.writelines(["#!/bin/bash\n", sys.argv[0]+" use \"$@\"\n"])
+            file.writelines(["#!/bin/bash\n", "mapfile -t PSQL_COMMAND < <("+sys.argv[0]+" use \"$@\")\n" + "${PSQL_COMMAND[@]}"])
             os.chmod("use",user_group_rwx)
     except Exception as e:
         pgserr.print_error(pgserr.ERR_GENERIC_ERROR, str(e))
@@ -3102,7 +3102,6 @@ def exec_stop():
     else:
         return(0)
 
-
 def exec_use(argv):
     # 0- change to sandbox directory
     check_compulsory_global_vars(["pgs_sandbox_dir"])
@@ -3128,13 +3127,13 @@ def exec_use(argv):
                     ]+argv
     pgserr.print_debug("psql command: ", psql_command)
 
-    psql_result = run(psql_command, universal_newlines=True)
-    pgserr.print_debug("psql command return code: ", psql_result.returncode)
+    # psql_result = run(psql_command, universal_newlines=True)
+    # pgserr.print_debug("psql command return code: ", psql_result.returncode)
     # Errors are surfaced by psql itself on stderr; we just propagate its
     # return code so the caller (e.g. shell scripts wrapping pg_sandbox use)
     # can react to non-zero results.
-    return psql_result.returncode
-
+    [print(x) for x in ast.literal_eval(str(psql_command))]
+    # print(psql_command)
 
 if __name__ == "__main__":
     args = sys.argv
