@@ -427,7 +427,14 @@ def create_handy_scripts():
             file.writelines(["#!/bin/bash\n", sys.argv[0]+" stop\n"])
             os.chmod("stop",user_group_rwx)
         with open("use", "w") as file:
-            file.writelines(["#!/bin/bash\n", "mapfile -t PSQL_COMMAND < <("+sys.argv[0]+" use \"$@\")\n" + "${PSQL_COMMAND[@]}"])
+            file.writelines(
+                ["#!/bin/bash\n", 
+                "PSQL_COMMAND=()\n", 
+                "while IFS= read -r line; do\n",  
+                '  PSQL_COMMAND+=("$line")\n', 
+                "done < <("+sys.argv[0]+" use \"$@\")\n", 
+                "${PSQL_COMMAND[@]}"]
+            )
             os.chmod("use",user_group_rwx)
     except Exception as e:
         pgserr.print_error(pgserr.ERR_GENERIC_ERROR, str(e))
