@@ -1505,10 +1505,10 @@ def _deploy_subscriber():
     pub_name = globals()["pgs_pub_name"]
     repl_user = globals().get("pgs_repl_user", "replicator") or "replicator"
     dbname = globals().get("pgs_dbname", "postgres") or "postgres"
-    sub_name = re.sub(r'[A-Z]|-', lambda m: m.group(0).lower() if m.group(0) != '-' else '_', 
-                (globals().get("pgs_sub_name", "") or 
+    sub_name = _resolver_name_from_slot(
+            (globals().get("pgs_sub_name", "") or 
                 _default_sub_name_for(globals()["pgs_sandbox_dir"]))
-            )
+    )
     copy_data = (globals().get("pgs_no_copy_data", 0) == 0)
 
     src_env = _read_sandbox_env(src_sandbox_dir)
@@ -1625,6 +1625,12 @@ def exec_cluster(subcommand):
     pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_COMMAND,
         "Unknown cluster subcommand '"+subcommand+"'. Expected: deploy | status | destroy.")
 
+def _resolver_name_from_slot(name):
+    return re.sub(
+        r'[A-Z]|-', 
+        lambda m: m.group(0).lower() if m.group(0) != '-' else '_', 
+        name
+    )
 
 def exec_cluster_deploy():
     check_compulsory_global_vars(["pgs_bin", "pgs_sandbox_dir"])
@@ -1639,11 +1645,7 @@ def exec_cluster_deploy():
             "--sync-count cannot exceed --nodes.")
 
     logical_mode = (globals().get("pgs_logical", 0) == 1)    
-    slot_prefix = re.sub(
-        r'[A-Z]|-', 
-        lambda m: m.group(0).lower() if m.group(0) != '-' else '_', 
-        (globals().get("pgs_slot_prefix", "") or cluster_name)
-    )
+    slot_prefix = _resolver_name_from_slot((globals().get("pgs_slot_prefix", "") or cluster_name))
     # Logical-mode-only options. We default the publication to "pgs_pub" so
     # the user only needs to pass --logical for the common case.
     logical_pub_name = (globals().get("pgs_logical_pub_name", "")
