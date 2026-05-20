@@ -11,6 +11,7 @@ import urllib.request
 import socket
 import time
 import ast
+import re
 
 import pg_sandbox_errors as pgserr
 import pg_sandbox_help as pgshlp
@@ -1504,8 +1505,10 @@ def _deploy_subscriber():
     pub_name = globals()["pgs_pub_name"]
     repl_user = globals().get("pgs_repl_user", "replicator") or "replicator"
     dbname = globals().get("pgs_dbname", "postgres") or "postgres"
-    sub_name = (globals().get("pgs_sub_name", "")
-                or _default_sub_name_for(globals()["pgs_sandbox_dir"]))
+    sub_name = re.sub(r'[A-Z]|-', lambda m: m.group(0).lower() if m.group(0) != '-' else '_', 
+                (globals().get("pgs_sub_name", "") or 
+                _default_sub_name_for(globals()["pgs_sandbox_dir"]))
+            )
     copy_data = (globals().get("pgs_no_copy_data", 0) == 0)
 
     src_env = _read_sandbox_env(src_sandbox_dir)
