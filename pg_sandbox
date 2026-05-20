@@ -1638,8 +1638,12 @@ def exec_cluster_deploy():
         pgserr.print_error_and_exit(pgserr.ERR_INCORRECT_PARAMS,
             "--sync-count cannot exceed --nodes.")
 
-    logical_mode = (globals().get("pgs_logical", 0) == 1)
-    slot_prefix = globals().get("pgs_slot_prefix", "") or cluster_name
+    logical_mode = (globals().get("pgs_logical", 0) == 1)    
+    slot_prefix = re.sub(
+        r'[A-Z]|-', 
+        lambda m: m.group(0).lower() if m.group(0) != '-' else '_', 
+        (globals().get("pgs_slot_prefix", "") or cluster_name)
+    )
     # Logical-mode-only options. We default the publication to "pgs_pub" so
     # the user only needs to pass --logical for the common case.
     logical_pub_name = (globals().get("pgs_logical_pub_name", "")
