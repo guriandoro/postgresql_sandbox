@@ -545,15 +545,23 @@ Example:
     "stop": """Usage:
     pg_sandbox stop -s SANDBOX_DIR
 
-Stops the PostgreSQL instance backing SANDBOX_DIR using fast shutdown
-mode (pg_ctl stop -mf). Reports cleanly if the instance is already
-stopped.
+Stops sandbox instances using fast shutdown mode (pg_ctl stop -mf).
+
+If SANDBOX_DIR contains pg_sandbox.env, stop targets that single
+sandbox (backward-compatible behavior).
+
+Otherwise SANDBOX_DIR is treated as a parent directory and pg_sandbox
+recursively scans child directories; every directory containing
+pg_sandbox.env is treated as a sandbox and stopped independently.
+Failures on one sandbox do not stop iteration; a non-zero exit is
+returned at the end if any sandbox failed.
 
 Options:
-    -s, --sandbox-dir   sandbox directory (required)
+    -s, --sandbox-dir   sandbox directory or parent directory (required)
 
 Example:
     pg_sandbox stop -s sbox_18
+    pg_sandbox stop -s rep
 """,
 
     "use": """Usage:
