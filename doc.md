@@ -221,15 +221,24 @@ pg_sandbox stop [OPTIONS]
 ```
 
 ## Description
-The `stop` command stops the PostgreSQL instance.
+The `stop` command stops PostgreSQL instances.
+
+If `-s` points to a sandbox directory (contains `pg_sandbox.env`), only that
+instance is stopped.
+
+If `-s` points to a parent directory, `pg_sandbox` recursively scans child
+directories and stops every sandbox found (directory containing
+`pg_sandbox.env`).
 
 ## Example
 ```
-pg_sandbox stop
+pg_sandbox stop -s sbox_18
+pg_sandbox stop -s rep
 ```
 
 ## Notes
-- If the server is already stopped, the command will display a message and exit
+- If an instance is already stopped, it is reported as such and treated as success
+- Parent-directory mode keeps iterating even if one sandbox fails; it exits non-zero at the end when any failure occurred
 - The command uses pg_ctl with "fast" shutdown mode
 
 # PostgreSQL Sandbox Use Command
