@@ -273,8 +273,14 @@ func TestRenderPlan_emitsScanRootHeader(t *testing.T) {
 	if !strings.Contains(out, "defaultBinDir") {
 		t.Errorf("RenderPlan output missing defaultBinDir global-config hint; got:\n%s", out)
 	}
-	if strings.Contains(out, "rebuild") {
-		t.Errorf("RenderPlan output should not mention 'rebuild'; got:\n%s", out)
+	// Anchor on the full deleted phrase rather than the bare substring
+	// "rebuild": f.binDir comes from t.TempDir(), and a custom TMPDIR
+	// containing "rebuild" (e.g. /tmp/rebuild-cache/...) would otherwise
+	// trip this guard spuriously. The original wording we want to
+	// stay-deleted was: "Set PGS_SANDBOX_ROOT or rebuild with a
+	// different root if you need a wider scan."
+	if strings.Contains(out, "rebuild with a different root") {
+		t.Errorf("RenderPlan output should not mention the pre-PR 'rebuild with a different root' phrase; got:\n%s", out)
 	}
 	// The header must precede the table, and the install-root line
 	// must come before the sandbox-root line.
