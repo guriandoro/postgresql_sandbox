@@ -227,6 +227,69 @@ func TestRunCleanupInstallVersions_relativeSandboxRootIsAbsoluted(t *testing.T) 
 	}
 }
 
+func TestRunCleanupInstallVersions_trailingSlashAbsoluteIsCleaned(t *testing.T) {
+	// Sibling to the relative-path test above: an already-absolute
+	// PGS_BIN_DIR / PGS_SANDBOX_ROOT with a trailing slash (e.g.
+	// /tmp/foo/) must be Cleaned before it reaches RenderPlan, so the
+	// banner shows the canonical de-trailed form. Otherwise the banner
+	// prints "/tmp/foo/" while cleanup.Plan internally scans "/tmp/foo"
+	// (its filepath.Clean call), and a user copy-pasting the banner
+	// path into ls/find sees a visual mismatch — exactly the triage
+	// hazard called out in the 2026-06-04 review.
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "sandboxes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// Resolve symlinks for the same reason the sibling test does:
+	// macOS /var → /private/var. We need the post-EvalSymlinks form
+	// to compare against what filepath.Abs ultimately yields when the
+	// input itself is already absolute (Abs doesn't EvalSymlinks, but
+	// our env values point inside t.TempDir which already returns the
+	// /private form on macOS — defensive realpath here costs nothing).
+	realTmp, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// HOME isolation + XDG isolation, same as the sibling test.
+	t.Setenv("HOME", realTmp)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(realTmp, "xdg"))
+	// Trailing-slash absolute inputs — the exact failure shape from
+	// the review.
+	t.Setenv("PGS_BIN_DIR", filepath.Join(realTmp, "bin")+"/")
+	t.Setenv("PGS_SANDBOX_ROOT", filepath.Join(realTmp, "sandboxes")+"/")
+
+	wantBin := filepath.Join(realTmp, "bin")
+	wantSandbox := filepath.Join(realTmp, "sandboxes")
+
+	var stdout, stderr bytes.Buffer
+	rc := runCleanupInstallVersions([]string{"--force"}, &stdout, &stderr)
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0; stderr=%q stdout=%q", rc, stderr.String(), stdout.String())
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Install root:          "+wantBin) {
+		t.Errorf("banner missing cleaned install root %q; got:\n%s", wantBin, out)
+	}
+	if !strings.Contains(out, "Scanning sandbox root: "+wantSandbox) {
+		t.Errorf("banner missing cleaned sandbox root %q; got:\n%s", wantSandbox, out)
+	}
+	// The trailing-slash forms must NOT survive into the banner lines.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Install root:") || strings.HasPrefix(line, "Scanning sandbox root:") {
+			if strings.Contains(line, "bin/ ") || strings.HasSuffix(line, "bin/") ||
+				strings.Contains(line, "sandboxes/ ") || strings.HasSuffix(line, "sandboxes/") {
+				t.Errorf("banner line still contains trailing slash: %q", line)
+			}
+		}
+	}
+}
+
 func TestReorderBoolFlags_buildSubcommandFlagSet(t *testing.T) {
 	// Pins the build subcommand's reorder contract. runBuild's own
 	// Build() side effects (download, extract, configure, make) make

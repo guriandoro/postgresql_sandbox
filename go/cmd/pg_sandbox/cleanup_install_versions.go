@@ -74,10 +74,17 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 		// Same default as build's bin-dir resolution.
 		binDir = "/opt/postgresql"
 	}
-	if !filepath.IsAbs(binDir) {
-		if abs, err := filepath.Abs(binDir); err == nil {
-			binDir = abs
-		}
+	// Normalize binDir unconditionally. filepath.Abs Cleans internally,
+	// so it strips trailing slashes and redundant separators even when
+	// the input is already absolute (e.g. `--bin-dir /opt/postgresql/`).
+	// Without this, the banner and "nothing found under …" message
+	// would textually disagree with the de-trailed path that
+	// cleanup.Plan actually scans (it calls filepath.Clean) — a
+	// triage hazard for users copy-pasting the banner path into
+	// ls/find. The err branch (Getwd failure) keeps the existing
+	// "swallow + leave as-is" precedent from the sandboxRoot block.
+	if abs, err := filepath.Abs(binDir); err == nil {
+		binDir = abs
 	}
 
 	if sandboxRoot == "" {
@@ -94,19 +101,17 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 		}
 		sandboxRoot = filepath.Join(home, "postgresql-sandboxes")
 	}
-	// Normalize relative sandboxRoot (env / global config values) the
-	// same way we do for binDir above. The default home-joined path is
-	// already absolute, but a user with PGS_SANDBOX_ROOT=./sandboxes in
-	// their shell rc would otherwise get a banner that prints the
-	// relative string and a collectSandboxBinDirs walk against whatever
-	// CWD pg_sandbox happened to be invoked from — defeating the
-	// 2026-06-04 defense-in-depth banner (see RenderPlan's doc and
-	// cleanup-install-versions-pitfall.md). Abs'ing here keeps the
-	// banner honest and the cross-reference correct.
-	if !filepath.IsAbs(sandboxRoot) {
-		if abs, err := filepath.Abs(sandboxRoot); err == nil {
-			sandboxRoot = abs
-		}
+	// Normalize sandboxRoot the same way we do for binDir above.
+	// filepath.Abs handles both the relative case (PGS_SANDBOX_ROOT=
+	// ./sandboxes) and the trailing-slash absolute case (./root /tmp/sb/)
+	// in one shot — it Cleans internally, so an already-absolute path
+	// with a trailing slash gets de-trailed to match what cleanup.Plan
+	// scans. Without this the banner would print a path textually
+	// different from the one actually walked — defeating the 2026-06-04
+	// defense-in-depth banner (see RenderPlan's doc and
+	// cleanup-install-versions-pitfall.md).
+	if abs, err := filepath.Abs(sandboxRoot); err == nil {
+		sandboxRoot = abs
 	}
 
 	plan, err := cleanup.Plan(cleanup.Options{
