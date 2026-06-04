@@ -64,20 +64,44 @@ type Candidate struct {
 // IsUnused is a convenience predicate used by Plan callers / tests.
 func (c Candidate) IsUnused() bool { return len(c.UsedBy) == 0 }
 
+// PlanResult is the structured return of Plan. It distinguishes a
+// genuinely empty install root ("scan happened, found nothing") from
+// a missing install root ("nothing was scanned") so RenderPlan can
+// emit different copy for each case. Pre-2026-06-04 the two collapsed
+// to the same "no install versions found under %s" line, which on a
+// typo'd or never-created --bin-dir read as "I scanned it, nothing to
+// clean" — masking a misconfiguration.
+type PlanResult struct {
+	// Candidates is one entry per version directory found under
+	// BinDir (or the filtered subset when OnlyVersions is set).
+	// Sorted by Version (lexicographic) for stable output.
+	Candidates []Candidate
+
+	// BinDirMissing is true when the resolved BinDir does not exist
+	// on disk. Candidates will be empty in that case. Set so callers
+	// can distinguish "scanned and found nothing" from "no scan
+	// happened because the directory isn't there".
+	BinDirMissing bool
+}
+
 // Plan inventories BinDir, walks SandboxRoot, and returns one
 // Candidate per version directory under BinDir. The result is sorted
 // by Version (lexicographic) for stable output.
+//
+// A missing BinDir is NOT an error — Plan returns an empty result
+// with BinDirMissing=true so the CLI can render a distinct message
+// (see PlanResult).
 //
 // stderrW is used for warn-level diagnostics during the walk (e.g.
 // a malformed sandbox config in some subdirectory). The walk
 // continues past those — we don't want one broken sandbox to prevent
 // the user from pruning unused versions.
-func Plan(opts Options, stderrW io.Writer) ([]Candidate, error) {
+func Plan(opts Options, stderrW io.Writer) (PlanResult, error) {
 	if opts.BinDir == "" {
-		return nil, fmt.Errorf("cleanup: BinDir is required")
+		return PlanResult{}, fmt.Errorf("cleanup: BinDir is required")
 	}
 	if opts.SandboxRoot == "" {
-		return nil, fmt.Errorf("cleanup: SandboxRoot is required")
+		return PlanResult{}, fmt.Errorf("cleanup: SandboxRoot is required")
 	}
 	binDir := filepath.Clean(opts.BinDir)
 	root := filepath.Clean(opts.SandboxRoot)
@@ -88,10 +112,12 @@ func Plan(opts Options, stderrW io.Writer) ([]Candidate, error) {
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No bin dir at all → no candidates. Surface as empty
-			// (not an error) so first-run UX is gentle.
-			return candidates, nil
+			// (not an error) so first-run UX is gentle, but mark
+			// BinDirMissing so RenderPlan can say "does not exist"
+			// rather than "scanned, found nothing".
+			return PlanResult{Candidates: candidates, BinDirMissing: true}, nil
 		}
-		return nil, fmt.Errorf("cleanup: read %s: %w", binDir, err)
+		return PlanResult{}, fmt.Errorf("cleanup: read %s: %w", binDir, err)
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -153,13 +179,13 @@ func Plan(opts Options, stderrW io.Writer) ([]Candidate, error) {
 			}
 		}
 		if len(missing) > 0 {
-			return nil, fmt.Errorf("cleanup: version(s) not found under %s: %s",
+			return PlanResult{}, fmt.Errorf("cleanup: version(s) not found under %s: %s",
 				binDir, strings.Join(missing, ", "))
 		}
 		candidates = filtered
 	}
 
-	return candidates, nil
+	return PlanResult{Candidates: candidates}, nil
 }
 
 // collectSandboxBinDirs walks root depth-bounded and returns a
@@ -234,18 +260,28 @@ func collectSandboxBinDirs(root string, stderrW io.Writer) map[string]string {
 // while the default sandbox root was scanned — the cross-reference
 // missed it and an in-use install was pruned. See the project memory
 // `cleanup-install-versions-pitfall.md`.
-func RenderPlan(w io.Writer, binDir, sandboxRoot string, plan []Candidate) {
+func RenderPlan(w io.Writer, binDir, sandboxRoot string, plan PlanResult) {
 	// Always emit the scan-root banner first, regardless of whether
 	// the plan has any candidates. The point is to make the scope
 	// visible even on the "no unused install versions" path.
 	renderScanRootHeader(w, binDir, sandboxRoot)
 
-	if len(plan) == 0 {
+	// Distinguish "directory absent" from "directory present but
+	// empty". Both leave Candidates empty, but conflating them was a
+	// real UX trap: a typo'd --bin-dir would print "no install
+	// versions found under <typo>" and read as a successful no-op
+	// scan, never tipping the user off that they pointed at a
+	// non-existent path.
+	if plan.BinDirMissing {
+		fmt.Fprintf(w, "install root %s does not exist (nothing scanned)\n", binDir)
+		return
+	}
+	if len(plan.Candidates) == 0 {
 		fmt.Fprintf(w, "no install versions found under %s\n", binDir)
 		return
 	}
 	colVer, colState := 7, 6
-	for _, c := range plan {
+	for _, c := range plan.Candidates {
 		if n := len(c.Version); n > colVer {
 			colVer = n
 		}
@@ -258,7 +294,7 @@ func RenderPlan(w io.Writer, binDir, sandboxRoot string, plan []Candidate) {
 		}
 	}
 	fmt.Fprintf(w, "%-*s  %-*s  %s\n", colVer, "VERSION", colState, "STATE", "PATH")
-	for _, c := range plan {
+	for _, c := range plan.Candidates {
 		state := "unused"
 		if !c.IsUnused() {
 			state = fmt.Sprintf("in use by %d", len(c.UsedBy))

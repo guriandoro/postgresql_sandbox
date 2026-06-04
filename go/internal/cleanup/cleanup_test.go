@@ -76,8 +76,11 @@ func TestPlan_emptyBinDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(plan) != 0 {
-		t.Errorf("len(plan) = %d, want 0", len(plan))
+	if len(plan.Candidates) != 0 {
+		t.Errorf("len(plan.Candidates) = %d, want 0", len(plan.Candidates))
+	}
+	if plan.BinDirMissing {
+		t.Errorf("BinDirMissing = true for an existing-but-empty bin dir; should be false")
 	}
 }
 
@@ -91,8 +94,11 @@ func TestPlan_missingBinDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("missing bindir should not error, got: %v", err)
 	}
-	if len(plan) != 0 {
-		t.Errorf("len(plan) = %d, want 0", len(plan))
+	if len(plan.Candidates) != 0 {
+		t.Errorf("len(plan.Candidates) = %d, want 0", len(plan.Candidates))
+	}
+	if !plan.BinDirMissing {
+		t.Errorf("BinDirMissing = false for a missing bin dir; should be true")
 	}
 }
 
@@ -111,12 +117,12 @@ func TestPlan_classifiesUsedVsUnused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(plan) != 3 {
-		t.Fatalf("len(plan) = %d, want 3", len(plan))
+	if len(plan.Candidates) != 3 {
+		t.Fatalf("len(plan.Candidates) = %d, want 3", len(plan.Candidates))
 	}
 
 	byVer := map[string]Candidate{}
-	for _, c := range plan {
+	for _, c := range plan.Candidates {
 		byVer[c.Version] = c
 	}
 
@@ -144,7 +150,7 @@ func TestPlan_noFalsePositiveOnSubstringPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	for _, c := range plan {
+	for _, c := range plan.Candidates {
 		if c.Version == "16" && !c.IsUnused() {
 			t.Errorf("16 incorrectly marked as in-use: %v", c.UsedBy)
 		}
@@ -169,7 +175,7 @@ func TestPlan_OnlyVersions_filters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	if len(plan) != 1 || plan[0].Version != "17.3" {
+	if len(plan.Candidates) != 1 || plan.Candidates[0].Version != "17.3" {
 		t.Errorf("plan = %+v, want only 17.3", plan)
 	}
 }
@@ -206,7 +212,7 @@ func TestApply_removesOnlyUnused(t *testing.T) {
 		t.Fatalf("Plan: %v", err)
 	}
 
-	removed, err := Apply(plan, &buf)
+	removed, err := Apply(plan.Candidates, &buf)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -276,7 +282,7 @@ func TestRenderPlan_emitsHeaderOnEmptyPlan(t *testing.T) {
 	// first-run user with an empty PGS_BIN_DIR can see which knob to
 	// reach for) and the sandbox root.
 	var buf bytes.Buffer
-	RenderPlan(&buf, "/some/bin/dir", "/some/scan/root", nil)
+	RenderPlan(&buf, "/some/bin/dir", "/some/scan/root", PlanResult{})
 	out := buf.String()
 	if !strings.Contains(out, "Install root:          /some/bin/dir") {
 		t.Errorf("empty-plan output missing Install-root banner; got:\n%s", out)
@@ -289,6 +295,31 @@ func TestRenderPlan_emitsHeaderOnEmptyPlan(t *testing.T) {
 	}
 	if !strings.Contains(out, "no install versions found under /some/bin/dir") {
 		t.Errorf("empty-plan output missing 'no install versions found under <binDir>' line; got:\n%s", out)
+	}
+	if strings.Contains(out, "does not exist") {
+		t.Errorf("empty-but-existing bin dir should NOT say 'does not exist'; got:\n%s", out)
+	}
+}
+
+func TestRenderPlan_missingBinDirSaysSo(t *testing.T) {
+	// Regression: pre-fix, a missing --bin-dir collapsed to the
+	// same "no install versions found under <dir>" line as an
+	// existing-but-empty install root. That read like a successful
+	// no-op scan and masked a typo'd or never-created path. With
+	// PlanResult.BinDirMissing threaded through, RenderPlan must say
+	// the directory doesn't exist instead of claiming a scan
+	// happened.
+	var buf bytes.Buffer
+	RenderPlan(&buf, "/some/missing/dir", "/some/scan/root", PlanResult{BinDirMissing: true})
+	out := buf.String()
+	if !strings.Contains(out, "Install root:          /some/missing/dir") {
+		t.Errorf("missing-bin-dir output missing Install-root banner; got:\n%s", out)
+	}
+	if !strings.Contains(out, "install root /some/missing/dir does not exist") {
+		t.Errorf("missing-bin-dir output should say 'does not exist'; got:\n%s", out)
+	}
+	if strings.Contains(out, "no install versions found under") {
+		t.Errorf("missing-bin-dir output must NOT say 'no install versions found under ...' (that claims a scan happened); got:\n%s", out)
 	}
 }
 

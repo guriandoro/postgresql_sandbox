@@ -130,7 +130,7 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 
 	// Count unused candidates. Nothing to do → 0 exit, message.
 	unused := 0
-	for _, c := range plan {
+	for _, c := range plan.Candidates {
 		if c.IsUnused() {
 			unused++
 		}
@@ -151,7 +151,7 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	removed, err := cleanup.Apply(plan, stderr)
+	removed, err := cleanup.Apply(plan.Candidates, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox cleanup-install-versions: %v\n", err)
 		// We still report how many were removed for triage.
