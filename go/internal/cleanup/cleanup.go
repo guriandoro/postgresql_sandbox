@@ -323,10 +323,12 @@ func RenderPlan(w io.Writer, binDir, sandboxRoot string, plan PlanResult) {
 func renderScanRootHeader(w io.Writer, binDir, sandboxRoot string) {
 	fmt.Fprintf(w, "Install root:          %s\n", binDir)
 	fmt.Fprintf(w, "Scanning sandbox root: %s\n", sandboxRoot)
-	fmt.Fprintln(w, "NOTE: Only sandboxes under this root are considered. Sandboxes elsewhere")
-	fmt.Fprintln(w, "will NOT block removal. To widen the scan, pass --root <path> for a one-shot,")
-	fmt.Fprintln(w, "set PGS_SANDBOX_ROOT in the environment, or update the global config's")
-	fmt.Fprintln(w, "sandboxRoot.")
+	fmt.Fprintln(w, "NOTE: Only sandboxes under the sandbox root are considered. Sandboxes")
+	fmt.Fprintln(w, "elsewhere will NOT block removal. To change the install root, pass")
+	fmt.Fprintln(w, "--bin-dir <path> for a one-shot, set PGS_BIN_DIR in the environment, or")
+	fmt.Fprintln(w, "update the global config's defaultBinDir. To widen the sandbox-root scan,")
+	fmt.Fprintln(w, "pass --root <path> for a one-shot, set PGS_SANDBOX_ROOT in the")
+	fmt.Fprintln(w, "environment, or update the global config's sandboxRoot.")
 	fmt.Fprintln(w)
 }
 

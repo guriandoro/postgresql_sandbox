@@ -249,7 +249,7 @@ func TestRenderPlan_emitsScanRootHeader(t *testing.T) {
 	if !strings.Contains(out, "Scanning sandbox root: "+f.sandboxRoot) {
 		t.Errorf("RenderPlan output missing scan-root banner; got:\n%s", out)
 	}
-	if !strings.Contains(out, "Only sandboxes under this root are considered") {
+	if !strings.Contains(out, "Only sandboxes under the sandbox root are considered") {
 		t.Errorf("RenderPlan output missing NOTE block; got:\n%s", out)
 	}
 	if !strings.Contains(out, "PGS_SANDBOX_ROOT") {
@@ -258,8 +258,20 @@ func TestRenderPlan_emitsScanRootHeader(t *testing.T) {
 	if !strings.Contains(out, "--root <path>") {
 		t.Errorf("RenderPlan output missing --root <path> hint; got:\n%s", out)
 	}
-	if !strings.Contains(out, "global config's") {
-		t.Errorf("RenderPlan output missing global config hint; got:\n%s", out)
+	if !strings.Contains(out, "sandboxRoot") {
+		t.Errorf("RenderPlan output missing sandboxRoot global-config hint; got:\n%s", out)
+	}
+	// Install-root knobs must be named symmetrically with the
+	// sandbox-root knobs — a first-run user whose --bin-dir / PGS_BIN_DIR
+	// is empty needs to see which knob to reach for.
+	if !strings.Contains(out, "--bin-dir <path>") {
+		t.Errorf("RenderPlan output missing --bin-dir <path> hint; got:\n%s", out)
+	}
+	if !strings.Contains(out, "PGS_BIN_DIR") {
+		t.Errorf("RenderPlan output missing PGS_BIN_DIR hint; got:\n%s", out)
+	}
+	if !strings.Contains(out, "defaultBinDir") {
+		t.Errorf("RenderPlan output missing defaultBinDir global-config hint; got:\n%s", out)
 	}
 	if strings.Contains(out, "rebuild") {
 		t.Errorf("RenderPlan output should not mention 'rebuild'; got:\n%s", out)
@@ -290,7 +302,7 @@ func TestRenderPlan_emitsHeaderOnEmptyPlan(t *testing.T) {
 	if !strings.Contains(out, "Scanning sandbox root: /some/scan/root") {
 		t.Errorf("empty-plan output missing scan-root banner; got:\n%s", out)
 	}
-	if !strings.Contains(out, "Only sandboxes under this root are considered") {
+	if !strings.Contains(out, "Only sandboxes under the sandbox root are considered") {
 		t.Errorf("empty-plan output missing NOTE block; got:\n%s", out)
 	}
 	if !strings.Contains(out, "no install versions found under /some/bin/dir") {
