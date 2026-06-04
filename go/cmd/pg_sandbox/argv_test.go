@@ -415,6 +415,39 @@ func TestReorderBoolFlags_buildSubcommandFlagSet(t *testing.T) {
 	}
 }
 
+func TestParseSubcommandArgs_promotesTrailingBoolFlag(t *testing.T) {
+	// Pins the ordering invariant that parseSubcommandArgs exists to
+	// enforce: with a positional followed by a bool flag in argv, the
+	// parsed FlagSet must have the bool set to true and fs.Args() must
+	// return only the positional. Without the reorder-then-Parse
+	// folding, fs.Parse stops at "18.3" and force stays false.
+	//
+	// This is the test that catches a future contributor who tries to
+	// split the helper back into "reorderBoolFlags … then fs.Parse"
+	// with a new BoolVar inserted between the two: such a regression
+	// would leave force=false here.
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(&bytes.Buffer{})
+	var (
+		force  bool
+		root   string
+	)
+	fs.BoolVar(&force, "force", false, "")
+	fs.BoolVar(&force, "f", false, "")
+	fs.StringVar(&root, "root", "", "")
+
+	if err := parseSubcommandArgs(fs, []string{"18.3", "--force"}); err != nil {
+		t.Fatalf("parseSubcommandArgs failed: %v", err)
+	}
+	if !force {
+		t.Errorf("force = false, want true (parseSubcommandArgs didn't honor the trailing bool flag)")
+	}
+	rest := fs.Args()
+	if len(rest) != 1 || rest[0] != "18.3" {
+		t.Errorf("fs.Args() = %v, want [18.3]", rest)
+	}
+}
+
 func TestBoolFlagNames(t *testing.T) {
 	// boolFlagNames must return exactly the bare names of every
 	// BoolVar-registered flag on the FlagSet, and must skip flags

@@ -40,19 +40,11 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&sandboxRoot, "root", "", "Sandbox root to walk (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)")
 
-	// Pre-process argv so users can put the bool --force / -f flag
-	// AFTER positional version names. Go's stdlib `flag` stops at the
-	// first non-flag, so without this step `cleanup-install-versions
-	// 18.3 --force` treats `--force` as a positional version and the
-	// prompt fires (defeating the user's intent). Only bool flags are
-	// reordered; --bin-dir / --root take values and must stay
-	// adjacent to them. See argv.go for the full contract.
-	//
-	// Bool flag names are derived from the FlagSet so a new BoolVar
-	// above doesn't silently re-introduce the original UX bug.
-	args = reorderBoolFlags(args, boolFlagNames(fs))
-
-	if err := fs.Parse(args); err != nil {
+	// Reorder bool flags ahead of positionals so `cleanup-install-
+	// versions 18.3 --force` works. See parseSubcommandArgs in argv.go
+	// for the full rationale and the structural reason this is a
+	// single call rather than a two-step pattern.
+	if err := parseSubcommandArgs(fs, args); err != nil {
 		return ui.ExitUsage.Int()
 	}
 	onlyVersions := fs.Args()

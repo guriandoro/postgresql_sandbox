@@ -136,3 +136,27 @@ func boolFlagNames(fs *flag.FlagSet) []string {
 	})
 	return names
 }
+
+// parseSubcommandArgs is the canonical wrapper that reorders bool
+// flags in `args` to the front of the slice (so positionals before
+// bool flags don't make `flag.Parse` stop early) and then calls
+// fs.Parse. Subcommands that mix positional args with BoolVar flags
+// should call this instead of fs.Parse directly.
+//
+// Why a wrapper instead of "remember to call reorderBoolFlags then
+// fs.Parse"? The ordering is load-bearing: boolFlagNames must run
+// AFTER every BoolVar registration but BEFORE Parse. A future
+// contributor who inserts a new `fs.BoolVar(&x, "dry-run", …)`
+// between a manual reorder call and a manual Parse call would
+// silently regress the positional-before-bool UX for that flag —
+// boolFlagNames already ran, the frozen result misses "dry-run", and
+// `<cmd> 18.3 --dry-run` treats --dry-run as a positional again. By
+// folding the two steps into one call we make the mis-sequencing
+// structurally impossible: every BoolVar registered on `fs` before
+// this call is picked up automatically, there is no parallel
+// enumeration to keep in sync, and inserting a new BoolVar between
+// `fs.BoolVar(...)` lines and this call is the only supported shape.
+func parseSubcommandArgs(fs *flag.FlagSet, args []string) error {
+	args = reorderBoolFlags(args, boolFlagNames(fs))
+	return fs.Parse(args)
+}
