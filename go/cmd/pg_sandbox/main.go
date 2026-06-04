@@ -75,6 +75,10 @@ func init() {
 		"global_status": {summary: "List every sandbox on the host", run: runGlobalStatus},
 		"report":        {summary: "Generate a pg_gather HTML report", run: runReport},
 
+		// Phase 2: source compilation + install pruning.
+		"build":                    {summary: "Compile a PostgreSQL version from source", run: runBuild},
+		"cleanup-install-versions": {summary: "Prune unused PostgreSQL install dirs", run: runCleanupInstallVersions},
+
 		// Help is a real implementation even at this stage.
 		"help": {summary: "Show help for a command", run: runHelp},
 	}
@@ -193,6 +197,7 @@ func orderedCommandNames() []string {
 		"publish", "subscribe",
 		"cluster",
 		"global_status", "report",
+		"build", "cleanup-install-versions",
 		"help",
 	}
 }
