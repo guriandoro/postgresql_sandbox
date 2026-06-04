@@ -98,6 +98,21 @@ func TestDeployHappyPath(t *testing.T) {
 		if st.Mode()&0o111 == 0 {
 			t.Errorf("script %s not executable: mode=%v", name, st.Mode())
 		}
+		// Regression: scripts MUST point at a specific binary path,
+		// not bare `pg_sandbox` on PATH. On a developer machine with
+		// the legacy Python pg_sandbox installed, a PATH-resolved
+		// script would silently invoke the wrong tool.
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Errorf("read %s: %v", path, err)
+			continue
+		}
+		if strings.Contains(string(body), "exec pg_sandbox ") {
+			t.Errorf("script %s execs bare `pg_sandbox` (PATH lookup); body=%q", name, body)
+		}
+		if !strings.Contains(string(body), "PG_SANDBOX_BIN") {
+			t.Errorf("script %s missing PG_SANDBOX_BIN override; body=%q", name, body)
+		}
 	}
 
 	// Connection string should match expected shape.
@@ -307,6 +322,23 @@ func TestStartStopRestartHappyPath(t *testing.T) {
 	}
 	if len(f.Calls) != 1 || f.Calls[0].Args[0] != "start" {
 		t.Errorf("Start calls: %v", f.Calls)
+	}
+	// Regression: Start MUST re-pass `-o "-h <host> -p <port>"`.
+	// pg_ctl rewrites postmaster.opts on every start from the args
+	// we pass; without `-o`, postgres restarts on its compiled-in
+	// default port and the sandbox silently moves.
+	expectedOpts := "-h " + cfg.Host + " -p " + strconv.Itoa(cfg.Port)
+	args := f.Calls[0].Args
+	foundOpts := false
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == "-o" && args[i+1] == expectedOpts {
+			foundOpts = true
+			break
+		}
+	}
+	if !foundOpts {
+		t.Errorf("Start must pass -o %q (so pg_ctl rewrites postmaster.opts with the right port); got argv %v",
+			expectedOpts, args)
 	}
 
 	// --- Restart from stopped → only start (Stop is no-op) ---

@@ -47,15 +47,19 @@ func Start(ctx context.Context, runner pgexec.Runner, dir string, stderrW io.Wri
 		return nil
 	}
 
+	// We re-supply `-o "-h <host> -p <port>"` on EVERY start, not
+	// only on the initial deploy. Verified empirically: pg_ctl
+	// rewrites postmaster.opts on each `pg_ctl start` from whatever
+	// args YOU pass; if you pass no `-o`, the rewritten file lacks
+	// `-h`/`-p` and the next postgres falls back to its compiled-in
+	// defaults (port 5432, IPv6+IPv4 wildcard). Without this line,
+	// `restart` silently moves the sandbox onto the wrong port.
+	pgctlOpts := fmt.Sprintf("-h %s -p %d", cfg.Host, cfg.Port)
 	res := runner.Run(ctx, "pg_ctl",
 		"start",
 		"-D", cfg.DataDir,
 		"-l", cfg.LogFile,
-		// We DO NOT re-supply -o "-h ... -p ..." on start (only on
-		// the initial deploy). After deploy, postgres has the right
-		// command-line baked into its first start and reloads
-		// postgresql.conf on subsequent ones. (pg_ctl actually
-		// re-uses the original command line via postmaster.opts.)
+		"-o", pgctlOpts,
 		"-w",
 	)
 	if res.Err != nil || res.ExitCode != 0 {

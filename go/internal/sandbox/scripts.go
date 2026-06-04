@@ -24,15 +24,32 @@ import (
 	"path/filepath"
 )
 
-// scriptTemplate is the body of every convenience script. The `cd`
-// + `dirname $0` dance resolves the sandbox dir from the script's
-// own location, so the script keeps working if the sandbox dir is
-// moved (a common power-user workflow). %s is the subcommand name.
+// scriptTemplate is the body of every convenience script. Two
+// behaviors worth knowing:
 //
-// SPEC §4.5 mandates POSIX sh, not bash; we use only POSIX features
-// (`$(...)` is POSIX since 2001, `exec` is POSIX, `"$@"` is POSIX).
+//   - The binary path is BAKED IN from os.Executable() at deploy
+//     time (the %s before the subcommand). Relying on PATH would
+//     break catastrophically when a different `pg_sandbox` (e.g.
+//     the legacy Python tool) is also installed: that other tool
+//     would silently operate on this sandbox with different
+//     semantics. The first sentinel arg below catches the case
+//     where the user installs over the baked-in path.
+//
+//   - PG_SANDBOX_BIN env var, if set, takes priority over the baked-in
+//     path. Lets power users move the binary or test a dev build
+//     without redeploying their sandboxes.
+//
+//   - The `cd` + `dirname $0` dance resolves the sandbox dir from
+//     the script's own location, so the script keeps working if the
+//     sandbox dir is moved.
+//
+// SPEC §4.5 mandates POSIX sh; we use only POSIX features
+// (`$(...)`, `exec`, `${VAR:-default}`, `"$@"` are all POSIX).
+//
+// Format args: %[1]s = absolute path to the deploying binary,
+// %[2]s = subcommand name.
 const scriptTemplate = `#!/bin/sh
-exec pg_sandbox %s --sandbox-dir "$(cd "$(dirname "$0")" && pwd)" "$@"
+exec "${PG_SANDBOX_BIN:-%[1]s}" %[2]s --sandbox-dir "$(cd "$(dirname "$0")" && pwd)" "$@"
 `
 
 // convenienceScripts lists the subcommand names to render as scripts
@@ -44,10 +61,19 @@ var convenienceScripts = []string{"start", "stop", "restart", "status"}
 // into sandboxDir/<name> with mode 0755. Existing files are
 // overwritten — deploy is the only caller, and it has already
 // established that the sandbox dir was empty.
-func writeConvenienceScripts(sandboxDir string) error {
+//
+// binPath is the absolute path to the pg_sandbox binary that's
+// performing this deploy (typically os.Executable()). It's baked
+// into each script so the scripts always invoke THIS tool, not
+// whatever `pg_sandbox` happens to be on PATH (the legacy Python
+// tool is a real risk on machines mid-migration).
+func writeConvenienceScripts(sandboxDir, binPath string) error {
+	if binPath == "" {
+		return fmt.Errorf("sandbox: writeConvenienceScripts: empty binPath")
+	}
 	for _, name := range convenienceScripts {
 		path := filepath.Join(sandboxDir, name)
-		body := fmt.Sprintf(scriptTemplate, name)
+		body := fmt.Sprintf(scriptTemplate, binPath, name)
 		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 			return fmt.Errorf("sandbox: write %s: %w", path, err)
 		}

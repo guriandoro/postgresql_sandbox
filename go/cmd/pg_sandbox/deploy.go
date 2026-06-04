@@ -96,6 +96,14 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		return ui.ExitBadConfig.Int()
 	}
 
+	// SelfPath gets baked into the convenience scripts so they
+	// invoke the SAME binary that deployed the sandbox — not
+	// whatever `pg_sandbox` happens to be on PATH (the legacy
+	// Python tool is a common shadow). os.Executable is reliable
+	// on macOS / Linux; if it ever fails, Deploy errors before
+	// touching the filesystem.
+	selfPath, _ := os.Executable() // empty on rare failure → Deploy retries internally
+
 	opts := sandbox.DeployOptions{
 		SandboxDir:   sandboxDir,
 		BinDir:       firstNonEmpty(binDir, base.BinDir),
@@ -108,6 +116,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		LogName:      firstNonEmpty(logName, "server.log"),
 		PortBase:     portalloc.DefaultBasePort,
 		PortRange:    portalloc.DefaultRange,
+		SelfPath:     selfPath,
 	}
 
 	// SPEC §4.1: Ctrl-C must propagate to child processes. Cancel

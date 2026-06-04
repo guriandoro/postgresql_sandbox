@@ -93,6 +93,17 @@ type DeployOptions struct {
 	// portalloc.DefaultBasePort / DefaultRange.
 	PortBase  int
 	PortRange int
+
+	// SelfPath is the absolute path of the pg_sandbox binary that's
+	// performing this deploy. It gets baked into the convenience
+	// scripts so that `./start`/`./stop`/etc. inside the sandbox dir
+	// always invoke THIS binary, even when a different `pg_sandbox`
+	// (e.g., the legacy Python tool) shadows it on PATH.
+	//
+	// When empty, Deploy falls back to os.Executable() so callers
+	// (the CLI, tests) don't have to set it explicitly. Override
+	// at runtime via the PG_SANDBOX_BIN env var when needed.
+	SelfPath string
 }
 
 // DeployResult is what Deploy returns on success: the resolved
@@ -214,7 +225,19 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 	// so that "config file present" is a strict pre-condition for
 	// "scripts present", and users who see scripts can rely on a
 	// readable config file alongside them.
-	if err := writeConvenienceScripts(opts.SandboxDir); err != nil {
+	selfPath := opts.SelfPath
+	if selfPath == "" {
+		// Fallback so tests and ad-hoc callers don't need to set it.
+		// os.Executable returns an absolute path on every supported
+		// OS; symlinks are NOT resolved (we want the path the user
+		// invoked us through, not its resolved target).
+		p, err := os.Executable()
+		if err != nil {
+			return nil, fmt.Errorf("sandbox.Deploy: resolve self path for scripts: %w", err)
+		}
+		selfPath = p
+	}
+	if err := writeConvenienceScripts(opts.SandboxDir, selfPath); err != nil {
 		return nil, fmt.Errorf("sandbox.Deploy: scripts: %w", err)
 	}
 
