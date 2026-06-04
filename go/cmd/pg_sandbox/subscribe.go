@@ -1,0 +1,85 @@
+// CLI wiring for `pg_sandbox subscribe`. SPEC §6.10.
+//
+// subscribe is a thin wrapper around sandbox.Subscribe: parse flags,
+// resolve the subscriber's BinDir from its config, hand off. The
+// `--from` flag (the publisher reference) is interpreted by
+// sandbox.Subscribe via resolveSourceSandbox — same shape as
+// `--replicate-from` on deploy.
+
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os/signal"
+	"syscall"
+
+	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
+	"github.com/guriandoro/postgresql_sandbox/go/internal/pgexec"
+	"github.com/guriandoro/postgresql_sandbox/go/internal/sandbox"
+	"github.com/guriandoro/postgresql_sandbox/go/internal/ui"
+)
+
+// runSubscribe implements the dispatcher contract for `subscribe`.
+func runSubscribe(args []string, _ io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("subscribe", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+
+	var (
+		sandboxDir string
+		from       string
+		pubName    string
+		subName    string
+		copySchema bool
+		noCopyData bool
+		dbname     string
+	)
+	fs.StringVar(&sandboxDir, "sandbox-dir", "", "Target sandbox directory (required)")
+	fs.StringVar(&sandboxDir, "s", "", "Alias for --sandbox-dir")
+	fs.StringVar(&from, "from", "", "Publisher sandbox name (or absolute path) (required)")
+	fs.StringVar(&pubName, "pub-name", "", "Publication name on the publisher (required)")
+	fs.StringVar(&subName, "sub-name", "", "Subscription name (default <this-sandbox-basename>_sub)")
+	fs.BoolVar(&copySchema, "copy-schema", false, "Run pg_dump --schema-only from the publisher before CREATE SUBSCRIPTION")
+	fs.BoolVar(&noCopyData, "no-copy-data", false, "Create subscription with WITH (copy_data = false)")
+	fs.StringVar(&dbname, "dbname", "", "Database name on both ends (default: sandbox default)")
+	fs.StringVar(&dbname, "d", "", "Alias for --dbname")
+
+	if err := fs.Parse(args); err != nil {
+		return ui.ExitUsage.Int()
+	}
+	if sandboxDir == "" || from == "" || pubName == "" {
+		fmt.Fprintln(stderr, "pg_sandbox subscribe: --sandbox-dir, --from, and --pub-name are required")
+		fs.Usage()
+		return ui.ExitUsage.Int()
+	}
+	if !config.IsSandboxDir(sandboxDir) {
+		fmt.Fprintf(stderr, "pg_sandbox subscribe: not a sandbox: %s\n", sandboxDir)
+		return ui.ExitNotASandbox.Int()
+	}
+	cfg, err := config.LoadSandbox(sandboxDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox subscribe: load config: %v\n", err)
+		return ui.ExitBadConfig.Int()
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	runner := pgexec.New(cfg.BinDir)
+	opts := sandbox.SubscribeOptions{
+		SandboxDir:   sandboxDir,
+		PublisherRef: from,
+		PubName:      pubName,
+		SubName:      subName,
+		Dbname:       dbname,
+		CopySchema:   copySchema,
+		NoCopyData:   noCopyData,
+	}
+	if err := sandbox.Subscribe(ctx, runner, opts, stderr); err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox subscribe: %v\n", err)
+		return sandbox.ExitCodeFor(err).Int()
+	}
+	return ui.ExitOK.Int()
+}

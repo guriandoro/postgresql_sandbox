@@ -65,8 +65,8 @@ func init() {
 		"config": {summary: "Inspect/mutate sandbox or global config", run: runConfig},
 
 		// Logical replication.
-		"publish":   {summary: "Create a logical replication publication", run: notImplemented},
-		"subscribe": {summary: "Create a logical replication subscription", run: notImplemented},
+		"publish":   {summary: "Create a logical replication publication", run: runPublish},
+		"subscribe": {summary: "Create a logical replication subscription", run: runSubscribe},
 
 		// Cluster orchestration.
 		"cluster": {summary: "Manage a named group of sandboxes (deploy/status/destroy)", run: notImplemented},

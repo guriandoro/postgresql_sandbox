@@ -51,6 +51,16 @@ func Destroy(ctx context.Context, runner pgexec.Runner, opts DestroyOptions, std
 		return err
 	}
 
+	// SPEC §6.3 step 3 (logical half): best-effort DROP SUBSCRIPTION
+	// while the instance is still up. Doing it BEFORE the stop lets
+	// us use the local socket; doing it after pg_ctl stop would
+	// require restarting just to drop, which the user didn't ask
+	// for. All errors here are warnings — the data dir is going to
+	// disappear regardless.
+	if cfg.Logical != nil && cfg.Logical.SubscriptionName != "" && isRunning(cfg) {
+		bestEffortDropSubscription(ctx, runner, cfg, stderrW)
+	}
+
 	if isRunning(cfg) {
 		// SPEC §6.3 step 2: immediate-mode stop. We ignore the exit
 		// code/err — we are about to rm -rf the data dir, and any
@@ -154,4 +164,54 @@ func bestEffortDropSlot(ctx context.Context, runner pgexec.Runner, sandboxDir st
 		"level=INFO msg=%q slot=%q source=%q\n",
 		"dropped replication slot at source",
 		phys.SlotName, phys.SourceSandbox)
+}
+
+// bestEffortDropSubscription disables and drops the local
+// subscription before the sandbox dir is removed. Three statements
+// are issued as one psql -c so we make a single round-trip:
+//
+//  1. ALTER SUBSCRIPTION ... DISABLE — stop the worker; without
+//     this, DROP can race with the apply worker.
+//  2. ALTER SUBSCRIPTION ... SET (slot_name = NONE) — detach the
+//     subscription from its remote slot so DROP doesn't try to
+//     contact the publisher to drop the remote slot. By destroy
+//     time the publisher might be unreachable, deleted, or simply
+//     not the destination's concern; NONE makes DROP local-only and
+//     leaves any orphan slot on the publisher for the user to clean
+//     up via `pg_drop_replication_slot` if they care.
+//  3. DROP SUBSCRIPTION — the local catalog row goes away.
+//
+// All errors are warn-level. The data dir is about to be rm'd, so a
+// stranded local subscription row is meaningless; the only
+// observable consequence of a failure here is a possible orphan slot
+// on the publisher.
+func bestEffortDropSubscription(ctx context.Context, runner pgexec.Runner, cfg *config.Sandbox, stderrW io.Writer) {
+	sub := cfg.Logical.SubscriptionName
+	// SET (slot_name = NONE) THEN DROP — see function-level comment
+	// for why. We chain via semicolons in a single psql -c so the
+	// three statements share a transaction-scoped session and we
+	// pay one auth round-trip.
+	stmt := fmt.Sprintf(
+		"ALTER SUBSCRIPTION %s DISABLE; ALTER SUBSCRIPTION %s SET (slot_name = NONE); DROP SUBSCRIPTION %s;",
+		sub, sub, sub)
+	res := runner.Run(ctx, "psql",
+		"-X", "-A", "-t",
+		"-h", cfg.Host,
+		"-p", fmt.Sprintf("%d", cfg.Port),
+		"-U", cfg.Superuser,
+		"-d", cfg.Logical.TargetDatabase,
+		"-c", stmt,
+	)
+	if res.Err != nil || res.ExitCode != 0 {
+		emitStderr(stderrW, "psql DROP SUBSCRIPTION", res.Stderr)
+		fmt.Fprintf(stderrW,
+			"level=WARN msg=%q subscription=%q name=%q\n",
+			"subscription cleanup failed; the local row goes away with the data dir but the publisher slot may remain",
+			sub, cfg.Name)
+		return
+	}
+	fmt.Fprintf(stderrW,
+		"level=INFO msg=%q subscription=%q name=%q\n",
+		"dropped local subscription before destroy",
+		sub, cfg.Name)
 }

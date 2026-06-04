@@ -117,6 +117,31 @@ type DeployOptions struct {
 	// source via `pg_basebackup -C --slot=…`. Required when
 	// ReplicateFrom is set; ignored otherwise.
 	SlotName string
+
+	// SubscribeTo names the publisher sandbox this new sandbox
+	// should logically subscribe to (SPEC §6.1 logical path). Empty
+	// for a standalone or physical-standby deploy. Mutually
+	// exclusive with ReplicateFrom — Deploy refuses if both are set.
+	SubscribeTo string
+
+	// PubName is the publication on the publisher to attach to.
+	// REQUIRED when SubscribeTo is set. Passed through to Subscribe
+	// unchanged.
+	PubName string
+
+	// SubName is the subscription identifier on this sandbox.
+	// Optional; empty means Subscribe defaults to
+	// `<this-sandbox-basename>_sub`.
+	SubName string
+
+	// CopySchema is the --copy-schema flag for the logical path:
+	// run pg_dump --schema-only against the publisher before
+	// CREATE SUBSCRIPTION.
+	CopySchema bool
+
+	// NoCopyData is the --no-copy-data flag for the logical path:
+	// translates to WITH (copy_data = false) on CREATE SUBSCRIPTION.
+	NoCopyData bool
 }
 
 // DeployResult is what Deploy returns on success: the resolved
@@ -158,17 +183,19 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 		return nil, err
 	}
 
-	// Branch: SPEC §6.1's two code paths. ReplicateFrom non-empty
-	// dispatches to the physical-standby flow; otherwise the
-	// standalone flow runs initdb fresh. We do this before port
-	// resolution because the standby path uses a different runner
-	// for the source (its own bin-dir) but allocates its own port
-	// the same way, so port logic still happens inside the chosen
-	// flow.
-	if opts.ReplicateFrom != "" {
+	// Branch: SPEC §6.1's three code paths. ReplicateFrom non-empty
+	// → physical standby; SubscribeTo non-empty → logical subscriber
+	// (a standalone deploy followed by Subscribe); otherwise →
+	// standalone. The mutual-exclusion check is in
+	// normalizeDeployOptions so programmatic callers also see it.
+	switch {
+	case opts.ReplicateFrom != "":
 		return deployStandby(ctx, runner, opts, stderrW)
+	case opts.SubscribeTo != "":
+		return deploySubscriber(ctx, runner, opts, stderrW)
+	default:
+		return deployStandalone(ctx, runner, opts, stderrW)
 	}
-	return deployStandalone(ctx, runner, opts, stderrW)
 }
 
 // deployStandalone implements SPEC §6.1's standalone path: fresh
@@ -341,6 +368,15 @@ func normalizeDeployOptions(opts *DeployOptions) error {
 	if opts.Port == 0 && !opts.PortExplicit {
 		// Auto-alloc; the value used as the scan base is PortBase.
 		opts.Port = opts.PortBase
+	}
+	// SPEC §6.1: physical and logical replication-on-deploy are
+	// mutually exclusive. The brief calls this out explicitly: if
+	// both --replicate-from and --subscribe-to land in opts, refuse
+	// at usage level. Catching it here ensures programmatic callers
+	// see the same error the CLI surfaces.
+	if opts.ReplicateFrom != "" && opts.SubscribeTo != "" {
+		return wrapExit(ExitUsage, fmt.Errorf(
+			"sandbox.Deploy: --replicate-from and --subscribe-to are mutually exclusive"))
 	}
 	return nil
 }

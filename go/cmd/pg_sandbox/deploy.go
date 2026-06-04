@@ -48,6 +48,11 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		logName       string
 		replicateFrom string
 		slotName      string
+		subscribeTo   string
+		pubName       string
+		subName       string
+		copySchema    bool
+		noCopyData    bool
 	)
 	fs.StringVar(&sandboxDir, "sandbox-dir", "", "Target sandbox directory (required)")
 	fs.StringVar(&sandboxDir, "s", "", "Alias for --sandbox-dir")
@@ -70,6 +75,15 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	// rather than here so the same check guards programmatic callers.
 	fs.StringVar(&replicateFrom, "replicate-from", "", "Source sandbox name (or absolute path) to stream-replicate from")
 	fs.StringVar(&slotName, "slot", "", "Physical replication slot name (required with --replicate-from)")
+	// SPEC §6.1 logical-replication flags. --pub-name is REQUIRED
+	// when --subscribe-to is set; we enforce that in the sandbox
+	// package rather than here so programmatic callers see the same
+	// check.
+	fs.StringVar(&subscribeTo, "subscribe-to", "", "Publisher sandbox name (or absolute path) to subscribe to")
+	fs.StringVar(&pubName, "pub-name", "", "Publication name on the publisher (required with --subscribe-to)")
+	fs.StringVar(&subName, "sub-name", "", "Subscription name (default <this-sandbox-basename>_sub)")
+	fs.BoolVar(&copySchema, "copy-schema", false, "pg_dump --schema-only from the publisher before CREATE SUBSCRIPTION")
+	fs.BoolVar(&noCopyData, "no-copy-data", false, "Create subscription with WITH (copy_data = false)")
 
 	if err := fs.Parse(args); err != nil {
 		// flag already wrote the error to stderr via SetOutput.
@@ -126,6 +140,11 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		SelfPath:      selfPath,
 		ReplicateFrom: replicateFrom,
 		SlotName:      slotName,
+		SubscribeTo:   subscribeTo,
+		PubName:       pubName,
+		SubName:       subName,
+		CopySchema:    copySchema,
+		NoCopyData:    noCopyData,
 	}
 
 	// SPEC §4.1: Ctrl-C must propagate to child processes. Cancel

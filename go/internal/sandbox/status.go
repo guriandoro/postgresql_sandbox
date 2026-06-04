@@ -83,6 +83,26 @@ type WalReceiverRow struct {
 	LatestEndLSN    string
 }
 
+// SubscriptionRow combines pg_subscription (catalog) and
+// pg_stat_subscription (live worker stats) for a subscriber. Both
+// catalogs are queried in a single LEFT JOIN so a subscription with
+// no live worker (subenabled=f) still reports its enabled state.
+type SubscriptionRow struct {
+	// Name is subname from pg_subscription.
+	Name string
+	// Enabled mirrors pg_subscription.subenabled.
+	Enabled bool
+	// PID of the worker; empty when subenabled=f or worker not yet
+	// started.
+	WorkerPID string
+	// ReceivedLSN is pg_stat_subscription.received_lsn.
+	ReceivedLSN string
+	// LatestEndLSN is pg_stat_subscription.latest_end_lsn.
+	LatestEndLSN string
+	// LastMsgSendTime is pg_stat_subscription.last_msg_send_time.
+	LastMsgSendTime string
+}
+
 // StatusReport is the structured form of `pg_sandbox status` output.
 // The CLI layer chooses how to render this (text for default, JSON
 // for --json once that lands).
@@ -116,6 +136,19 @@ type StatusReport struct {
 	// when this sandbox is a standby and the query succeeded. nil
 	// otherwise (including for "no receiver active yet").
 	WalReceiver *WalReceiverRow
+
+	// Publications is the list of pg_publication.pubname rows on
+	// this sandbox. Populated for ANY role when the query succeeded
+	// (a primary that's also a publisher reports both replicas AND
+	// publications). nil when the probe failed; empty slice when the
+	// query ran with no rows.
+	Publications []string
+
+	// Subscription is the joined pg_subscription /
+	// pg_stat_subscription snapshot for this sandbox. Populated
+	// when the sandbox has a Logical config block AND the probe
+	// succeeded with a row. nil otherwise.
+	Subscription *SubscriptionRow
 }
 
 // Status loads the sandbox config and probes the instance's runtime
@@ -183,6 +216,16 @@ func statusWithWriter(ctx context.Context, runner pgexec.Runner, dir string, std
 			probeStandbyReplication(ctx, runner, cfg, rep, stderrW)
 		case config.RolePrimary, config.RoleUnknown:
 			probePrimaryReplication(ctx, runner, cfg, rep, stderrW)
+		}
+
+		// Logical-replication probes. Publications are queried for
+		// every role (a primary or unknown sandbox may also be a
+		// publisher) so we don't miss them when Role wasn't bumped
+		// to RolePublisher (we deliberately don't auto-bump Role at
+		// publish-time — see publish.go's schema-state note).
+		probePublications(ctx, runner, cfg, rep, stderrW)
+		if cfg.Logical != nil {
+			probeSubscription(ctx, runner, cfg, rep, stderrW)
 		}
 	}
 	return rep, nil
@@ -338,6 +381,115 @@ func probeStandbyReplication(ctx context.Context, runner pgexec.Runner, cfg *con
 	}
 }
 
+// probePublications queries pg_publication and stores the names in
+// rep.Publications. Best-effort — on failure we log to stderrW and
+// leave Publications nil so the renderer can distinguish "probe
+// failed" from "no publications".
+//
+// The query targets the sandbox's default database. Publications are
+// per-database in Postgres; the SPEC §6.4 status output reports
+// what's visible in the default db, which is what users expect when
+// they ran `publish` without --dbname. Cross-db inspection is
+// possible via `use --dbname ... -c "SELECT pubname FROM
+// pg_publication;"`.
+func probePublications(ctx context.Context, runner pgexec.Runner, cfg *config.Sandbox, rep *StatusReport, stderrW io.Writer) {
+	res := runner.Run(ctx, "psql",
+		"-X", "-A", "-t",
+		"-h", cfg.Host,
+		"-p", fmt.Sprintf("%d", cfg.Port),
+		"-U", cfg.Superuser,
+		"-d", cfg.DefaultDatabase,
+		"-c", "SELECT pubname FROM pg_publication ORDER BY pubname;",
+	)
+	if res.Err != nil || res.ExitCode != 0 {
+		fmt.Fprintf(stderrW, "level=WARN msg=%q exit=%d\n",
+			"pg_publication probe failed", res.ExitCode)
+		emitStderr(stderrW, "psql pg_publication", res.Stderr)
+		return
+	}
+	// Empty stdout = "query ran, no rows". Non-nil empty slice so the
+	// renderer can tell "probed and found none" from "probe failed".
+	rep.Publications = []string{}
+	out := strings.TrimSpace(string(res.Stdout))
+	if out == "" {
+		return
+	}
+	for _, line := range strings.Split(out, "\n") {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		rep.Publications = append(rep.Publications, name)
+	}
+}
+
+// probeSubscription queries pg_subscription LEFT JOIN
+// pg_stat_subscription for the subscription this sandbox is
+// configured to host (cfg.Logical.SubscriptionName). Best-effort —
+// failure leaves rep.Subscription nil.
+//
+// The join is necessary because pg_stat_subscription only has a row
+// when a worker is connected (subenabled=t AND not too early for the
+// launcher to spawn one). Without LEFT JOIN, a disabled subscription
+// would produce zero rows and look like "no subscription" to the
+// renderer.
+func probeSubscription(ctx context.Context, runner pgexec.Runner, cfg *config.Sandbox, rep *StatusReport, stderrW io.Writer) {
+	// COALESCE the stat columns to '' so a missing row degrades to
+	// empty strings rather than the NULL literal.
+	query := fmt.Sprintf(
+		"SELECT s.subname, s.subenabled, "+
+			"COALESCE(st.pid::text, ''), "+
+			"COALESCE(st.received_lsn::text, ''), "+
+			"COALESCE(st.latest_end_lsn::text, ''), "+
+			"COALESCE(st.last_msg_send_time::text, '') "+
+			"FROM pg_subscription s "+
+			"LEFT JOIN pg_stat_subscription st ON st.subid = s.oid "+
+			"WHERE s.subname = '%s';",
+		cfg.Logical.SubscriptionName)
+	res := runner.Run(ctx, "psql",
+		"-X", "-A", "-t", "-F", "|",
+		"-h", cfg.Host,
+		"-p", fmt.Sprintf("%d", cfg.Port),
+		"-U", cfg.Superuser,
+		"-d", cfg.Logical.TargetDatabase,
+		"-c", query,
+	)
+	if res.Err != nil || res.ExitCode != 0 {
+		fmt.Fprintf(stderrW, "level=WARN msg=%q exit=%d\n",
+			"pg_subscription probe failed", res.ExitCode)
+		emitStderr(stderrW, "psql pg_subscription", res.Stderr)
+		return
+	}
+	out := strings.TrimSpace(string(res.Stdout))
+	if out == "" {
+		// No subscription row matches the name. This is unexpected
+		// (config says we have one) but recoverable — surface as a
+		// warn rather than a hard error.
+		fmt.Fprintf(stderrW, "level=WARN msg=%q sub=%q\n",
+			"pg_subscription has no row for configured subscription",
+			cfg.Logical.SubscriptionName)
+		return
+	}
+	// pg_subscription is per-database, but the catalog rows are
+	// global; we still narrow by subname above. There can be at most
+	// one row matching the unique subname.
+	if idx := strings.IndexByte(out, '\n'); idx >= 0 {
+		out = out[:idx]
+	}
+	fields := strings.Split(out, "|")
+	if len(fields) < 6 {
+		return
+	}
+	rep.Subscription = &SubscriptionRow{
+		Name:            fields[0],
+		Enabled:         strings.TrimSpace(fields[1]) == "t",
+		WorkerPID:       fields[2],
+		ReceivedLSN:     fields[3],
+		LatestEndLSN:    fields[4],
+		LastMsgSendTime: fields[5],
+	}
+}
+
 // RenderText writes a human-friendly key=value block to w.
 // Deliberately not a table: stdout consumers (column-aware filters
 // like `awk`) handle key=value better than fixed-width columns, and
@@ -383,5 +535,18 @@ func (r *StatusReport) RenderText(w io.Writer) {
 		} else {
 			fmt.Fprintln(w, "wal_receiver=(no active receiver)")
 		}
+	}
+
+	// Logical-replication sub-sections. Publications are listed for
+	// any role (a primary can also publish). Subscription is listed
+	// only when this sandbox is configured as a subscriber.
+	if r.Publications != nil && len(r.Publications) > 0 {
+		fmt.Fprintf(w, "publications=[%s]\n", strings.Join(r.Publications, ", "))
+	}
+	if r.Subscription != nil {
+		s := r.Subscription
+		fmt.Fprintf(w,
+			"subscription=name=%s enabled=%t worker_pid=%s received_lsn=%s latest_end_lsn=%s last_msg_send_time=%q\n",
+			s.Name, s.Enabled, s.WorkerPID, s.ReceivedLSN, s.LatestEndLSN, s.LastMsgSendTime)
 	}
 }
