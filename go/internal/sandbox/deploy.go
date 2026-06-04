@@ -142,6 +142,14 @@ type DeployOptions struct {
 	// NoCopyData is the --no-copy-data flag for the logical path:
 	// translates to WITH (copy_data = false) on CREATE SUBSCRIPTION.
 	NoCopyData bool
+
+	// ClusterName, when non-empty, is recorded in the new sandbox's
+	// config.Sandbox.Cluster field. Set by the cluster package when
+	// deploying a member so a later `global_status` walk can group
+	// members under their cluster (SPEC §3.2 lists `cluster` as a
+	// per-sandbox field for exactly this reason). Standalone deploys
+	// leave this empty and the field is omitted on disk.
+	ClusterName string
 }
 
 // DeployResult is what Deploy returns on success: the resolved
@@ -273,6 +281,7 @@ func deployStandalone(ctx context.Context, runner pgexec.Runner, opts DeployOpti
 	cfg.Superuser = opts.Superuser
 	cfg.DefaultDatabase = opts.Dbname
 	cfg.Role = config.RolePrimary
+	cfg.Cluster = opts.ClusterName
 	cfg.CreatedAt = time.Now().UTC()
 
 	if err := config.Validate(&cfg); err != nil {

@@ -48,6 +48,50 @@ func LoadSandbox(sandboxDir string) (*Sandbox, error) {
 	return &s, nil
 }
 
+// LoadCluster reads <clusterDir>/ClusterFilename and returns the
+// parsed ClusterManifest. Unknown keys are an error; schemaVersion >
+// CurrentSchemaVersion is an error wrapped around
+// ErrSchemaVersionTooNew. Mirrors LoadSandbox's contract exactly —
+// the manifest is the same shape of strict-JSON file SPEC §3 designed
+// for sandboxes, just with cluster-level keys.
+func LoadCluster(clusterDir string) (*ClusterManifest, error) {
+	path := filepath.Join(clusterDir, ClusterFilename)
+	var m ClusterManifest
+	if err := loadJSONStrict(path, &m); err != nil {
+		return nil, err
+	}
+	if m.SchemaVersion > CurrentSchemaVersion {
+		return nil, fmt.Errorf("%s: schemaVersion %d > supported %d (upgrade pg_sandbox): %w",
+			path, m.SchemaVersion, CurrentSchemaVersion, ErrSchemaVersionTooNew)
+	}
+	return &m, nil
+}
+
+// SaveCluster atomically writes m to <clusterDir>/ClusterFilename.
+// The directory must already exist — Save does NOT create it, matching
+// SaveSandbox's contract (the cluster command creates the dir before
+// the first save, so this is fine).
+//
+// On every save, LastModifiedAt is set to now. CreatedAt is preserved
+// if non-zero, otherwise set to now (first save). SchemaVersion is set
+// to CurrentSchemaVersion when zero so partial callers can synthesize
+// a manifest in a few lines.
+func SaveCluster(clusterDir string, m *ClusterManifest) error {
+	if m == nil {
+		return errors.New("config.SaveCluster: nil ClusterManifest")
+	}
+	now := time.Now().UTC()
+	if m.CreatedAt.IsZero() {
+		m.CreatedAt = now
+	}
+	m.LastModifiedAt = now
+	if m.SchemaVersion == 0 {
+		m.SchemaVersion = CurrentSchemaVersion
+	}
+	target := filepath.Join(clusterDir, ClusterFilename)
+	return saveJSONAtomic(target, m)
+}
+
 // LoadGlobal reads the global config file at path. If path doesn't
 // exist, returns (nil, nil) — a missing global config is normal
 // and explicitly not an error per SPEC §3.3.

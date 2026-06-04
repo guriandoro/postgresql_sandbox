@@ -193,6 +193,7 @@ func deployStandby(ctx context.Context, runner pgexec.Runner, opts DeployOptions
 	cfg.Superuser = srcCfg.Superuser
 	cfg.DefaultDatabase = opts.Dbname
 	cfg.Role = config.RoleStandby
+	cfg.Cluster = opts.ClusterName
 	cfg.CreatedAt = time.Now().UTC()
 	cfg.Physical = &config.Physical{
 		// We keep SourceSandbox as the user-supplied name (rather

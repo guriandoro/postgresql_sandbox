@@ -69,7 +69,7 @@ func init() {
 		"subscribe": {summary: "Create a logical replication subscription", run: runSubscribe},
 
 		// Cluster orchestration.
-		"cluster": {summary: "Manage a named group of sandboxes (deploy/status/destroy)", run: notImplemented},
+		"cluster": {summary: "Manage a named group of sandboxes (deploy/status/destroy)", run: runCluster},
 
 		// Cross-host listing and reports.
 		"global_status": {summary: "List every sandbox on the host", run: notImplemented},

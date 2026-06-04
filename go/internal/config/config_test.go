@@ -354,3 +354,106 @@ func TestIsSandboxDir(t *testing.T) {
 func envGetter(m map[string]string) func(string) string {
 	return func(k string) string { return m[k] }
 }
+
+// ---------------------------------------------------------------- //
+// Cluster manifest round-trip + strictness
+// ---------------------------------------------------------------- //
+
+// mkClusterManifest returns a fully-populated physical-mode manifest
+// suitable for round-trip and validation tests. SyncIndex is exercised
+// on member 0 (sync) and left nil on member 1 (async) so the pointer
+// semantics get coverage.
+func mkClusterManifest(name string) *ClusterManifest {
+	syncIdx := 0
+	return &ClusterManifest{
+		SchemaVersion: CurrentSchemaVersion,
+		Name:          name,
+		Mode:          ClusterPhysical,
+		Members: []ClusterMember{
+			{Name: name + "_p", Role: RolePrimary, SyncIndex: nil},
+			{Name: name + "_s1", Role: RoleStandby, SyncIndex: &syncIdx},
+			{Name: name + "_s2", Role: RoleStandby, SyncIndex: nil},
+		},
+		Replication: ClusterRepl{
+			SlotPrefix: name,
+			SyncCount:  0,
+		},
+	}
+}
+
+func TestClusterSaveLoadRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	in := mkClusterManifest("mycluster")
+	if err := SaveCluster(dir, in); err != nil {
+		t.Fatalf("SaveCluster: %v", err)
+	}
+	out, err := LoadCluster(dir)
+	if err != nil {
+		t.Fatalf("LoadCluster: %v", err)
+	}
+	// Save populated CreatedAt / LastModifiedAt; align so DeepEqual
+	// compares the rest.
+	in.CreatedAt = out.CreatedAt
+	in.LastModifiedAt = out.LastModifiedAt
+	if !reflect.DeepEqual(in, out) {
+		t.Errorf("round-trip mismatch:\n in: %+v\nout: %+v", in, out)
+	}
+}
+
+func TestClusterLoadRejectsUnknownKey(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ClusterFilename),
+		[]byte(`{"schemaVersion":1,"name":"x","mode":"physical","mystery":"key"}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadCluster(dir)
+	if err == nil {
+		t.Fatal("LoadCluster accepted unknown field")
+	}
+	if !strings.Contains(err.Error(), "mystery") &&
+		!strings.Contains(err.Error(), "unknown field") {
+		t.Errorf("error doesn't surface the unknown key: %v", err)
+	}
+}
+
+func TestClusterLoadMissingIsError(t *testing.T) {
+	dir := t.TempDir()
+	_, err := LoadCluster(dir)
+	if err == nil {
+		t.Fatal("LoadCluster on empty dir: expected error, got nil")
+	}
+	// Missing-file should bubble up as a PathError (os.ErrNotExist),
+	// not as a JSON decoding error. Callers use this to distinguish
+	// "not a cluster" (ENOENT) from "cluster file is broken".
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got: %v", err)
+	}
+}
+
+func TestClusterLoadRejectsFutureSchemaVersion(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ClusterFilename),
+		[]byte(`{"schemaVersion":999,"name":"x","mode":"physical","members":[],"replication":{"syncCount":0}}`), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	_, err := LoadCluster(dir)
+	if err == nil {
+		t.Fatal("LoadCluster accepted too-new schemaVersion")
+	}
+	if !errors.Is(err, ErrSchemaVersionTooNew) {
+		t.Errorf("error not ErrSchemaVersionTooNew: %v", err)
+	}
+}
+
+func TestIsClusterDir(t *testing.T) {
+	dir := t.TempDir()
+	if IsClusterDir(dir) {
+		t.Error("IsClusterDir on empty dir = true")
+	}
+	if err := SaveCluster(dir, mkClusterManifest("x")); err != nil {
+		t.Fatalf("SaveCluster: %v", err)
+	}
+	if !IsClusterDir(dir) {
+		t.Error("IsClusterDir on dir with manifest = false")
+	}
+}
