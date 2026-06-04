@@ -223,22 +223,25 @@ func collectSandboxBinDirs(root string, stderrW io.Writer) map[string]string {
 // Used by the CLI layer for both the "what would happen" preview and
 // the "what did happen" log.
 //
-// sandboxRoot is the resolved scan root (post flag → env → global →
-// default chain). It is announced in a header BEFORE the table so the
-// user sees the scope of the cross-reference even on a no-op run.
-// This is a defense-in-depth measure following the 2026-06-04
-// incident where a smoke test deployed a sandbox at /tmp while the
-// default sandbox root was scanned — the cross-reference missed it
-// and an in-use install was pruned. See the project memory
+// binDir is the resolved install root (where candidate version dirs
+// live) and sandboxRoot is the resolved scan root (post flag → env →
+// global → default chain). Both are announced in a header BEFORE the
+// table so the user sees the scope of the cross-reference even on a
+// no-op run — and so a first-run user whose PGS_BIN_DIR is empty or
+// missing can tell that the install root, not the sandbox root, is
+// the knob to tune. This is a defense-in-depth measure following the
+// 2026-06-04 incident where a smoke test deployed a sandbox at /tmp
+// while the default sandbox root was scanned — the cross-reference
+// missed it and an in-use install was pruned. See the project memory
 // `cleanup-install-versions-pitfall.md`.
-func RenderPlan(w io.Writer, sandboxRoot string, plan []Candidate) {
+func RenderPlan(w io.Writer, binDir, sandboxRoot string, plan []Candidate) {
 	// Always emit the scan-root banner first, regardless of whether
 	// the plan has any candidates. The point is to make the scope
 	// visible even on the "no unused install versions" path.
-	renderScanRootHeader(w, sandboxRoot)
+	renderScanRootHeader(w, binDir, sandboxRoot)
 
 	if len(plan) == 0 {
-		fmt.Fprintln(w, "no install versions found")
+		fmt.Fprintf(w, "no install versions found under %s\n", binDir)
 		return
 	}
 	colVer, colState := 7, 6
@@ -267,19 +270,27 @@ func RenderPlan(w io.Writer, sandboxRoot string, plan []Candidate) {
 	}
 }
 
-// renderScanRootHeader writes the "Scanning sandbox root: ..." banner
-// plus the NOTE block. Plain text, no color/ANSI; the goal is to be
-// visible in piped output and CI logs as well as at an interactive
-// terminal.
+// renderScanRootHeader writes the two-line scope header ("Install
+// root: ..." then "Scanning sandbox root: ...") plus the NOTE block.
+// Plain text, no color/ANSI; the goal is to be visible in piped
+// output and CI logs as well as at an interactive terminal.
+//
+// The install root is listed first because that's where the
+// candidates come from — if it's empty/missing the plan will be
+// empty and the user needs to know which knob (PGS_BIN_DIR /
+// --bin-dir) to reach for. The field labels are space-padded so the
+// two paths line up vertically.
 //
 // Kept exported-from-package only via RenderPlan rather than as its
 // own public symbol to keep the API surface narrow — callers should
 // always render the header and the table together.
-func renderScanRootHeader(w io.Writer, sandboxRoot string) {
+func renderScanRootHeader(w io.Writer, binDir, sandboxRoot string) {
+	fmt.Fprintf(w, "Install root:          %s\n", binDir)
 	fmt.Fprintf(w, "Scanning sandbox root: %s\n", sandboxRoot)
 	fmt.Fprintln(w, "NOTE: Only sandboxes under this root are considered. Sandboxes elsewhere")
-	fmt.Fprintln(w, "will NOT block removal. Set PGS_SANDBOX_ROOT or rebuild with a different")
-	fmt.Fprintln(w, "root if you need a wider scan.")
+	fmt.Fprintln(w, "will NOT block removal. To widen the scan, pass --root <path> for a one-shot,")
+	fmt.Fprintln(w, "set PGS_SANDBOX_ROOT in the environment, or update the global config's")
+	fmt.Fprintln(w, "sandboxRoot.")
 	fmt.Fprintln(w)
 }
 

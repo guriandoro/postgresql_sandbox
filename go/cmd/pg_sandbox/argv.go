@@ -8,22 +8,39 @@
 // surprising: `--force` is treated as a positional, not a flag, and
 // the destructive prompt that --force was meant to suppress fires
 // (or worse, the user types "y" thinking they're confirming the
-// version they wanted). On 2026-06-04 a Phase-2 smoke test was
-// bitten by exactly this — see the project memory
-// `cleanup-install-versions-pitfall.md`.
+// version they wanted).
 //
-// The helper below is a tiny, opt-in workaround: a per-command list
-// of known boolean flag names, moved to the front of argv before
-// `flag.FlagSet.Parse` sees it. We do NOT touch other commands here
-// because each command has its own mix of bool / value-taking flags
-// and would need per-command testing.
+// The helper below is a tiny, opt-in workaround: known boolean flag
+// names are moved to the front of argv before `flag.FlagSet.Parse`
+// sees it. The typical caller derives the list of bool flag names
+// automatically from its FlagSet via boolFlagNames, so adding a new
+// BoolVar doesn't require touching a separate enumeration. We do NOT
+// touch other commands here because each command has its own mix of
+// bool / value-taking flags and would need per-command testing.
 
 package main
 
-// reorderBoolFlags moves any token in `argv` that exactly matches an
-// entry in `knownBoolFlags` to the front of the returned slice, in
-// the order encountered. Positionals (anything else) keep their
-// original relative order and follow the flags.
+import (
+	"flag"
+	"strings"
+)
+
+// reorderBoolFlags moves any token in `argv` that names a known
+// boolean flag to the front of the returned slice, in the order
+// encountered. Positionals (anything else) keep their original
+// relative order and follow the flags.
+//
+// `knownBoolFlags` is a list of BARE flag names (no leading dashes),
+// e.g. `[]string{"force", "f"}`. A token matches if, after stripping
+// a single leading `-` or `--` and any trailing `=…` suffix, the
+// remaining bare name is in the list. So with `["force", "f"]` the
+// tokens `--force`, `-force`, `--force=true`, `--force=false`, `-f`,
+// `-f=true`, and `--f=false` all match; `--forces`, `--root`, and a
+// bare `force` do not. (`--force=` with an empty value still matches;
+// Go's flag parser will then error on the empty value, which is its
+// job, not ours.) The ORIGINAL token (with dashes and any `=value`
+// suffix) is what gets promoted — Parse needs to see what the user
+// typed.
 //
 // The `--` separator is honored as a verbatim-end marker: every
 // token from `--` onward is appended to the tail of the returned
@@ -35,14 +52,11 @@ package main
 //   - Only BOOLEAN flags. A flag that takes a value (e.g. `--root
 //     /path`) requires its value to appear immediately after it, so
 //     reordering would break the pair. Don't put value-taking flag
-//     names in `knownBoolFlags`.
-//   - The caller must enumerate the known bool flag names (both the
-//     long and short forms, e.g. `--force` AND `-f`). We do not
-//     reflect over a *flag.FlagSet because that couples the helper
-//     to the package's parsing choices and complicates testing.
-//   - Tokens are compared by exact string match. `--force=true` is
-//     not recognized; cleanup-install-versions doesn't currently
-//     accept that form anyway.
+//     names in `knownBoolFlags`. Production callers should pass
+//     `boolFlagNames(fs)` to derive the list from a parsed FlagSet,
+//     which guarantees this caveat automatically (BoolVar flags are
+//     bool; StringVar/IntVar/etc. are not). Tests may still pass a
+//     hand-written bare-name list directly.
 //
 // The helper is intentionally narrow: it fixes the cleanup-install-
 // versions UX without changing the global CLI surface.
@@ -63,11 +77,53 @@ func reorderBoolFlags(argv []string, knownBoolFlags []string) []string {
 			out = append(out, argv[i:]...)
 			return out
 		}
-		if known[tok] {
+		if isKnownBoolFlagToken(tok, known) {
 			flags = append(flags, tok)
 			continue
 		}
 		positionals = append(positionals, tok)
 	}
 	return append(flags, positionals...)
+}
+
+// isKnownBoolFlagToken reports whether `tok` is a flag-shaped token
+// whose bare name (after stripping a single leading `-` or `--` and
+// any trailing `=…` suffix) is in `known`. A bare word with no
+// leading dash (e.g. `force`) is not a flag and never matches.
+func isKnownBoolFlagToken(tok string, known map[string]bool) bool {
+	// Must start with a dash to be a flag at all.
+	if !strings.HasPrefix(tok, "-") {
+		return false
+	}
+	// Strip the leading `--` or `-`. Go's `flag` package treats both
+	// the same, so we do too.
+	name := strings.TrimPrefix(tok, "-")
+	name = strings.TrimPrefix(name, "-")
+	// Drop any `=value` suffix; Go's flag accepts `--force=true`.
+	if eq := strings.IndexByte(name, '='); eq >= 0 {
+		name = name[:eq]
+	}
+	if name == "" {
+		return false
+	}
+	return known[name]
+}
+
+// boolFlagNames returns the bare names of every flag registered on
+// `fs` whose Value is a boolean flag, as reported by the canonical
+// stdlib idiom `interface{ IsBoolFlag() bool }`. The result is
+// suitable for passing to reorderBoolFlags, so callers don't need to
+// hand-maintain a parallel list when adding a new BoolVar.
+//
+// Iteration order: fs.VisitAll walks flags in lexicographic name
+// order. reorderBoolFlags only cares about set membership, so the
+// order is irrelevant for correctness.
+func boolFlagNames(fs *flag.FlagSet) []string {
+	var names []string
+	fs.VisitAll(func(f *flag.Flag) {
+		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			names = append(names, f.Name)
+		}
+	})
+	return names
 }

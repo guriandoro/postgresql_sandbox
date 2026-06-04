@@ -234,9 +234,12 @@ func TestRenderPlan_emitsScanRootHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
-	RenderPlan(&planBuf, f.sandboxRoot, plan)
+	RenderPlan(&planBuf, f.binDir, f.sandboxRoot, plan)
 
 	out := planBuf.String()
+	if !strings.Contains(out, "Install root:          "+f.binDir) {
+		t.Errorf("RenderPlan output missing Install-root banner naming %s; got:\n%s", f.binDir, out)
+	}
 	if !strings.Contains(out, "Scanning sandbox root: "+f.sandboxRoot) {
 		t.Errorf("RenderPlan output missing scan-root banner; got:\n%s", out)
 	}
@@ -246,11 +249,22 @@ func TestRenderPlan_emitsScanRootHeader(t *testing.T) {
 	if !strings.Contains(out, "PGS_SANDBOX_ROOT") {
 		t.Errorf("RenderPlan output missing PGS_SANDBOX_ROOT hint; got:\n%s", out)
 	}
-	// The header must precede the table.
+	if !strings.Contains(out, "--root <path>") {
+		t.Errorf("RenderPlan output missing --root <path> hint; got:\n%s", out)
+	}
+	if !strings.Contains(out, "global config's") {
+		t.Errorf("RenderPlan output missing global config hint; got:\n%s", out)
+	}
+	if strings.Contains(out, "rebuild") {
+		t.Errorf("RenderPlan output should not mention 'rebuild'; got:\n%s", out)
+	}
+	// The header must precede the table, and the install-root line
+	// must come before the sandbox-root line.
+	installIdx := strings.Index(out, "Install root:")
 	bannerIdx := strings.Index(out, "Scanning sandbox root:")
 	tableIdx := strings.Index(out, "VERSION")
-	if bannerIdx < 0 || tableIdx < 0 || bannerIdx >= tableIdx {
-		t.Errorf("header must come before VERSION table; banner=%d table=%d", bannerIdx, tableIdx)
+	if installIdx < 0 || bannerIdx < 0 || tableIdx < 0 || installIdx >= bannerIdx || bannerIdx >= tableIdx {
+		t.Errorf("header order wrong; install=%d banner=%d table=%d", installIdx, bannerIdx, tableIdx)
 	}
 }
 
@@ -258,18 +272,23 @@ func TestRenderPlan_emitsHeaderOnEmptyPlan(t *testing.T) {
 	// The header is the whole point of the change; it must appear
 	// even when there are zero candidates (e.g. no installs yet, or
 	// every candidate filtered out). On a no-op run the user should
-	// still see what was scanned.
+	// still see what was scanned — both the install root (so a
+	// first-run user with an empty PGS_BIN_DIR can see which knob to
+	// reach for) and the sandbox root.
 	var buf bytes.Buffer
-	RenderPlan(&buf, "/some/scan/root", nil)
+	RenderPlan(&buf, "/some/bin/dir", "/some/scan/root", nil)
 	out := buf.String()
+	if !strings.Contains(out, "Install root:          /some/bin/dir") {
+		t.Errorf("empty-plan output missing Install-root banner; got:\n%s", out)
+	}
 	if !strings.Contains(out, "Scanning sandbox root: /some/scan/root") {
 		t.Errorf("empty-plan output missing scan-root banner; got:\n%s", out)
 	}
 	if !strings.Contains(out, "Only sandboxes under this root are considered") {
 		t.Errorf("empty-plan output missing NOTE block; got:\n%s", out)
 	}
-	if !strings.Contains(out, "no install versions found") {
-		t.Errorf("empty-plan output missing 'no install versions found' line; got:\n%s", out)
+	if !strings.Contains(out, "no install versions found under /some/bin/dir") {
+		t.Errorf("empty-plan output missing 'no install versions found under <binDir>' line; got:\n%s", out)
 	}
 }
 
