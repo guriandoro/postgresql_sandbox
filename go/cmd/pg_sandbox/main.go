@@ -72,8 +72,8 @@ func init() {
 		"cluster": {summary: "Manage a named group of sandboxes (deploy/status/destroy)", run: runCluster},
 
 		// Cross-host listing and reports.
-		"global_status": {summary: "List every sandbox on the host", run: notImplemented},
-		"report":        {summary: "Generate a pg_gather HTML report", run: notImplemented},
+		"global_status": {summary: "List every sandbox on the host", run: runGlobalStatus},
+		"report":        {summary: "Generate a pg_gather HTML report", run: runReport},
 
 		// Help is a real implementation even at this stage.
 		"help": {summary: "Show help for a command", run: runHelp},
