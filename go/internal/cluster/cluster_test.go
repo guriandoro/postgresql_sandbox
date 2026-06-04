@@ -682,3 +682,358 @@ func (f *pidDroppingFake) closeAllListeners() {
 		delete(f.listeners, k)
 	}
 }
+
+// ---------------------------------------------------------------- //
+// Cluster Deploy — --init-sql
+// ---------------------------------------------------------------- //
+
+// TestDeployLogicalInitSQL covers the happy path in logical mode:
+// (a) psql -f ran with the init-sql file path against the publisher,
+// (b) CopySchema=true propagated to each subscriber (pg_dump
+// --schema-only was called for each), (c) the manifest reflects the
+// 3-member cluster.
+func TestDeployLogicalInitSQL(t *testing.T) {
+	root := t.TempDir()
+	clusterDir := filepath.Join(root, "mylog")
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	initSQL := filepath.Join(root, "schema.sql")
+	if err := os.WriteFile(initSQL, []byte("CREATE TABLE u(id int primary key);\n"), 0o644); err != nil {
+		t.Fatalf("write init-sql: %v", err)
+	}
+
+	primaryPort := freeProbePort(t)
+	runner := &pidDroppingFake{}
+	// SHOW wal_level → "logical" (same trick as TestDeployLogicalHappyPath).
+	runner.SetResult("psql", pgexec.Result{Stdout: []byte("logical\n"), ExitCode: 0})
+	t.Cleanup(func() { runner.closeAllListeners() })
+
+	_, err := Deploy(context.Background(), runner, DeployOptions{
+		ClusterDir:   clusterDir,
+		BinDir:       binDir,
+		Host:         "127.0.0.1",
+		Port:         primaryPort,
+		PortExplicit: true,
+		Nodes:        2,
+		Mode:         config.ClusterLogical,
+		SelfPath:     "/usr/local/bin/pg_sandbox",
+		InitSQLFile:  initSQL,
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	// Assert psql -f <init-sql-file> ran. The argv carries -f
+	// followed by the file path.
+	foundInitApply := false
+	for _, c := range runner.Calls {
+		if c.Name != "psql" {
+			continue
+		}
+		// Look for adjacent "-f", "<path>" in argv.
+		for i, a := range c.Args {
+			if a == "-f" && i+1 < len(c.Args) && c.Args[i+1] == initSQL {
+				foundInitApply = true
+				break
+			}
+		}
+		if foundInitApply {
+			break
+		}
+	}
+	if !foundInitApply {
+		t.Errorf("psql -f %s never invoked; calls=%+v", initSQL, runner.Calls)
+	}
+
+	// Assert pg_dump --schema-only ran for each subscriber. The
+	// pidDroppingFake routes everything through pgexec.Fake which
+	// records FakeCalls; CopySchema=true means each subscriber's
+	// deploy_subscriber → Subscribe path calls pg_dump on the
+	// publisher. We expect at least 2 pg_dump calls (one per
+	// subscriber).
+	pgDumpCount := 0
+	for _, c := range runner.Calls {
+		if c.Name == "pg_dump" {
+			pgDumpCount++
+		}
+	}
+	if pgDumpCount < 2 {
+		t.Errorf("expected pg_dump --schema-only >= 2 (one per subscriber); got %d; calls=%+v",
+			pgDumpCount, runner.Calls)
+	}
+
+	// Manifest sanity.
+	m, err := config.LoadCluster(clusterDir)
+	if err != nil {
+		t.Fatalf("LoadCluster: %v", err)
+	}
+	if m.Mode != config.ClusterLogical {
+		t.Errorf("mode: got %q, want %q", m.Mode, config.ClusterLogical)
+	}
+	if len(m.Members) != 3 {
+		t.Fatalf("members: got %d, want 3", len(m.Members))
+	}
+	// Verify each subscriber's on-disk config reflects copy_mode=schema.
+	for i := 1; i <= 2; i++ {
+		subDir := filepath.Join(clusterDir, m.Members[i].Name)
+		cfg, lerr := config.LoadSandbox(subDir)
+		if lerr != nil {
+			t.Errorf("LoadSandbox(%s): %v", subDir, lerr)
+			continue
+		}
+		if cfg.Logical == nil {
+			t.Errorf("subscriber %s: Logical block missing", m.Members[i].Name)
+			continue
+		}
+		if cfg.Logical.CopyMode != config.CopySchema {
+			t.Errorf("subscriber %s: copy_mode=%q, want %q",
+				m.Members[i].Name, cfg.Logical.CopyMode, config.CopySchema)
+		}
+	}
+}
+
+// TestDeployInitSQLPsqlFailure: the init-sql file applies via psql,
+// and psql returns non-zero. Deploy must return ExitInitSQLFailed,
+// and the cluster dir (with the partial primary) must remain on disk
+// for inspection. Matches the partial-state policy of the other
+// failure modes in this slice.
+func TestDeployInitSQLPsqlFailure(t *testing.T) {
+	root := t.TempDir()
+	clusterDir := filepath.Join(root, "badinit")
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	initSQL := filepath.Join(root, "bad.sql")
+	if err := os.WriteFile(initSQL, []byte("NOT VALID SQL;\n"), 0o644); err != nil {
+		t.Fatalf("write init-sql: %v", err)
+	}
+
+	primaryPort := freeProbePort(t)
+	runner := &pidDroppingFake{}
+	// Every psql call (including the init-sql -f apply) returns
+	// non-zero. Physical mode means no SHOW wal_level path; the
+	// only psql call is the init-sql apply itself.
+	runner.SetResult("psql", pgexec.Result{
+		Stdout:   nil,
+		Stderr:   []byte("psql:bad.sql:1: ERROR:  syntax error at or near \"NOT\"\n"),
+		ExitCode: 3,
+	})
+	t.Cleanup(func() { runner.closeAllListeners() })
+
+	_, err := Deploy(context.Background(), runner, DeployOptions{
+		ClusterDir:   clusterDir,
+		BinDir:       binDir,
+		Host:         "127.0.0.1",
+		Port:         primaryPort,
+		PortExplicit: true,
+		Nodes:        1,
+		Mode:         config.ClusterPhysical,
+		SelfPath:     "/usr/local/bin/pg_sandbox",
+		InitSQLFile:  initSQL,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("expected ExitInitSQLFailed, got nil")
+	}
+	if got := ExitCodeFor(err); got != ui.ExitInitSQLFailed {
+		t.Errorf("exit code: got %d, want %d", got, ui.ExitInitSQLFailed)
+	}
+	// Partial-state: cluster dir is left on disk for inspection,
+	// AND the partial manifest reflects the primary that did
+	// deploy. Both checks together prove we didn't half-clean-up.
+	if _, statErr := os.Stat(clusterDir); statErr != nil {
+		t.Errorf("cluster dir should remain after init-sql failure: %v", statErr)
+	}
+	if !config.IsClusterDir(clusterDir) {
+		t.Errorf("partial manifest not written under %s", clusterDir)
+	}
+}
+
+// TestDeployInitSQLFileMissing: a non-existent --init-sql path must
+// be rejected BEFORE the cluster dir is created. Filesystem-mutation
+// fail-fast (no half-created directories left for the user to clean).
+func TestDeployInitSQLFileMissing(t *testing.T) {
+	root := t.TempDir()
+	clusterDir := filepath.Join(root, "missing")
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	missingSQL := filepath.Join(root, "does-not-exist.sql")
+
+	runner := &pidDroppingFake{}
+	_, err := Deploy(context.Background(), runner, DeployOptions{
+		ClusterDir:   clusterDir,
+		BinDir:       binDir,
+		Host:         "127.0.0.1",
+		Port:         freeProbePort(t),
+		PortExplicit: true,
+		Nodes:        1,
+		Mode:         config.ClusterPhysical,
+		SelfPath:     "/usr/local/bin/pg_sandbox",
+		InitSQLFile:  missingSQL,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("expected usage error for missing --init-sql file, got nil")
+	}
+	if got := ExitCodeFor(err); got != ui.ExitUsage {
+		t.Errorf("exit code: got %d, want %d", got, ui.ExitUsage)
+	}
+	if _, statErr := os.Stat(clusterDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("cluster dir must not be created when --init-sql is missing; statErr=%v", statErr)
+	}
+}
+
+// TestDeployLogicalNoInitSQL is the regression guard for the "today"
+// behavior: when --init-sql is empty in logical mode, NO subscriber
+// runs pg_dump --schema-only (CopySchema=false), and NO psql -f is
+// issued against the publisher. This is the existing default.
+func TestDeployLogicalNoInitSQL(t *testing.T) {
+	root := t.TempDir()
+	clusterDir := filepath.Join(root, "noinit")
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+
+	primaryPort := freeProbePort(t)
+	runner := &pidDroppingFake{}
+	runner.SetResult("psql", pgexec.Result{Stdout: []byte("logical\n"), ExitCode: 0})
+	t.Cleanup(func() { runner.closeAllListeners() })
+
+	_, err := Deploy(context.Background(), runner, DeployOptions{
+		ClusterDir:   clusterDir,
+		BinDir:       binDir,
+		Host:         "127.0.0.1",
+		Port:         primaryPort,
+		PortExplicit: true,
+		Nodes:        2,
+		Mode:         config.ClusterLogical,
+		SelfPath:     "/usr/local/bin/pg_sandbox",
+		// InitSQLFile intentionally empty.
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	// No psql -f call.
+	for _, c := range runner.Calls {
+		if c.Name != "psql" {
+			continue
+		}
+		for i, a := range c.Args {
+			if a == "-f" && i+1 < len(c.Args) {
+				t.Errorf("unexpected psql -f call (no --init-sql set): %v", c.Args)
+			}
+		}
+	}
+	// No pg_dump call (CopySchema=false on every subscriber).
+	for _, c := range runner.Calls {
+		if c.Name == "pg_dump" {
+			t.Errorf("unexpected pg_dump call (no --init-sql set, so CopySchema must be false): %v", c.Args)
+		}
+	}
+	// On-disk subscriber configs must reflect copy_mode=all (the
+	// non--copy-schema, non--no-copy-data default).
+	m, lerr := config.LoadCluster(clusterDir)
+	if lerr != nil {
+		t.Fatalf("LoadCluster: %v", lerr)
+	}
+	for i := 1; i < len(m.Members); i++ {
+		subDir := filepath.Join(clusterDir, m.Members[i].Name)
+		cfg, lerr := config.LoadSandbox(subDir)
+		if lerr != nil {
+			t.Errorf("LoadSandbox(%s): %v", subDir, lerr)
+			continue
+		}
+		if cfg.Logical == nil {
+			t.Errorf("subscriber %s: Logical block missing", m.Members[i].Name)
+			continue
+		}
+		if cfg.Logical.CopyMode != config.CopyAll {
+			t.Errorf("subscriber %s: copy_mode=%q, want %q",
+				m.Members[i].Name, cfg.Logical.CopyMode, config.CopyAll)
+		}
+	}
+}
+
+// TestDeployPhysicalInitSQL: --init-sql in physical mode runs the
+// SQL against the primary; standbys are deployed unchanged (no
+// auto-copy-schema, since the flag doesn't apply to physical
+// replication).
+func TestDeployPhysicalInitSQL(t *testing.T) {
+	root := t.TempDir()
+	clusterDir := filepath.Join(root, "physinit")
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	initSQL := filepath.Join(root, "schema.sql")
+	if err := os.WriteFile(initSQL, []byte("CREATE TABLE u(id int primary key);\n"), 0o644); err != nil {
+		t.Fatalf("write init-sql: %v", err)
+	}
+
+	primaryPort := freeProbePort(t)
+	runner := &pidDroppingFake{}
+	t.Cleanup(func() { runner.closeAllListeners() })
+
+	_, err := Deploy(context.Background(), runner, DeployOptions{
+		ClusterDir:   clusterDir,
+		BinDir:       binDir,
+		Host:         "127.0.0.1",
+		Port:         primaryPort,
+		PortExplicit: true,
+		Nodes:        1,
+		Mode:         config.ClusterPhysical,
+		SelfPath:     "/usr/local/bin/pg_sandbox",
+		InitSQLFile:  initSQL,
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("Deploy: %v", err)
+	}
+
+	// psql -f was issued against the primary.
+	foundInitApply := false
+	for _, c := range runner.Calls {
+		if c.Name != "psql" {
+			continue
+		}
+		for i, a := range c.Args {
+			if a == "-f" && i+1 < len(c.Args) && c.Args[i+1] == initSQL {
+				foundInitApply = true
+				break
+			}
+		}
+		if foundInitApply {
+			break
+		}
+	}
+	if !foundInitApply {
+		t.Errorf("psql -f %s never invoked in physical mode; calls=%+v", initSQL, runner.Calls)
+	}
+
+	// No pg_dump call. CopySchema is a logical-only knob; physical
+	// standby deploy never calls pg_dump.
+	for _, c := range runner.Calls {
+		if c.Name == "pg_dump" {
+			t.Errorf("pg_dump should not be called in physical mode: %v", c.Args)
+		}
+	}
+
+	// Manifest reflects physical cluster.
+	m, lerr := config.LoadCluster(clusterDir)
+	if lerr != nil {
+		t.Fatalf("LoadCluster: %v", lerr)
+	}
+	if m.Mode != config.ClusterPhysical {
+		t.Errorf("mode: got %q, want %q", m.Mode, config.ClusterPhysical)
+	}
+	if len(m.Members) != 2 {
+		t.Fatalf("members: got %d, want 2", len(m.Members))
+	}
+	if m.Members[1].Role != config.RoleStandby {
+		t.Errorf("member[1] role: got %q, want standby", m.Members[1].Role)
+	}
+}

@@ -151,6 +151,13 @@ const (
 	// returned by any code path; reserved so the number is stable.
 	ExitRestartRequiredRefused ExitCode = 28
 
+	// ExitInitSQLFailed: the --init-sql file passed to
+	// `cluster deploy` failed to apply against the primary/publisher.
+	// psql -v ON_ERROR_STOP=1 returned non-zero. The cluster dir +
+	// partial primary stay on disk for inspection so the user can
+	// read the captured psql stderr and diagnose. SPEC §6.11.
+	ExitInitSQLFailed ExitCode = 29
+
 	// ExitBuildFailed (Phase 2): source build failed.
 	ExitBuildFailed ExitCode = 30
 )

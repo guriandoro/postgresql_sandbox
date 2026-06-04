@@ -41,6 +41,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
@@ -105,6 +106,33 @@ type DeployOptions struct {
 	// so the convenience scripts inside member dirs invoke the same
 	// binary. See sandbox.DeployOptions.SelfPath.
 	SelfPath string
+
+	// InitSQLFile is the absolute path of a SQL file to run against
+	// the primary/publisher right after it starts (and, in logical
+	// mode, after the publication is created). Empty means "do
+	// nothing" — behavior matches earlier slices.
+	//
+	// The file is applied via `psql -X -v ON_ERROR_STOP=1 -f <path>`
+	// so any SQL error aborts the whole deploy with
+	// ExitInitSQLFailed; we never proceed to subscribers with a
+	// half-initialized publisher.
+	//
+	// In --logical mode, setting InitSQLFile auto-enables
+	// CopySchema=true on every subscriber's Subscribe call. The
+	// publication is FOR ALL TABLES, so the schema produced by the
+	// init file is in the publication; combined with the
+	// subscription's default copy_data=true, subscribers get an
+	// initial snapshot of the seeded rows. This unblocks the
+	// natural "deploy logical cluster, then create-and-insert on the
+	// publisher" workflow that today fails because PG logical
+	// replication does not propagate DDL — only row data into
+	// already-existing tables.
+	//
+	// Note: --init-sql handles INITIAL schema only. For schema
+	// changes AFTER deploy, the user has to apply DDL to each
+	// member by hand (a future `cluster sync-schema` slice is the
+	// planned follow-up).
+	InitSQLFile string
 }
 
 // Deploy is `cluster deploy`'s entry point. See file-level doc
@@ -124,6 +152,19 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 	// semantics so users can pre-create with specific permissions.
 	if err := checkClusterDirAvailable(opts.ClusterDir); err != nil {
 		return nil, err
+	}
+
+	// --init-sql preflight (fail fast). We check the file is
+	// readable BEFORE we mkdir the cluster dir so a bad path doesn't
+	// leave an empty cluster dir behind. A Stat is enough: psql
+	// itself will reopen the file at exec time, and the os.Open in
+	// the path we use (loadInitSQL) catches the same errors with
+	// caller-helpful context.
+	if opts.InitSQLFile != "" {
+		if _, err := os.Stat(opts.InitSQLFile); err != nil {
+			return nil, wrapExit(ExitUsage,
+				fmt.Errorf("cluster.Deploy: --init-sql file not readable: %w", err))
+		}
 	}
 
 	if opts.SyncCount > 0 {
@@ -199,6 +240,80 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 		}
 	}
 
+	// --init-sql application. Runs against the primary/publisher
+	// AFTER publish (in logical mode) so the publication FOR ALL
+	// TABLES is already in place when the file's CREATE TABLE
+	// statements land — every newly-created table is therefore in
+	// the publication's table set, and subscribers attaching next
+	// with copy_data=true get an initial snapshot of the seeded
+	// rows.
+	//
+	// We use `psql -X -v ON_ERROR_STOP=1 -f <path>`:
+	//
+	//   - -X: don't read ~/.psqlrc (predictable behavior under tests
+	//     and unattended runs).
+	//   - -v ON_ERROR_STOP=1: REQUIRED — without it a SQL error
+	//     would leave the publisher in a half-initialized state and
+	//     we'd silently proceed to subscribers that copy half a
+	//     schema. With it, the first SQL error aborts psql with
+	//     non-zero exit and we surface ExitInitSQLFailed.
+	//   - -f <path>: hand psql the file path directly. We considered
+	//     RunWithStdin (read the file in-process and pipe it), but
+	//     -f gives psql ownership of file open/close, lets psql
+	//     report line numbers against the user's file in errors,
+	//     and skips an extra full-file read on our side. Both
+	//     mechanisms were called out as acceptable in the brief;
+	//     -f wins on diagnostic quality.
+	if opts.InitSQLFile != "" {
+		fmt.Fprintf(stderrW, "level=INFO msg=%q file=%q member=%q\n",
+			"cluster: applying --init-sql to primary/publisher",
+			opts.InitSQLFile, primaryName)
+		primaryCfg, err := config.LoadSandbox(primaryDir)
+		if err != nil {
+			_ = saveManifest(opts.ClusterDir, cluster, opts.Mode, members, opts, stderrW)
+			return nil, wrapExit(ExitInitSQLFailed,
+				fmt.Errorf("cluster: load primary config for --init-sql: %w", err))
+		}
+		res := runner.Run(ctx, "psql",
+			"-X",
+			"-v", "ON_ERROR_STOP=1",
+			"-h", primaryCfg.Host,
+			"-p", fmt.Sprintf("%d", primaryCfg.Port),
+			"-U", primaryCfg.Superuser,
+			"-d", primaryCfg.DefaultDatabase,
+			"-f", opts.InitSQLFile,
+		)
+		if res.Err != nil || res.ExitCode != 0 {
+			// Surface psql's stderr so the user can see the actual
+			// SQL error (line number, table name, ...) without
+			// hunting a transient log file.
+			if trimmed := strings.TrimRight(string(res.Stderr), "\n"); trimmed != "" {
+				fmt.Fprintf(stderrW,
+					"level=ERROR msg=%q output=%q\n",
+					"psql --init-sql stderr", trimmed)
+			}
+			// Persist whatever members we have (just the primary so
+			// far) so on-disk state matches reality. We deliberately
+			// do NOT undeploy the primary: the brief calls out
+			// matching the existing partial-state behavior — keep
+			// the half-initialized sandbox on disk for inspection.
+			_ = saveManifest(opts.ClusterDir, cluster, opts.Mode, members, opts, stderrW)
+			return nil, wrapExit(ExitInitSQLFailed,
+				fmt.Errorf("cluster: --init-sql apply (psql -f %s): exit=%d: %w",
+					opts.InitSQLFile, res.ExitCode, res.Err))
+		}
+
+		// Auto-enable copy_schema on every subscriber when we're in
+		// logical mode + --init-sql was used. Rationale logged at
+		// info level so the user sees exactly why their subscribers
+		// will run pg_dump --schema-only.
+		if opts.Mode == config.ClusterLogical {
+			fmt.Fprintf(stderrW, "level=INFO msg=%q cluster=%q\n",
+				"auto-enabling --copy-schema for subscribers because --init-sql was provided",
+				cluster)
+		}
+	}
+
 	// SPEC §6.11 step 5: deploy members 1..N.
 	//
 	// Per-member port: PortExplicit is false here so each member
@@ -236,6 +351,17 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 			// SubName defaults to "<member-name>_sub" inside
 			// sandbox.Subscribe; we don't override it here so the
 			// default is what hits pg_subscription.
+
+			// When --init-sql is set, we auto-enable --copy-schema
+			// on every subscriber. See the --init-sql comment block
+			// in Deploy above for the rationale: the init file
+			// CREATEs tables on the publisher AFTER publish FOR ALL
+			// TABLES, so those tables are in the publication's
+			// table set; subscribers therefore need the schema
+			// present locally before copy_data=true can land rows.
+			if opts.InitSQLFile != "" {
+				memberOpts.CopySchema = true
+			}
 		}
 
 		memberRes, mErr := sandbox.Deploy(ctx, runner, memberOpts, stderrW)
@@ -276,6 +402,17 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 
 	fmt.Fprintf(stderrW, "level=INFO msg=%q name=%q mode=%q members=%d\n",
 		"cluster deployed", cluster, opts.Mode, len(members))
+
+	// Post-deploy hint about ongoing DDL — only meaningful in
+	// logical mode, where PG does not propagate DDL automatically.
+	// In physical mode standbys catch up via streaming replication,
+	// so emitting this hint would be misleading.
+	if opts.InitSQLFile != "" && opts.Mode == config.ClusterLogical {
+		fmt.Fprintf(stderrW, "level=INFO msg=%q cluster=%q\n",
+			"note: cluster deploy --init-sql handles INITIAL schema only; "+
+				"for schema changes after deploy, apply DDL to each member",
+			cluster)
+	}
 	return manifest, nil
 }
 

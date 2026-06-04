@@ -31,6 +31,7 @@ const (
 	ExitClusterDeployFailed   = ui.ExitClusterDeployFailed
 	ExitClusterDestroyPartial = ui.ExitClusterDestroyPartial
 	ExitBadConfig             = ui.ExitBadConfig
+	ExitInitSQLFailed         = ui.ExitInitSQLFailed
 )
 
 // exitErr pairs a ui.ExitCode with an underlying error so the CLI

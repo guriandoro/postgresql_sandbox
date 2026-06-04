@@ -73,9 +73,16 @@ func printClusterUsage(w io.Writer) {
 	fmt.Fprintln(w, "  pg_sandbox cluster deploy  -s <cluster-dir> -b <bin-dir> -N <n> [--logical]")
 	fmt.Fprintln(w, "                             [--host <addr>] [--port <n>] [--user <name>] [--dbname <name>]")
 	fmt.Fprintln(w, "                             [--slot-prefix <pfx>] [--logical-pub-name <name>]")
-	fmt.Fprintln(w, "                             [--sync-count <n>]")
+	fmt.Fprintln(w, "                             [--sync-count <n>] [--init-sql <file>]")
 	fmt.Fprintln(w, "  pg_sandbox cluster status  -s <cluster-dir> [--json]")
 	fmt.Fprintln(w, "  pg_sandbox cluster destroy -s <cluster-dir> [--force]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Notes:")
+	fmt.Fprintln(w, "  --init-sql runs the file against the primary/publisher AFTER it starts (and AFTER")
+	fmt.Fprintln(w, "  the publication is created in --logical mode). In --logical mode it also auto-enables")
+	fmt.Fprintln(w, "  --copy-schema on every subscriber so initial tables+data replicate end-to-end.")
+	fmt.Fprintln(w, "  It handles INITIAL schema only; for schema changes after deploy, apply DDL to each")
+	fmt.Fprintln(w, "  member by hand.")
 }
 
 // ---------------------------------------------------------------- //
@@ -99,6 +106,7 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 		logicalMode bool
 		logicalPub  string
 		syncCount   int
+		initSQLFile string
 	)
 	fs.StringVar(&clusterDir, "sandbox-dir", "", "Target cluster directory (required)")
 	fs.StringVar(&clusterDir, "s", "", "Alias for --sandbox-dir")
@@ -117,6 +125,7 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 	fs.BoolVar(&logicalMode, "logical", false, "Build a logical pub/sub cluster instead of physical streaming")
 	fs.StringVar(&logicalPub, "logical-pub-name", "", "Publication name when --logical is set (default pgs_pub)")
 	fs.IntVar(&syncCount, "sync-count", 0, "First K members synchronous (deferred; treated as async this slice)")
+	fs.StringVar(&initSQLFile, "init-sql", "", "Path to a SQL file run against the primary/publisher after it starts (uses psql -v ON_ERROR_STOP=1). In --logical mode, also enables --copy-schema on subscribers.")
 
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
@@ -173,6 +182,7 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 		PubName:      logicalPub,
 		SyncCount:    syncCount,
 		SelfPath:     selfPath,
+		InitSQLFile:  initSQLFile,
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)

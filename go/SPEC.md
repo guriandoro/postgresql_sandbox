@@ -490,9 +490,10 @@ Prune unused PostgreSQL install dirs under `binDir`. Cross-references with sandb
 | 26 | `EXIT_INTERRUPTED` | Caught SIGINT/SIGTERM mid-operation |
 | 27 | `EXIT_NOT_A_TTY` | Confirmation needed but stdin not a TTY and `--force` not set |
 | 28 | `EXIT_RESTART_REQUIRED_REFUSED` | Reserved for the `--no-restart` future flag |
+| 29 | `EXIT_INIT_SQL_FAILED` | `cluster deploy --init-sql` file failed to apply against the primary/publisher |
 | 30 | `EXIT_BUILD_FAILED` | Phase 2: source build failed |
 
-Reserved range 29 and 31–63 left for additions. Codes >= 64 are reserved for shell convention (e.g. signals).
+Reserved range 31–63 left for additions. Codes >= 64 are reserved for shell convention (e.g. signals).
 
 ---
 
