@@ -119,11 +119,17 @@ func New(binDir string) *Exec { return &Exec{BinDir: binDir} }
 //
 //  1. If name contains a path separator, treat it as an explicit
 //     path. Use it as-is if it exists.
-//  2. If BinDir is set, try BinDir/name. If the file exists and is
-//     executable by the current user, return it.
+//  2. If BinDir is set, stat it first. A missing or non-directory
+//     BinDir surfaces with a focused error rather than being
+//     buried inside a "<name> not found in BinDir or PATH" wrap.
+//     Then try BinDir/name; if it exists and is executable,
+//     return it.
 //  3. Fall back to exec.LookPath (which scans PATH).
 //
-// Returns the absolute path on success.
+// Returns the absolute path on success. On failure the error names
+// the actual problem (bin-dir missing, binary not in bin-dir,
+// nothing in PATH) without wrapping it under the underlying
+// os/exec error string.
 func (e *Exec) Locate(name string) (string, error) {
 	if strings.ContainsRune(name, os.PathSeparator) {
 		// User gave us an explicit path. Trust it but check it
@@ -135,17 +141,35 @@ func (e *Exec) Locate(name string) (string, error) {
 		return filepath.Clean(name), nil
 	}
 	if e.BinDir != "" {
+		// Stat BinDir first so a typo or wrong-version path (e.g.
+		// /opt/postgresql/18.4 when the install on disk is 18.3)
+		// surfaces as "bin-dir does not exist" instead of the more
+		// confusing "<binary> not found in BinDir … or PATH: exec:
+		// …" double-wrap users used to see.
+		st, statErr := os.Stat(e.BinDir)
+		switch {
+		case os.IsNotExist(statErr):
+			return "", fmt.Errorf("bin-dir does not exist: %s", e.BinDir)
+		case statErr != nil:
+			return "", fmt.Errorf("bin-dir %s: %w", e.BinDir, statErr)
+		case !st.IsDir():
+			return "", fmt.Errorf("bin-dir is not a directory: %s", e.BinDir)
+		}
 		cand := filepath.Join(e.BinDir, name)
 		if isExecutable(cand) {
 			return cand, nil
 		}
+		// BinDir is a real directory but doesn't contain the
+		// binary. Fall back to PATH; on failure, frame the error
+		// around the bin-dir since that's what the user configured.
+		if p, err := exec.LookPath(name); err == nil {
+			return p, nil
+		}
+		return "", fmt.Errorf("%s not found in bin-dir %s (and not in PATH)", name, e.BinDir)
 	}
 	p, err := exec.LookPath(name)
 	if err != nil {
-		// Wrap with our package prefix so the user knows the
-		// lookup came from us, not directly from os/exec.
-		return "", fmt.Errorf("pgexec.Locate: %s not found in BinDir %q or PATH: %w",
-			name, e.BinDir, err)
+		return "", fmt.Errorf("%s not found in PATH (no --bin-dir / PGS_BIN_DIR set)", name)
 	}
 	return p, nil
 }

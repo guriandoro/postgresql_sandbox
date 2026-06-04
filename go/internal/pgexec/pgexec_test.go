@@ -142,6 +142,45 @@ func TestLocateMissing(t *testing.T) {
 	}
 }
 
+// Regression: a BinDir pointing at a path that doesn't exist
+// (typical: PGS_BIN_DIR=/opt/postgresql/18.4 when the install on
+// disk is 18.3) must surface as "bin-dir does not exist" rather
+// than the more confusing "<name> not found in BinDir or PATH"
+// wrap that used to hide the root cause.
+func TestLocateBinDirDoesNotExist(t *testing.T) {
+	e := &Exec{BinDir: filepath.Join(t.TempDir(), "definitely-not-here")}
+	_, err := e.Locate("initdb")
+	if err == nil {
+		t.Fatal("Locate: want error for missing BinDir, got nil")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "bin-dir does not exist") {
+		t.Errorf("Locate error should name the missing bin-dir; got %q", msg)
+	}
+	if strings.Contains(msg, "PATH") {
+		t.Errorf("Locate error for missing BinDir shouldn't mention PATH; got %q", msg)
+	}
+}
+
+// Regression: a BinDir that exists but isn't a directory must
+// surface as "bin-dir is not a directory", not as a generic
+// "<name> not found" error.
+func TestLocateBinDirIsAFile(t *testing.T) {
+	tmp := t.TempDir()
+	notADir := filepath.Join(tmp, "notadir")
+	if err := os.WriteFile(notADir, []byte("x"), 0o644); err != nil {
+		t.Fatalf("write notadir: %v", err)
+	}
+	e := &Exec{BinDir: notADir}
+	_, err := e.Locate("initdb")
+	if err == nil {
+		t.Fatal("Locate: want error for non-dir BinDir, got nil")
+	}
+	if !strings.Contains(err.Error(), "is not a directory") {
+		t.Errorf("Locate error should call out non-directory; got %q", err)
+	}
+}
+
 func TestRunLogsAtDebug(t *testing.T) {
 	// When Logger is set, Run emits a debug line with the exec
 	// path and args. Verify the prefix and args are visible.

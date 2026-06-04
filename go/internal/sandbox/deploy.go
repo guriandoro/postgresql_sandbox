@@ -184,6 +184,16 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 		return nil, err
 	}
 
+	// Pre-flight the bin-dir before any side effects (mkdir, log
+	// lines). Without this, a missing or mistyped bin-dir surfaces
+	// AFTER `level=INFO msg="initdb starting"` has printed and AFTER
+	// the sandbox dir has been created, then arrives wrapped as
+	// `initdb exit=-1: …` which buries the real cause. Locating
+	// initdb is cheap and the same binary every deploy path needs.
+	if _, err := runner.Locate("initdb"); err != nil {
+		return nil, wrapExit(ExitBadConfig, err)
+	}
+
 	// SPEC §6.1 step 2: refuse to overwrite a non-empty target. We
 	// allow an empty existing dir for the convenience of users who
 	// pre-create it with specific permissions.

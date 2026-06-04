@@ -26,6 +26,7 @@ import (
 const (
 	ExitOK                 = ui.ExitOK
 	ExitUsage              = ui.ExitUsage
+	ExitBadConfig          = ui.ExitBadConfig
 	ExitNotASandbox        = ui.ExitNotASandbox
 	ExitSandboxExists      = ui.ExitSandboxExists
 	ExitPortInUse          = ui.ExitPortInUse

@@ -152,6 +152,43 @@ func TestDeployRefusesNonEmptyDir(t *testing.T) {
 	}
 }
 
+// Regression: a missing / mistyped BinDir must fail BEFORE Deploy
+// prints `level=INFO msg="initdb starting"` or creates the sandbox
+// dir. The pre-flight Locate("initdb") catches it and the error
+// surfaces under ExitBadConfig with a focused message naming the
+// bin-dir as the root cause.
+func TestDeployPreflightsBinDir(t *testing.T) {
+	tmp := t.TempDir()
+	sandboxDir := filepath.Join(tmp, "sb")
+
+	f := &pgexec.Fake{LocateErr: errors.New("bin-dir does not exist: /opt/postgresql/18.4")}
+	var stderr bytes.Buffer
+	_, err := Deploy(context.Background(), f, DeployOptions{
+		SandboxDir:   sandboxDir,
+		BinDir:       filepath.Join(tmp, "bin"),
+		Port:         freeProbePort(t),
+		PortExplicit: true,
+	}, &stderr)
+	if err == nil {
+		t.Fatal("Deploy: expected pre-flight error, got nil")
+	}
+	if got := ExitCodeFor(err); got != ui.ExitBadConfig {
+		t.Errorf("exit code: got %d, want %d (ExitBadConfig)", got, ui.ExitBadConfig)
+	}
+	// Nothing should have been exec'd.
+	if len(f.Calls) != 0 {
+		t.Errorf("pre-flight should run no commands; calls=%v", f.Calls)
+	}
+	// The misleading "initdb starting" banner must not have printed.
+	if strings.Contains(stderr.String(), "initdb starting") {
+		t.Errorf("pre-flight failure printed 'initdb starting' banner; stderr=%q", stderr.String())
+	}
+	// The sandbox dir must not have been created.
+	if _, statErr := os.Stat(sandboxDir); !os.IsNotExist(statErr) {
+		t.Errorf("pre-flight failure created the sandbox dir; stat err=%v", statErr)
+	}
+}
+
 func TestDeployRefusesMissingRequiredFields(t *testing.T) {
 	f := &pgexec.Fake{}
 	cases := []struct {
