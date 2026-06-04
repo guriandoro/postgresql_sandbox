@@ -70,8 +70,11 @@ import (
 //     /path`) requires its value to appear immediately after it, so
 //     reordering would break the pair. Don't put value-taking flag
 //     names in `knownBoolFlags`. Production callers should pass
-//     `boolFlagNames(fs)` to derive the list from a parsed FlagSet,
-//     which guarantees this caveat automatically (BoolVar flags are
+//     `boolFlagNames(fs)` to derive the list from a FlagSet whose
+//     flags have already been registered (boolFlagNames needs the
+//     registrations, not Parse — and in fact must run before Parse,
+//     since the reorder happens on argv on the way INTO Parse).
+//     That guarantees this caveat automatically (BoolVar flags are
 //     bool; StringVar/IntVar/etc. are not). Tests may still pass a
 //     hand-written bare-name list directly.
 //
