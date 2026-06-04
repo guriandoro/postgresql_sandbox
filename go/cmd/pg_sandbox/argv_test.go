@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"sort"
 	"strings"
 	"testing"
 )
@@ -451,9 +450,11 @@ func TestParseSubcommandArgs_promotesTrailingBoolFlag(t *testing.T) {
 func TestBoolFlagNames(t *testing.T) {
 	// boolFlagNames must return exactly the bare names of every
 	// BoolVar-registered flag on the FlagSet, and must skip flags
-	// that take a value (StringVar, IntVar, etc.). Order doesn't
-	// matter — reorderBoolFlags treats the slice as a set — so we
-	// compare after sorting.
+	// that take a value (StringVar, IntVar, etc.). boolFlagNames
+	// builds its slice via fs.VisitAll, which the stdlib documents
+	// as iterating flags in lexicographic name order — so a direct
+	// reflect.DeepEqual against a hand-sorted want is sound without
+	// any defensive sort.Strings on either side.
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	var (
 		force   bool
@@ -470,8 +471,6 @@ func TestBoolFlagNames(t *testing.T) {
 
 	got := boolFlagNames(fs)
 	want := []string{"f", "force"}
-	sort.Strings(got)
-	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
 	}
