@@ -1,0 +1,8 @@
+# Compiled binaries — produced by `make build` and `make build-all`.
+# Released builds are published as release artifacts, not via the repo.
+bin/
+
+# Common Go scratch files.
+*.test
+*.out
+coverage.txt

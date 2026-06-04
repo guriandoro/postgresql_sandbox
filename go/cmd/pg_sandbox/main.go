@@ -38,34 +38,44 @@ var (
 // Keeping the list here (rather than scattered through internal
 // packages) means the help output, validation, and dispatcher all
 // stay in sync from a single source of truth.
-var subcommands = map[string]subcommand{
-	// Single-instance lifecycle.
-	"deploy":  {summary: "Create a new sandbox", run: notImplemented},
-	"destroy": {summary: "Tear down a sandbox", run: notImplemented},
-	"start":   {summary: "Start a sandbox's PostgreSQL instance", run: notImplemented},
-	"stop":    {summary: "Stop a sandbox's PostgreSQL instance", run: notImplemented},
-	"restart": {summary: "Restart a sandbox's PostgreSQL instance", run: notImplemented},
-	"status":  {summary: "Report sandbox running/replication state", run: notImplemented},
-	"use":     {summary: "Open psql against a sandbox", run: notImplemented},
-	"run":     {summary: "Run any PG utility against a sandbox", run: notImplemented},
-	"promote": {summary: "Promote a physical standby", run: notImplemented},
+//
+// The map is populated in init() rather than as a var initializer
+// because `runHelp` reads back from `subcommands` to render help
+// for a named command — a static var-initializer cycle the Go
+// compiler refuses to compile. Populating from init() defers the
+// reference until after all package-level identifiers exist.
+var subcommands map[string]subcommand
 
-	// Configuration (replaces Python `setenv`; see SPEC §3 and §6.7).
-	"config": {summary: "Inspect/mutate sandbox or global config", run: notImplemented},
+func init() {
+	subcommands = map[string]subcommand{
+		// Single-instance lifecycle.
+		"deploy":  {summary: "Create a new sandbox", run: notImplemented},
+		"destroy": {summary: "Tear down a sandbox", run: notImplemented},
+		"start":   {summary: "Start a sandbox's PostgreSQL instance", run: notImplemented},
+		"stop":    {summary: "Stop a sandbox's PostgreSQL instance", run: notImplemented},
+		"restart": {summary: "Restart a sandbox's PostgreSQL instance", run: notImplemented},
+		"status":  {summary: "Report sandbox running/replication state", run: notImplemented},
+		"use":     {summary: "Open psql against a sandbox", run: notImplemented},
+		"run":     {summary: "Run any PG utility against a sandbox", run: notImplemented},
+		"promote": {summary: "Promote a physical standby", run: notImplemented},
 
-	// Logical replication.
-	"publish":   {summary: "Create a logical replication publication", run: notImplemented},
-	"subscribe": {summary: "Create a logical replication subscription", run: notImplemented},
+		// Configuration (replaces Python `setenv`; see SPEC §3 and §6.7).
+		"config": {summary: "Inspect/mutate sandbox or global config", run: notImplemented},
 
-	// Cluster orchestration.
-	"cluster": {summary: "Manage a named group of sandboxes (deploy/status/destroy)", run: notImplemented},
+		// Logical replication.
+		"publish":   {summary: "Create a logical replication publication", run: notImplemented},
+		"subscribe": {summary: "Create a logical replication subscription", run: notImplemented},
 
-	// Cross-host listing and reports.
-	"global_status": {summary: "List every sandbox on the host", run: notImplemented},
-	"report":        {summary: "Generate a pg_gather HTML report", run: notImplemented},
+		// Cluster orchestration.
+		"cluster": {summary: "Manage a named group of sandboxes (deploy/status/destroy)", run: notImplemented},
 
-	// Help is a real implementation even at this stage.
-	"help": {summary: "Show help for a command", run: runHelp},
+		// Cross-host listing and reports.
+		"global_status": {summary: "List every sandbox on the host", run: notImplemented},
+		"report":        {summary: "Generate a pg_gather HTML report", run: notImplemented},
+
+		// Help is a real implementation even at this stage.
+		"help": {summary: "Show help for a command", run: runHelp},
+	}
 }
 
 // subcommand bundles the metadata needed by the dispatcher: a short
