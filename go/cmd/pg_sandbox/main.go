@@ -16,6 +16,8 @@ import (
 	"os"
 	"runtime"
 	"strings"
+
+	"github.com/guriandoro/postgresql_sandbox/go/internal/ui"
 )
 
 // Build-stamped via -ldflags at link time. See Makefile.
@@ -97,7 +99,7 @@ func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
 		printTopHelp(os.Stderr)
-		os.Exit(2) // EXIT_USAGE (see SPEC §8)
+		os.Exit(ui.ExitUsage.Int())
 	}
 
 	// Strip any leading global flags that we handle here. Anything
@@ -107,10 +109,10 @@ func main() {
 		case "--version", "-V":
 			fmt.Fprintf(os.Stdout, "pg_sandbox %s (commit %s, %s/%s, %s)\n",
 				version, commit, runtime.GOOS, runtime.GOARCH, runtime.Version())
-			os.Exit(0)
+			os.Exit(ui.ExitOK.Int())
 		case "--help", "-h":
 			printTopHelp(os.Stdout)
-			os.Exit(0)
+			os.Exit(ui.ExitOK.Int())
 		default:
 			// Not a known top-level-only flag; let the subcommand
 			// dispatcher handle it.
@@ -125,7 +127,7 @@ dispatch:
 	if !ok {
 		fmt.Fprintf(os.Stderr, "pg_sandbox: unknown command %q\n", name)
 		fmt.Fprintln(os.Stderr, "Run 'pg_sandbox help' to see available commands.")
-		os.Exit(2) // EXIT_USAGE
+		os.Exit(ui.ExitUsage.Int())
 	}
 	os.Exit(cmd.run(rest, os.Stdout, os.Stderr))
 }
@@ -137,7 +139,7 @@ dispatch:
 func notImplemented(_ []string, _, stderr io.Writer) int {
 	fmt.Fprintln(stderr, "pg_sandbox: this command is not yet implemented in the Go port.")
 	fmt.Fprintln(stderr, "See SPEC.md for the planned behavior, or use the Python pg_sandbox at the repo root.")
-	return 1 // EXIT_GENERIC
+	return ui.ExitGeneric.Int()
 }
 
 // runHelp implements `pg_sandbox help [command]`. With no argument it
@@ -147,17 +149,17 @@ func notImplemented(_ []string, _, stderr io.Writer) int {
 func runHelp(args []string, stdout, _ io.Writer) int {
 	if len(args) == 0 {
 		printTopHelp(stdout)
-		return 0
+		return ui.ExitOK.Int()
 	}
 	name := args[0]
 	cmd, ok := subcommands[name]
 	if !ok {
 		fmt.Fprintf(stdout, "pg_sandbox: no help available for %q\n", name)
-		return 2
+		return ui.ExitUsage.Int()
 	}
 	fmt.Fprintf(stdout, "pg_sandbox %s — %s\n", name, cmd.summary)
 	fmt.Fprintln(stdout, "(Detailed flags TBD; see SPEC.md §6 for the planned behavior.)")
-	return 0
+	return ui.ExitOK.Int()
 }
 
 // printTopHelp writes the top-level usage to the given writer. We
