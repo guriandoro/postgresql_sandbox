@@ -1,0 +1,54 @@
+# golangci-lint configuration for the Go port of postgresql_sandbox.
+#
+# This file is OPTIONAL: the Makefile's `lint` target skips golangci-lint
+# gracefully when it isn't installed. The configuration is intentionally
+# conservative — we enable the core correctness/style linters that are
+# stable across golangci-lint releases and don't fight idiomatic Go.
+
+run:
+  # Don't run on _test.go-only changes too eagerly; CI handles that
+  # separately. Locally we want fast feedback.
+  timeout: 3m
+  tests: true
+
+linters:
+  # Start with everything disabled, then opt in. Easier to reason
+  # about and stable across linter version bumps (golangci's default
+  # set drifts over time).
+  disable-all: true
+  enable:
+    - errcheck       # unchecked errors
+    - govet          # standard go vet
+    - ineffassign    # ineffectual assignments
+    - staticcheck    # honnef.co/go/tools — broad correctness
+    - unused         # dead code
+    - gofmt          # formatting
+    - goimports      # import ordering
+    - misspell       # English typos
+    - revive         # configurable golint successor
+    - gosec          # security (light: shells out to PG binaries on purpose)
+
+linters-settings:
+  misspell:
+    locale: US
+  revive:
+    rules:
+      - name: exported   # require doc comments on exported identifiers
+      - name: package-comments
+      - name: var-naming
+      - name: error-return
+      - name: error-naming
+      - name: increment-decrement
+
+issues:
+  # Don't suppress findings in generated files (we have none yet).
+  exclude-dirs:
+    - testdata
+  # gosec G204 (subprocess with variable) is unavoidable for this
+  # tool — we shell out to PG binaries by design. Silence in the
+  # pgexec package only, not project-wide.
+  exclude-rules:
+    - path: internal/pgexec/
+      linters:
+        - gosec
+      text: "G204"
