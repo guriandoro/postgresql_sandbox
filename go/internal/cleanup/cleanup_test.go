@@ -284,12 +284,36 @@ func TestRenderPlan_emitsScanRootHeader(t *testing.T) {
 	}
 	// The header must precede the table, and the install-root line
 	// must come before the sandbox-root line.
-	installIdx := strings.Index(out, "Install root:")
-	bannerIdx := strings.Index(out, "Scanning sandbox root:")
-	tableIdx := strings.Index(out, "VERSION")
-	if installIdx < 0 || bannerIdx < 0 || tableIdx < 0 || installIdx >= bannerIdx || bannerIdx >= tableIdx {
-		t.Errorf("header order wrong; install=%d banner=%d table=%d", installIdx, bannerIdx, tableIdx)
+	//
+	// The order check is line-anchored (find the line that STARTS
+	// WITH each marker) rather than using strings.Index over the whole
+	// buffer. Why: the NOTE prose already mentions knobs like
+	// "--bin-dir <path>" and "PGS_BIN_DIR", and a future maintainer
+	// might add prose like "(Install root)" or rephrase to mention
+	// "Scanning sandbox root" inline. A byte-index search would then
+	// silently measure NOTE-prose positions instead of the actual
+	// label lines, and the invariant could rot while the test still
+	// passes. Anchoring on line prefixes makes the check robust to
+	// prose drift anywhere else in the output.
+	installLine := lineIndexWithPrefix(out, "Install root:")
+	bannerLine := lineIndexWithPrefix(out, "Scanning sandbox root:")
+	tableLine := lineIndexWithPrefix(out, "VERSION")
+	if installLine < 0 || bannerLine < 0 || tableLine < 0 || installLine >= bannerLine || bannerLine >= tableLine {
+		t.Errorf("header order wrong; install=%d banner=%d table=%d\nout:\n%s", installLine, bannerLine, tableLine, out)
 	}
+}
+
+// lineIndexWithPrefix returns the 0-based index of the first line in
+// s whose content starts with prefix, or -1 if no such line exists.
+// Used by the header-order check so prose mentions of label
+// substrings elsewhere in the output can't fool the assertion.
+func lineIndexWithPrefix(s, prefix string) int {
+	for i, line := range strings.Split(s, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return i
+		}
+	}
+	return -1
 }
 
 func TestRenderPlan_emitsHeaderOnEmptyPlan(t *testing.T) {
