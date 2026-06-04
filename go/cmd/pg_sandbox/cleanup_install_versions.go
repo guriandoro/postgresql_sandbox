@@ -36,7 +36,7 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	)
 	fs.BoolVar(&force, "force", false, "Skip confirmation prompt")
 	fs.BoolVar(&force, "f", false, "Alias for --force")
-	fs.StringVar(&binDir, "bin-dir", "", "Install root to prune (default $PGS_BIN_DIR or global defaultBinDir)")
+	fs.StringVar(&binDir, "bin-dir", "", "Install root to prune (default $PGS_BIN_DIR, global defaultBinDir, or /opt/postgresql)")
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&sandboxRoot, "root", "", "Sandbox root to walk (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)")
 

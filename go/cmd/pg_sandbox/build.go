@@ -54,7 +54,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	fs.IntVar(&jobs, "j", 0, "Alias for --jobs")
 	fs.BoolVar(&force, "force", false, "Overwrite an existing install prefix")
 	fs.BoolVar(&force, "f", false, "Alias for --force")
-	fs.StringVar(&binDir, "bin-dir", "", "Install root (each version goes under <bin-dir>/<version>/). Default $PGS_BIN_DIR.")
+	fs.StringVar(&binDir, "bin-dir", "", "Install root (each version goes under <bin-dir>/<version>/). Default $PGS_BIN_DIR, global defaultBinDir, or /opt/postgresql.")
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&buildDir, "build-dir", "", "Build scratch dir. Default $PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/")
 
