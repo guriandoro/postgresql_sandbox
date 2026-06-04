@@ -51,12 +51,12 @@ var subcommands map[string]subcommand
 func init() {
 	subcommands = map[string]subcommand{
 		// Single-instance lifecycle.
-		"deploy":  {summary: "Create a new sandbox", run: notImplemented},
-		"destroy": {summary: "Tear down a sandbox", run: notImplemented},
-		"start":   {summary: "Start a sandbox's PostgreSQL instance", run: notImplemented},
-		"stop":    {summary: "Stop a sandbox's PostgreSQL instance", run: notImplemented},
-		"restart": {summary: "Restart a sandbox's PostgreSQL instance", run: notImplemented},
-		"status":  {summary: "Report sandbox running/replication state", run: notImplemented},
+		"deploy":  {summary: "Create a new sandbox", run: runDeploy},
+		"destroy": {summary: "Tear down a sandbox", run: runDestroy},
+		"start":   {summary: "Start a sandbox's PostgreSQL instance", run: runStart},
+		"stop":    {summary: "Stop a sandbox's PostgreSQL instance", run: runStop},
+		"restart": {summary: "Restart a sandbox's PostgreSQL instance", run: runRestart},
+		"status":  {summary: "Report sandbox running/replication state", run: runStatus},
 		"use":     {summary: "Open psql against a sandbox", run: notImplemented},
 		"run":     {summary: "Run any PG utility against a sandbox", run: notImplemented},
 		"promote": {summary: "Promote a physical standby", run: notImplemented},

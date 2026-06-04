@@ -1,0 +1,70 @@
+// CLI wiring for `pg_sandbox status`. SPEC §6.4.
+//
+// In this slice the report is rendered to stdout as key=value lines.
+// --json is accepted but documented as deferred: passing it emits a
+// stub line and exits OK. Dropping the flag would be a breaking
+// surface change later; the stub keeps it stable.
+
+package main
+
+import (
+	"context"
+	"flag"
+	"fmt"
+	"io"
+	"os/signal"
+	"syscall"
+
+	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
+	"github.com/guriandoro/postgresql_sandbox/go/internal/pgexec"
+	"github.com/guriandoro/postgresql_sandbox/go/internal/sandbox"
+	"github.com/guriandoro/postgresql_sandbox/go/internal/ui"
+)
+
+func runStatus(args []string, stdout, stderr io.Writer) int {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	var (
+		sandboxDir string
+		asJSON     bool
+	)
+	fs.StringVar(&sandboxDir, "sandbox-dir", "", "Target sandbox directory (required)")
+	fs.StringVar(&sandboxDir, "s", "", "Alias for --sandbox-dir")
+	fs.BoolVar(&asJSON, "json", false, "Reserved for JSON output (deferred to a later slice)")
+	if err := fs.Parse(args); err != nil {
+		return ui.ExitUsage.Int()
+	}
+	if sandboxDir == "" {
+		fmt.Fprintln(stderr, "pg_sandbox status: --sandbox-dir is required")
+		fs.Usage()
+		return ui.ExitUsage.Int()
+	}
+	if !config.IsSandboxDir(sandboxDir) {
+		fmt.Fprintf(stderr, "pg_sandbox status: not a sandbox: %s\n", sandboxDir)
+		return ui.ExitNotASandbox.Int()
+	}
+	cfg, err := config.LoadSandbox(sandboxDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox status: load config: %v\n", err)
+		return ui.ExitBadConfig.Int()
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	runner := pgexec.New(cfg.BinDir)
+	rep, err := sandbox.Status(ctx, runner, sandboxDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox status: %v\n", err)
+		return sandbox.ExitCodeFor(err).Int()
+	}
+
+	if asJSON {
+		// Documented as deferred. Stable stub so scripts piping it
+		// can see "this flag is accepted, output schema TBD".
+		fmt.Fprintln(stdout, `{"todo":"json output deferred to a later slice"}`)
+		return ui.ExitOK.Int()
+	}
+	rep.RenderText(stdout)
+	return ui.ExitOK.Int()
+}
