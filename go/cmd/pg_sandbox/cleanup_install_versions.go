@@ -17,10 +17,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/guriandoro/postgresql_sandbox/go/internal/cleanup"
-	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
 	"github.com/guriandoro/postgresql_sandbox/go/internal/ui"
 )
 
@@ -49,61 +47,26 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	}
 	onlyVersions := fs.Args()
 
-	// Layered resolution: flag → env → global config → default.
-	var globalCfg *config.Global
-	if gp, err := config.GlobalConfigPath(); err == nil {
-		if g, gerr := config.LoadGlobal(gp); gerr == nil {
-			globalCfg = g
-		}
+	// Layered resolution: flag → env → global config → default. Both
+	// helpers filepath.Abs the result, which Cleans internally — so
+	// trailing slashes and redundant separators (e.g.
+	// `--bin-dir /opt/postgresql/`, `PGS_SANDBOX_ROOT=./sandboxes`)
+	// are normalized before they reach RenderPlan and
+	// cleanup.Plan. Without this the banner would print a path
+	// textually different from the one actually walked — defeating
+	// the 2026-06-04 defense-in-depth banner (see RenderPlan's doc
+	// and cleanup-install-versions-pitfall.md).
+	globalCfg := loadGlobalConfig()
+	var err error
+	binDir, err = resolveBinDir(binDir, globalCfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox cleanup-install-versions: %v\n", err)
+		return ui.ExitGeneric.Int()
 	}
-	if binDir == "" {
-		binDir = os.Getenv("PGS_BIN_DIR")
-	}
-	if binDir == "" && globalCfg != nil {
-		binDir = globalCfg.DefaultBinDir
-	}
-	if binDir == "" {
-		// Same default as build's bin-dir resolution.
-		binDir = "/opt/postgresql"
-	}
-	// Normalize binDir unconditionally. filepath.Abs Cleans internally,
-	// so it strips trailing slashes and redundant separators even when
-	// the input is already absolute (e.g. `--bin-dir /opt/postgresql/`).
-	// Without this, the banner and "nothing found under …" message
-	// would textually disagree with the de-trailed path that
-	// cleanup.Plan actually scans (it calls filepath.Clean) — a
-	// triage hazard for users copy-pasting the banner path into
-	// ls/find. The err branch (Getwd failure) keeps the existing
-	// "swallow + leave as-is" precedent from the sandboxRoot block.
-	if abs, err := filepath.Abs(binDir); err == nil {
-		binDir = abs
-	}
-
-	if sandboxRoot == "" {
-		sandboxRoot = os.Getenv("PGS_SANDBOX_ROOT")
-	}
-	if sandboxRoot == "" && globalCfg != nil {
-		sandboxRoot = globalCfg.SandboxRoot
-	}
-	if sandboxRoot == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(stderr, "pg_sandbox cleanup-install-versions: cannot determine home dir: %v\n", err)
-			return ui.ExitGeneric.Int()
-		}
-		sandboxRoot = filepath.Join(home, "postgresql-sandboxes")
-	}
-	// Normalize sandboxRoot the same way we do for binDir above.
-	// filepath.Abs handles both the relative case (PGS_SANDBOX_ROOT=
-	// ./sandboxes) and the trailing-slash absolute case (./root /tmp/sb/)
-	// in one shot — it Cleans internally, so an already-absolute path
-	// with a trailing slash gets de-trailed to match what cleanup.Plan
-	// scans. Without this the banner would print a path textually
-	// different from the one actually walked — defeating the 2026-06-04
-	// defense-in-depth banner (see RenderPlan's doc and
-	// cleanup-install-versions-pitfall.md).
-	if abs, err := filepath.Abs(sandboxRoot); err == nil {
-		sandboxRoot = abs
+	sandboxRoot, err = resolveSandboxRoot(sandboxRoot, globalCfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox cleanup-install-versions: %v\n", err)
+		return ui.ExitGeneric.Int()
 	}
 
 	plan, err := cleanup.Plan(cleanup.Options{

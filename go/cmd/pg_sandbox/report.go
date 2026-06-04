@@ -26,7 +26,6 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
 	"github.com/guriandoro/postgresql_sandbox/go/internal/report"
 	"github.com/guriandoro/postgresql_sandbox/go/internal/ui"
 )
@@ -74,13 +73,12 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Layered global config + env for bin-dir, pg-gather-dir,
-	// sandbox-root.
-	var globalCfg *config.Global
-	if gp, err := config.GlobalConfigPath(); err == nil {
-		if g, gerr := config.LoadGlobal(gp); gerr == nil {
-			globalCfg = g
-		}
-	}
+	// sandbox-root. bin-dir is open-coded here (not via
+	// resolveBinDir) because report has no built-in default for it —
+	// missing-everywhere is an error, not a fallback to
+	// /opt/postgresql. pg-gather-dir follows the same shape with its
+	// own ExitPgGatherDirMissing exit code.
+	globalCfg := loadGlobalConfig()
 	// bin-dir resolution: flag → PGS_BIN_DIR env → global.DefaultBinDir.
 	if binDir == "" {
 		binDir = os.Getenv("PGS_BIN_DIR")
@@ -118,20 +116,13 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 
 	// sandbox-root resolution: flag → PGS_SANDBOX_ROOT env →
 	// global.SandboxRoot → ~/postgresql-sandboxes/. Same chain as
-	// global_status.
-	if sandboxRoot == "" {
-		sandboxRoot = os.Getenv("PGS_SANDBOX_ROOT")
-	}
-	if sandboxRoot == "" && globalCfg != nil {
-		sandboxRoot = globalCfg.SandboxRoot
-	}
-	if sandboxRoot == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(stderr, "pg_sandbox report: cannot determine sandbox root: %v\n", err)
-			return ui.ExitGeneric.Int()
-		}
-		sandboxRoot = filepath.Join(home, "postgresql-sandboxes")
+	// global_status; consolidated in resolveSandboxRoot. We pass
+	// globalCfg (already loaded above) so we don't reread the file.
+	var err error
+	sandboxRoot, err = resolveSandboxRoot(sandboxRoot, globalCfg)
+	if err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox report: %v\n", err)
+		return ui.ExitGeneric.Int()
 	}
 
 	// Normalise --input / --output to absolute paths so error messages

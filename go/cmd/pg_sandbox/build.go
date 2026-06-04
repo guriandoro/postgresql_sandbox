@@ -29,7 +29,6 @@ import (
 	"syscall"
 
 	"github.com/guriandoro/postgresql_sandbox/go/internal/build"
-	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
 	"github.com/guriandoro/postgresql_sandbox/go/internal/ui"
 )
 
@@ -78,25 +77,14 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	}
 	version := rest[0]
 
-	// Layered resolution for bin-dir: flag → PGS_BIN_DIR → global config.
-	// Per SPEC §3.1 the explicit flag wins.
-	var globalCfg *config.Global
-	if gp, err := config.GlobalConfigPath(); err == nil {
-		if g, gerr := config.LoadGlobal(gp); gerr == nil {
-			globalCfg = g
-		}
-	}
-	if binDir == "" {
-		binDir = os.Getenv("PGS_BIN_DIR")
-	}
-	if binDir == "" && globalCfg != nil {
-		binDir = globalCfg.DefaultBinDir
-	}
-	if binDir == "" {
-		// Match SPEC §7.1's sketch: build's default install root is
-		// /opt/postgresql/ when nothing else is set. Documented in
-		// the help text.
-		binDir = "/opt/postgresql"
+	// Layered resolution for bin-dir: flag → PGS_BIN_DIR → global
+	// config → /opt/postgresql. Per SPEC §3.1 the explicit flag wins.
+	// The helper also filepath.Abs's the result so the install
+	// prefix we print on stdout is always absolute.
+	binDir, err := resolveBinDir(binDir, loadGlobalConfig())
+	if err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox build: %v\n", err)
+		return ui.ExitGeneric.Int()
 	}
 
 	if buildDir == "" {

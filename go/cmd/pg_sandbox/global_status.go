@@ -14,12 +14,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 
-	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
 	"github.com/guriandoro/postgresql_sandbox/go/internal/sandbox"
 	"github.com/guriandoro/postgresql_sandbox/go/internal/ui"
 )
@@ -39,27 +36,13 @@ func runGlobalStatus(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// SPEC §3.1 layered resolution: flag → env → global config →
-	// built-in default. We consult global config first because it's
-	// cheap; if it doesn't exist we silently fall back.
-	if root == "" {
-		root = os.Getenv("PGS_SANDBOX_ROOT")
-	}
-	if root == "" {
-		// Try the global config (SPEC §3.3 / §6.12).
-		if gp, perr := config.GlobalConfigPath(); perr == nil {
-			if g, gerr := config.LoadGlobal(gp); gerr == nil && g != nil && g.SandboxRoot != "" {
-				root = g.SandboxRoot
-			}
-		}
-	}
-	if root == "" {
-		// Final fallback per SPEC §4.9: ~/postgresql-sandboxes/.
-		home, err := os.UserHomeDir()
-		if err != nil {
-			fmt.Fprintf(stderr, "pg_sandbox global_status: cannot determine home dir: %v\n", err)
-			return ui.ExitGeneric.Int()
-		}
-		root = filepath.Join(home, "postgresql-sandboxes")
+	// built-in default (~/postgresql-sandboxes/ per SPEC §4.9).
+	// Consolidated in resolveSandboxRoot so the chain stays in sync
+	// with cleanup-install-versions and report.
+	root, err := resolveSandboxRoot(root, loadGlobalConfig())
+	if err != nil {
+		fmt.Fprintf(stderr, "pg_sandbox global_status: %v\n", err)
+		return ui.ExitGeneric.Int()
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
