@@ -57,8 +57,8 @@ func init() {
 		"stop":    {summary: "Stop a sandbox's PostgreSQL instance", run: runStop},
 		"restart": {summary: "Restart a sandbox's PostgreSQL instance", run: runRestart},
 		"status":  {summary: "Report sandbox running/replication state", run: runStatus},
-		"use":     {summary: "Open psql against a sandbox", run: notImplemented},
-		"run":     {summary: "Run any PG utility against a sandbox", run: notImplemented},
+		"use":     {summary: "Open psql against a sandbox", run: runUse},
+		"run":     {summary: "Run any PG utility against a sandbox", run: runRun},
 		"promote": {summary: "Promote a physical standby", run: notImplemented},
 
 		// Configuration (replaces Python `setenv`; see SPEC §3 and §6.7).

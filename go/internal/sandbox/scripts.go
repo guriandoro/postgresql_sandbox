@@ -11,10 +11,12 @@
 // noise relative to the saved bytes. If the script grows in a
 // future SPEC revision, switching to embed is mechanical.
 //
-// Scripts emitted by this file are deliberately limited to the
-// commands implemented in this slice (start/stop/restart/status).
-// `use` and `run` are out of scope until §6.5/§6.6 land — emitting
-// stubs that always fail would be more confusing than helpful.
+// The script set covers every SPEC §4.5 required command:
+// start, stop, restart, status, use, run. They share one template
+// because each one boils down to "exec the real binary with this
+// subcommand, --sandbox-dir pointed at me, and $@ appended" — the
+// extra args slot is what makes ./run pg_dump and ./use -c "SELECT 1"
+// both work without per-script branching.
 
 package sandbox
 
@@ -24,7 +26,7 @@ import (
 	"path/filepath"
 )
 
-// scriptTemplate is the body of every convenience script. Two
+// scriptTemplate is the body of every convenience script. Three
 // behaviors worth knowing:
 //
 //   - The binary path is BAKED IN from os.Executable() at deploy
@@ -43,19 +45,40 @@ import (
 //     the script's own location, so the script keeps working if the
 //     sandbox dir is moved.
 //
-// SPEC §4.5 mandates POSIX sh; we use only POSIX features
-// (`$(...)`, `exec`, `${VAR:-default}`, `"$@"` are all POSIX).
+// Format args:
 //
-// Format args: %[1]s = absolute path to the deploying binary,
-// %[2]s = subcommand name.
+//	%[1]s = absolute path to the deploying binary
+//	%[2]s = subcommand name
+//	%[3]s = literal "-- " (with trailing space) for commands that
+//	        forward user args (use, run); empty otherwise. The `--`
+//	        stops pg_sandbox's own flag parser so flags meant for
+//	        the inner binary (e.g. `./use -c "SELECT 1;"`) aren't
+//	        eaten by our flag set as unknown options.
+//
+// SPEC §4.5 mandates POSIX sh; we use only POSIX features
+// (`$(...)`, `exec`, `${VAR:-default}`, `"$@"`, `--` are all POSIX).
 const scriptTemplate = `#!/bin/sh
-exec "${PG_SANDBOX_BIN:-%[1]s}" %[2]s --sandbox-dir "$(cd "$(dirname "$0")" && pwd)" "$@"
+exec "${PG_SANDBOX_BIN:-%[1]s}" %[2]s --sandbox-dir "$(cd "$(dirname "$0")" && pwd)" %[3]s"$@"
 `
 
-// convenienceScripts lists the subcommand names to render as scripts
-// in this slice. SPEC §4.5 also requires `use` and `run`; those are
-// added when their commands land.
-var convenienceScripts = []string{"start", "stop", "restart", "status"}
+// convenienceScripts lists the subcommand names rendered as scripts
+// in the sandbox dir. The set matches SPEC §4.5 exactly: every
+// command a user is expected to run "from inside" a sandbox has a
+// matching script. The forwardsUserArgs flag controls whether we
+// emit a literal `--` between our injected flags and "$@" — needed
+// for use/run because their forwarded args may begin with `-` and
+// would otherwise be misparsed as pg_sandbox's own flags.
+var convenienceScripts = []struct {
+	name             string
+	forwardsUserArgs bool
+}{
+	{"start", false},
+	{"stop", false},
+	{"restart", false},
+	{"status", false},
+	{"use", true},
+	{"run", true},
+}
 
 // writeConvenienceScripts renders each entry of convenienceScripts
 // into sandboxDir/<name> with mode 0755. Existing files are
@@ -71,9 +94,13 @@ func writeConvenienceScripts(sandboxDir, binPath string) error {
 	if binPath == "" {
 		return fmt.Errorf("sandbox: writeConvenienceScripts: empty binPath")
 	}
-	for _, name := range convenienceScripts {
-		path := filepath.Join(sandboxDir, name)
-		body := fmt.Sprintf(scriptTemplate, binPath, name)
+	for _, s := range convenienceScripts {
+		path := filepath.Join(sandboxDir, s.name)
+		sep := ""
+		if s.forwardsUserArgs {
+			sep = "-- "
+		}
+		body := fmt.Sprintf(scriptTemplate, binPath, s.name, sep)
 		if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 			return fmt.Errorf("sandbox: write %s: %w", path, err)
 		}

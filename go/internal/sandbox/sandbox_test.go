@@ -88,7 +88,8 @@ func TestDeployHappyPath(t *testing.T) {
 		t.Errorf("after Deploy, sandbox dir not recognized: %s", sandboxDir)
 	}
 	// Convenience scripts should exist and be executable.
-	for _, name := range convenienceScripts {
+	for _, s := range convenienceScripts {
+		name := s.name
 		path := filepath.Join(sandboxDir, name)
 		st, err := os.Stat(path)
 		if err != nil {
