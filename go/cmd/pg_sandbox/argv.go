@@ -121,9 +121,6 @@ func isKnownBoolFlagToken(tok string, known map[string]bool) bool {
 	if eq := strings.IndexByte(name, '='); eq >= 0 {
 		name = name[:eq]
 	}
-	if name == "" {
-		return false
-	}
 	return known[name]
 }
 
