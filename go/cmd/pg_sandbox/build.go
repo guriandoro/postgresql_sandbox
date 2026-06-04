@@ -58,6 +58,20 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&buildDir, "build-dir", "", "Build scratch dir. Default $PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/")
 
+	// Pre-process argv so users can put bool flags (--force / -f /
+	// --with-icu / --with-openssl) AFTER the positional <version>.
+	// Go's stdlib `flag` stops at the first non-flag, so without this
+	// step `build 17.3 --force` treats `--force` as a second positional
+	// version and Parse either errors with "only one version may be
+	// built at a time" or silently treats --force as the version name.
+	// Only bool flags are reordered; --bin-dir / --build-dir / --jobs /
+	// --configure-opts take values and must stay adjacent to them. See
+	// argv.go for the full contract.
+	//
+	// Bool flag names are derived from the FlagSet so a new BoolVar
+	// above doesn't silently re-introduce the original UX bug.
+	args = reorderBoolFlags(args, boolFlagNames(fs))
+
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}

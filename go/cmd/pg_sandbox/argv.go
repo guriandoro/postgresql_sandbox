@@ -13,10 +13,18 @@
 // The helper below is a tiny, opt-in workaround: known boolean flag
 // names are moved to the front of argv before `flag.FlagSet.Parse`
 // sees it. The typical caller derives the list of bool flag names
-// automatically from its FlagSet via boolFlagNames, so adding a new
-// BoolVar doesn't require touching a separate enumeration. We do NOT
-// touch other commands here because each command has its own mix of
-// bool / value-taking flags and would need per-command testing.
+// automatically from its FlagSet via boolFlagNames, which uses the
+// stdlib `IsBoolFlag() bool` interface to separate bool from value-
+// taking flags — so the helper is general-purpose and type-safe.
+//
+// Any subcommand that mixes a positional with one or more BoolVar
+// flags SHOULD call `reorderBoolFlags(args, boolFlagNames(fs))`
+// immediately before `fs.Parse(args)`; without it the natural
+// invocation `pg_sandbox <cmd> <positional> --bool-flag` silently
+// misbehaves. The only requirement on the caller is that every
+// BoolVar this command cares about is registered on the FlagSet
+// BEFORE the helper is called (boolFlagNames reads the FlagSet's
+// current registrations).
 
 package main
 
@@ -58,8 +66,9 @@ import (
 //     bool; StringVar/IntVar/etc. are not). Tests may still pass a
 //     hand-written bare-name list directly.
 //
-// The helper is intentionally narrow: it fixes the cleanup-install-
-// versions UX without changing the global CLI surface.
+// The helper is intentionally narrow: it fixes the positional-before-
+// bool-flag UX on a per-subcommand basis without changing the global
+// CLI surface (no rewriting of os.Args, no global pre-parse pass).
 func reorderBoolFlags(argv []string, knownBoolFlags []string) []string {
 	known := make(map[string]bool, len(knownBoolFlags))
 	for _, f := range knownBoolFlags {
