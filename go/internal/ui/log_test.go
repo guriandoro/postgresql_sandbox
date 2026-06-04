@@ -11,9 +11,9 @@ import (
 
 func TestLevelParsing(t *testing.T) {
 	cases := []struct {
-		in      string
-		want    slog.Level
-		wantOK  bool
+		in     string
+		want   slog.Level
+		wantOK bool
 	}{
 		{"debug", slog.LevelDebug, true},
 		{"DEBUG", slog.LevelDebug, true},
