@@ -94,6 +94,20 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 		}
 		sandboxRoot = filepath.Join(home, "postgresql-sandboxes")
 	}
+	// Normalize relative sandboxRoot (env / global config values) the
+	// same way we do for binDir above. The default home-joined path is
+	// already absolute, but a user with PGS_SANDBOX_ROOT=./sandboxes in
+	// their shell rc would otherwise get a banner that prints the
+	// relative string and a collectSandboxBinDirs walk against whatever
+	// CWD pg_sandbox happened to be invoked from — defeating the
+	// 2026-06-04 defense-in-depth banner (see RenderPlan's doc and
+	// cleanup-install-versions-pitfall.md). Abs'ing here keeps the
+	// banner honest and the cross-reference correct.
+	if !filepath.IsAbs(sandboxRoot) {
+		if abs, err := filepath.Abs(sandboxRoot); err == nil {
+			sandboxRoot = abs
+		}
+	}
 
 	plan, err := cleanup.Plan(cleanup.Options{
 		BinDir:       binDir,

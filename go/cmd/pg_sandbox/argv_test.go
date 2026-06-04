@@ -3,9 +3,13 @@
 package main
 
 import (
+	"bytes"
 	"flag"
+	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -138,6 +142,88 @@ func TestReorderBoolFlags_doesNotPromoteValueTakingFlag(t *testing.T) {
 	want := []string{"18.3", "--root", "/tmp/sb"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
+func TestRunCleanupInstallVersions_relativeSandboxRootIsAbsoluted(t *testing.T) {
+	// Pins the 2026-06-04 defense-in-depth banner contract: a
+	// relative PGS_SANDBOX_ROOT (or globalCfg.SandboxRoot) must be
+	// normalized to an absolute path BEFORE it reaches RenderPlan
+	// and collectSandboxBinDirs. Otherwise the banner displays a
+	// meaningless relative string and the walk resolves against
+	// whatever CWD pg_sandbox happened to be invoked from — the
+	// exact failure described in cleanup-install-versions-pitfall.md.
+	//
+	// We arrange a temp dir containing both the install root
+	// ("bin/") and the sandbox root ("sandboxes/"), chdir into it,
+	// then export both as relative paths via the env. The banner
+	// must print the absolute resolved paths.
+	tmp := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tmp, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "sandboxes"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// chdir into tmp so the relative "./bin" / "./sandboxes" values
+	// resolve to known absolute paths. Save/restore CWD manually so
+	// the test works on go.mod's 1.22 baseline (t.Chdir is 1.24+).
+	origCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origCWD) })
+
+	// Force HOME away from the user's real home so the test never
+	// touches it (the default sandboxRoot is filepath.Join(home,
+	// "postgresql-sandboxes") — irrelevant here since we set the env
+	// var, but cheap insurance).
+	t.Setenv("HOME", tmp)
+	t.Setenv("PGS_BIN_DIR", "./bin")
+	t.Setenv("PGS_SANDBOX_ROOT", "./sandboxes")
+	// Make sure no stray global config sneaks in via XDG.
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(tmp, "xdg"))
+
+	// Resolve symlinks in tmp because on macOS /var → /private/var,
+	// and Go's filepath.Abs from a chdir'd CWD reflects whatever the
+	// kernel reports for getwd (the resolved path). Without this,
+	// the expected and observed banner paths differ by a /private
+	// prefix even though they refer to the same directory.
+	realTmp, err := filepath.EvalSymlinks(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantBin := filepath.Join(realTmp, "bin")
+	wantSandbox := filepath.Join(realTmp, "sandboxes")
+
+	var stdout, stderr bytes.Buffer
+	// --force so the absence of a TTY doesn't matter, and there's
+	// nothing under bin/ so Plan returns empty → exit 0.
+	rc := runCleanupInstallVersions([]string{"--force"}, &stdout, &stderr)
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0; stderr=%q stdout=%q", rc, stderr.String(), stdout.String())
+	}
+
+	out := stdout.String()
+	if !strings.Contains(out, "Install root:          "+wantBin) {
+		t.Errorf("banner missing absolute install root %q; got:\n%s", wantBin, out)
+	}
+	if !strings.Contains(out, "Scanning sandbox root: "+wantSandbox) {
+		t.Errorf("banner missing absolute sandbox root %q; got:\n%s", wantSandbox, out)
+	}
+	// Belt-and-suspenders: the relative literals must NOT appear in
+	// the banner lines, because that's exactly the symptom of the
+	// bug this test pins.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.HasPrefix(line, "Install root:") || strings.HasPrefix(line, "Scanning sandbox root:") {
+			if strings.Contains(line, "./bin") || strings.Contains(line, "./sandboxes") {
+				t.Errorf("banner line still contains relative path: %q", line)
+			}
+		}
 	}
 }
 
