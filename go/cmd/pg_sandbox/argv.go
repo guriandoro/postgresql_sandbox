@@ -50,11 +50,20 @@ import (
 // suffix) is what gets promoted — Parse needs to see what the user
 // typed.
 //
-// The `--` separator is honored as a verbatim-end marker: every
-// token from `--` onward is appended to the tail of the returned
-// slice unchanged, even if it would otherwise be a known bool flag.
-// This mirrors the GNU getopt convention that callers use to force
-// later tokens to be treated as positionals.
+// The `--` separator is preserved verbatim: every token from `--`
+// onward is appended to the tail of the returned slice unchanged,
+// in input order, even if it would otherwise be a known bool flag.
+// This helper does NOT, on its own, deliver GNU-getopt-style end-
+// of-options semantics — `flag.Parse` stops at the first non-flag,
+// so `--` only acts as an end-of-options marker downstream if no
+// positional precedes it after the reorder. In practice that means
+// `cmd --flag -- positional` works as expected (reorder is a no-op,
+// Parse sees `--flag` then `--` and stops), but `cmd positional1 --
+// positional2` will still have Parse stop at `positional1` and the
+// `--` itself will be left as a positional for the subcommand to
+// reject or consume. Subcommands that accept arbitrary positionals
+// before `--` need their own end-of-options handling on top of this
+// helper.
 //
 // LIMITATIONS (intentional — caller is responsible):
 //   - Only BOOLEAN flags. A flag that takes a value (e.g. `--root
