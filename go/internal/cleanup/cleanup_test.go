@@ -221,6 +221,58 @@ func TestApply_removesOnlyUnused(t *testing.T) {
 	}
 }
 
+func TestRenderPlan_emitsScanRootHeader(t *testing.T) {
+	// RenderPlan must announce the resolved scan root and the NOTE
+	// block above the table. Defense-in-depth banner added after the
+	// 2026-06-04 incident — see cleanup-install-versions-pitfall.md.
+	f := newFixture(t)
+	f.addVersion("16.4")
+	f.addVersion("17.3")
+
+	var planBuf, walkBuf bytes.Buffer
+	plan, err := Plan(Options{BinDir: f.binDir, SandboxRoot: f.sandboxRoot}, &walkBuf)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	RenderPlan(&planBuf, f.sandboxRoot, plan)
+
+	out := planBuf.String()
+	if !strings.Contains(out, "Scanning sandbox root: "+f.sandboxRoot) {
+		t.Errorf("RenderPlan output missing scan-root banner; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Only sandboxes under this root are considered") {
+		t.Errorf("RenderPlan output missing NOTE block; got:\n%s", out)
+	}
+	if !strings.Contains(out, "PGS_SANDBOX_ROOT") {
+		t.Errorf("RenderPlan output missing PGS_SANDBOX_ROOT hint; got:\n%s", out)
+	}
+	// The header must precede the table.
+	bannerIdx := strings.Index(out, "Scanning sandbox root:")
+	tableIdx := strings.Index(out, "VERSION")
+	if bannerIdx < 0 || tableIdx < 0 || bannerIdx >= tableIdx {
+		t.Errorf("header must come before VERSION table; banner=%d table=%d", bannerIdx, tableIdx)
+	}
+}
+
+func TestRenderPlan_emitsHeaderOnEmptyPlan(t *testing.T) {
+	// The header is the whole point of the change; it must appear
+	// even when there are zero candidates (e.g. no installs yet, or
+	// every candidate filtered out). On a no-op run the user should
+	// still see what was scanned.
+	var buf bytes.Buffer
+	RenderPlan(&buf, "/some/scan/root", nil)
+	out := buf.String()
+	if !strings.Contains(out, "Scanning sandbox root: /some/scan/root") {
+		t.Errorf("empty-plan output missing scan-root banner; got:\n%s", out)
+	}
+	if !strings.Contains(out, "Only sandboxes under this root are considered") {
+		t.Errorf("empty-plan output missing NOTE block; got:\n%s", out)
+	}
+	if !strings.Contains(out, "no install versions found") {
+		t.Errorf("empty-plan output missing 'no install versions found' line; got:\n%s", out)
+	}
+}
+
 func TestConfirm_yes(t *testing.T) {
 	var buf bytes.Buffer
 	if !Confirm(strings.NewReader("y\n"), &buf, 3) {

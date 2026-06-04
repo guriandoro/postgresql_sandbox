@@ -40,6 +40,15 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&sandboxRoot, "root", "", "Sandbox root to walk (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)")
 
+	// Pre-process argv so users can put the bool --force / -f flag
+	// AFTER positional version names. Go's stdlib `flag` stops at the
+	// first non-flag, so without this step `cleanup-install-versions
+	// 18.3 --force` treats `--force` as a positional version and the
+	// prompt fires (defeating the user's intent). Only bool flags are
+	// reordered; --bin-dir / --root take values and must stay
+	// adjacent to them. See argv.go for the full contract.
+	args = reorderBoolFlags(args, []string{"--force", "-f"})
+
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
@@ -95,8 +104,11 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Always print the plan to stdout so users (and tests) can see
-	// what's tracked even when nothing is removable.
-	cleanup.RenderPlan(stdout, plan)
+	// what's tracked even when nothing is removable. The resolved
+	// sandbox root is passed so RenderPlan can announce the scan
+	// scope in its header (defense-in-depth for the 2026-06-04
+	// incident; see internal/cleanup/cleanup.go's RenderPlan doc).
+	cleanup.RenderPlan(stdout, sandboxRoot, plan)
 
 	// Count unused candidates. Nothing to do → 0 exit, message.
 	unused := 0
