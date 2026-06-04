@@ -58,7 +58,10 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&user, "U", "", "Alias for --user")
 	fs.StringVar(&dbname, "dbname", "", "Default database name (default postgres)")
 	fs.StringVar(&dbname, "d", "", "Alias for --dbname")
-	fs.StringVar(&dataDirName, "data-dir-name", "", "Basename of data dir under --sandbox-dir (default \"data\")")
+	// SPEC §6.1 names this flag `--data-dir`. The basename-only
+	// semantics are documented in the help text rather than in the
+	// flag name, matching what the spec promises users.
+	fs.StringVar(&dataDirName, "data-dir", "", "Basename of data dir under --sandbox-dir (default \"data\")")
 	fs.StringVar(&logName, "log", "", "Basename of server log under --sandbox-dir (default \"server.log\")")
 
 	if err := fs.Parse(args); err != nil {
