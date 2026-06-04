@@ -134,6 +134,20 @@ dispatch:
 	os.Exit(cmd.run(rest, os.Stdout, os.Stderr))
 }
 
+// usageHint prints a one-line pointer at `pg_sandbox help <cmd>`. It
+// is the friendly replacement for `flag.FlagSet.Usage()` on the
+// missing-required-argument branch — flag.Usage dumps the entire
+// flag listing (often 20+ lines) which buries the actual error. The
+// hint keeps the failure message short and discoverable.
+//
+// `cmd` should be the top-level subcommand name as it appears in
+// the dispatcher (e.g. "deploy", "cluster"), NOT the inner sub-
+// subcommand like "cluster deploy" — runHelp can only resolve names
+// from the top-level subcommands map.
+func usageHint(w io.Writer, cmd string) {
+	fmt.Fprintf(w, "Run 'pg_sandbox help %s' for usage.\n", cmd)
+}
+
 // runHelp implements `pg_sandbox help [command]`. With no argument it
 // prints the top-level command index; with a command name it prints
 // the (currently brief) per-command summary. Per-command detailed

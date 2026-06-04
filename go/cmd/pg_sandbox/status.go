@@ -36,7 +36,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox status: --sandbox-dir is required")
-		fs.Usage()
+		usageHint(stderr, "status")
 		return ui.ExitUsage.Int()
 	}
 	if !config.IsSandboxDir(sandboxDir) {

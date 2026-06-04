@@ -89,9 +89,9 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		// flag already wrote the error to stderr via SetOutput.
 		return ui.ExitUsage.Int()
 	}
-	if sandboxDir == "" || binDir == "" {
-		fmt.Fprintln(stderr, "pg_sandbox deploy: --sandbox-dir and --bin-dir are required")
-		fs.Usage()
+	if sandboxDir == "" {
+		fmt.Fprintln(stderr, "pg_sandbox deploy: --sandbox-dir is required")
+		usageHint(stderr, "deploy")
 		return ui.ExitUsage.Int()
 	}
 
@@ -110,11 +110,23 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	// env, then flags. We re-use config.ApplyEnv even though we
 	// won't persist the intermediate Sandbox — it's the canonical
 	// way to apply PGS_* vars.
+	//
+	// The env overlay HAS to run before the --bin-dir required-check
+	// below; otherwise users setting PGS_BIN_DIR (the documented
+	// shell-session shortcut) still trip the "--bin-dir is required"
+	// error.
 	base := config.Defaults()
 	base, err := config.ApplyEnv(base, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox deploy: %v\n", err)
 		return ui.ExitBadConfig.Int()
+	}
+
+	resolvedBinDir := firstNonEmpty(binDir, base.BinDir)
+	if resolvedBinDir == "" {
+		fmt.Fprintln(stderr, "pg_sandbox deploy: --bin-dir is required (or set PGS_BIN_DIR)")
+		usageHint(stderr, "deploy")
+		return ui.ExitUsage.Int()
 	}
 
 	// SelfPath gets baked into the convenience scripts so they
@@ -127,7 +139,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 
 	opts := sandbox.DeployOptions{
 		SandboxDir:    sandboxDir,
-		BinDir:        firstNonEmpty(binDir, base.BinDir),
+		BinDir:        resolvedBinDir,
 		Host:          firstNonEmpty(host, base.Host),
 		Port:          portOrEnv(port, portExplicit, base.Port),
 		PortExplicit:  portExplicit,

@@ -37,7 +37,7 @@ func runUse(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox use: --sandbox-dir is required")
-		fs.Usage()
+		usageHint(stderr, "use")
 		return ui.ExitUsage.Int()
 	}
 

@@ -34,7 +34,7 @@ func runPromote(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox promote: --sandbox-dir is required")
-		fs.Usage()
+		usageHint(stderr, "promote")
 		return ui.ExitUsage.Int()
 	}
 

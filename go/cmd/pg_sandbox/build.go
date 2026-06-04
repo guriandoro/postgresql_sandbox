@@ -68,7 +68,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	rest := fs.Args()
 	if len(rest) == 0 {
 		fmt.Fprintln(stderr, "pg_sandbox build: <version> is required (e.g. 17.3)")
-		fs.Usage()
+		usageHint(stderr, "build")
 		return ui.ExitUsage.Int()
 	}
 	if len(rest) > 1 {

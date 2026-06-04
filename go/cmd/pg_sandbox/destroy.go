@@ -41,7 +41,7 @@ func runDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox destroy: --sandbox-dir is required")
-		fs.Usage()
+		usageHint(stderr, "destroy")
 		return ui.ExitUsage.Int()
 	}
 	if !config.IsSandboxDir(sandboxDir) {

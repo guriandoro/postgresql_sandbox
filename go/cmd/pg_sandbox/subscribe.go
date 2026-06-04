@@ -51,7 +51,7 @@ func runSubscribe(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	if sandboxDir == "" || from == "" || pubName == "" {
 		fmt.Fprintln(stderr, "pg_sandbox subscribe: --sandbox-dir, --from, and --pub-name are required")
-		fs.Usage()
+		usageHint(stderr, "subscribe")
 		return ui.ExitUsage.Int()
 	}
 	if !config.IsSandboxDir(sandboxDir) {

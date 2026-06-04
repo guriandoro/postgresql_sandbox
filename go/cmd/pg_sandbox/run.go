@@ -47,7 +47,7 @@ func runRun(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox run: --sandbox-dir is required")
-		fs.Usage()
+		usageHint(stderr, "run")
 		return ui.ExitUsage.Int()
 	}
 
@@ -56,7 +56,7 @@ func runRun(args []string, _ io.Writer, stderr io.Writer) int {
 	tail := fs.Args()
 	if len(tail) == 0 {
 		fmt.Fprintln(stderr, "pg_sandbox run: missing binary name (usage: run -s X -- <binary> [args...])")
-		fs.Usage()
+		usageHint(stderr, "run")
 		return ui.ExitUsage.Int()
 	}
 	binary := tail[0]

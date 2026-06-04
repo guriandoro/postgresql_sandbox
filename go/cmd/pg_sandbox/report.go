@@ -63,7 +63,7 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	// Resolve --input. Required, no env fallback.
 	if inputPath == "" {
 		fmt.Fprintln(stderr, "pg_sandbox report: --input is required")
-		fs.Usage()
+		usageHint(stderr, "report")
 		return ui.ExitUsage.Int()
 	}
 

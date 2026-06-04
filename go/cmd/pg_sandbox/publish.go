@@ -47,7 +47,7 @@ func runPublish(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	if sandboxDir == "" || pubName == "" {
 		fmt.Fprintln(stderr, "pg_sandbox publish: --sandbox-dir and --pub-name are required")
-		fs.Usage()
+		usageHint(stderr, "publish")
 		return ui.ExitUsage.Int()
 	}
 	if allTables == (tablesCSV != "") {

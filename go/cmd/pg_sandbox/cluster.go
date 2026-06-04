@@ -130,9 +130,9 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
-	if clusterDir == "" || binDir == "" {
-		fmt.Fprintln(stderr, "pg_sandbox cluster deploy: --sandbox-dir and --bin-dir are required")
-		fs.Usage()
+	if clusterDir == "" {
+		fmt.Fprintln(stderr, "pg_sandbox cluster deploy: --sandbox-dir is required")
+		usageHint(stderr, "cluster")
 		return ui.ExitUsage.Int()
 	}
 	if nodes < 1 {
@@ -154,11 +154,21 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 	// env → flag. We borrow the same machinery the per-sandbox deploy
 	// uses (config.Defaults + config.ApplyEnv) so PGS_* env vars
 	// govern the primary just like a standalone deploy.
+	//
+	// Runs before the --bin-dir required-check so PGS_BIN_DIR is
+	// honored — same reasoning as deploy.go.
 	base := config.Defaults()
 	base, err := config.ApplyEnv(base, os.Getenv)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox cluster deploy: %v\n", err)
 		return ui.ExitBadConfig.Int()
+	}
+
+	resolvedBinDir := firstNonEmpty(binDir, base.BinDir)
+	if resolvedBinDir == "" {
+		fmt.Fprintln(stderr, "pg_sandbox cluster deploy: --bin-dir is required (or set PGS_BIN_DIR)")
+		usageHint(stderr, "cluster")
+		return ui.ExitUsage.Int()
 	}
 
 	selfPath, _ := os.Executable()
@@ -170,7 +180,7 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 
 	opts := cluster.DeployOptions{
 		ClusterDir:   clusterDir,
-		BinDir:       firstNonEmpty(binDir, base.BinDir),
+		BinDir:       resolvedBinDir,
 		Nodes:        nodes,
 		Host:         firstNonEmpty(host, base.Host),
 		Port:         portOrEnv(port, portExplicit, base.Port),
@@ -219,7 +229,7 @@ func runClusterStatus(args []string, stdout, stderr io.Writer) int {
 	}
 	if clusterDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox cluster status: --sandbox-dir is required")
-		fs.Usage()
+		usageHint(stderr, "cluster")
 		return ui.ExitUsage.Int()
 	}
 	if !config.IsClusterDir(clusterDir) {
@@ -288,7 +298,7 @@ func runClusterDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	if clusterDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox cluster destroy: --sandbox-dir is required")
-		fs.Usage()
+		usageHint(stderr, "cluster")
 		return ui.ExitUsage.Int()
 	}
 	if !config.IsClusterDir(clusterDir) {

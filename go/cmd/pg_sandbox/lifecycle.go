@@ -54,7 +54,7 @@ func lifecycleCommand(
 	}
 	if sandboxDir == "" {
 		fmt.Fprintf(stderr, "pg_sandbox %s: --sandbox-dir is required\n", name)
-		fs.Usage()
+		usageHint(stderr, name)
 		return ui.ExitUsage.Int()
 	}
 
