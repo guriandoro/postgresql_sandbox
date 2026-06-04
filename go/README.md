@@ -1,6 +1,6 @@
 # pg_sandbox (Go port)
 
-> **Status:** Scaffolding only. The CLI dispatcher and `--version` work; every other subcommand is a stub that prints "not yet implemented". The full functional specification is in [`SPEC.md`](./SPEC.md) — that document is the contract for what this port must do.
+> **Status:** Broadly functional. Every documented subcommand has a real handler — single-sandbox lifecycle, replication (physical + logical), cluster orchestration, config, reporting, source build, and install pruning are all wired in. The known gap is `status --json`, which is accepted but emits a stub payload. The full functional specification is in [`SPEC.md`](./SPEC.md) — that document is still the contract for what this port must do.
 
 `pg_sandbox` is a command-line tool that provisions, manages, and tears down local PostgreSQL sandbox instances for development, testing, and bug reproduction. This directory hosts a Go re-implementation of the original Python tool (which lives at the repository root and continues to be the working version until this port reaches parity).
 
@@ -92,9 +92,9 @@ PGS_BIN_DIR=/opt/postgresql/16.2 go test -tags=integration ./...
 
 ## Relationship to the Python tool
 
-Until this Go port reaches feature parity with the Python `pg_sandbox`, both coexist:
+Until this Go port is declared GA, both coexist:
 
 - The **Python** tool is the recommended one for real use. It lives at the repository root.
-- The **Go** tool is under active development under `go/`. It is safe to run but only `--version` and `--help` do anything useful today.
+- The **Go** tool is under active development under `go/`. It is broadly functional — most workflows succeed end-to-end — but has not yet been declared the canonical entry point.
 
-When parity is reached, the Go binary will take over the canonical `pg_sandbox` name; the Python entry point will be renamed (e.g., `pg_sandbox.py`) and kept around for users mid-migration. That transition is its own change and won't happen as part of this port.
+When the Go port is declared GA, the Go binary will take over the canonical `pg_sandbox` name; the Python entry point will be renamed (e.g., `pg_sandbox.py`) and kept around for users mid-migration. That transition is its own change and won't happen as part of this port.

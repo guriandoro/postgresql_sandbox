@@ -42,4 +42,4 @@ Conventions:
 | 27 | `EXIT_NOT_A_TTY` | A confirmation prompt was needed, `--force` wasn't set, and stdin isn't a TTY. Re-run with `--force` if you really mean it. |
 | 28 | `EXIT_RESTART_REQUIRED_REFUSED` | Reserved for a future `--no-restart` flag on `publish` / `subscribe`. |
 | 29 | `EXIT_INIT_SQL_FAILED` | `cluster deploy --init-sql` failed to apply the supplied SQL file against the primary/publisher (psql `ON_ERROR_STOP=1` returned non-zero). The cluster dir + partial primary are left on disk for inspection. |
-| 30 | `EXIT_BUILD_FAILED` | Phase 2 only: source build failed. |
+| 30 | `EXIT_BUILD_FAILED` | `build` (source compilation) failed. |

@@ -8,28 +8,34 @@ CLI flag  >  PGS_* env var  >  per-sandbox config  >  global config  >  built-in
 
 The flag always wins. Setting an env var lets you avoid repeating the same flag across many invocations in one shell session.
 
-## Variables consumed
+## Variables consumed today
 
 | Variable | Purpose | Default |
 |---|---|---|
 | `PGS_SANDBOX_ROOT` | Where new sandboxes are created by default | `~/postgresql-sandboxes/` |
-| `PGS_BIN_DIR` | Default PostgreSQL `bin/` directory | (none) |
+| `PGS_BIN_DIR` | Default PostgreSQL `bin/` directory; fills both the global `DefaultBinDir` and per-sandbox `BinDir` layers | (none) |
 | `PGS_HOST` | Default listen / connect host | `127.0.0.1` |
 | `PGS_PORT` | Default port for new sandboxes | `65432` |
 | `PGS_USER` | Default PG superuser | `postgres` |
 | `PGS_DBNAME` | Default database name | `postgres` |
-| `PGS_LOG_LEVEL` | `debug` / `info` / `warn` / `error` | `info` |
-| `PGS_CONFIG_FILE` | Override global config file path | `$XDG_CONFIG_HOME/pg_sandbox/config.json` |
-| `PGS_DEBUG` | Set to any non-empty value to enable debug logging (alias for `PGS_LOG_LEVEL=debug` + external command tracing) | unset |
 | `PGS_PG_GATHER_DIR` | `pg_gather` scripts location (used by `report`) | (none) |
-| `PGS_BUILD_DIR` | Build scratch directory (Phase 2 `build` command) | `$TMPDIR/pg_sandbox-build/` |
-| `NO_COLOR` | Standard `NO_COLOR` env — when set (to any value), disables ANSI color output | unset |
+| `PGS_BUILD_DIR` | Build scratch directory (used by `build`) | `$TMPDIR/pg_sandbox-build/` |
+| `PGS_BUILD_DEBUG` | Set to `1` to retain the build scratch tree and surface raw `./configure` / `make` output. Narrow scope — only `build` reads it. | unset |
+| `XDG_CONFIG_HOME` | Standard XDG var — controls where the global config file is read from (`$XDG_CONFIG_HOME/pg_sandbox/config.json`) | `$HOME/.config` |
+
+`PGS_BIN_DIR` is the variable you'll set most often — once per shell session — to avoid repeating `--bin-dir /opt/postgresql/.../bin` on every command.
 
 ## Variables exported to child processes
 
 When running PostgreSQL utilities via `use`, `run`, etc., `pg_sandbox` sets `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE` in the child environment. This means downstream tools work as expected even when invoked without their own connection flags.
 
-## Tips
+## Planned but not yet wired
 
-- `PGS_DEBUG=1 pg_sandbox status -s mybox` prints the full command line of every external process the tool invokes (useful when something fails mysteriously).
-- `PGS_BIN_DIR` is the variable you'll set most often — once per shell session — to avoid repeating `--bin-dir /opt/postgresql/.../bin` on every command.
+These appear in `SPEC.md` §4.9 but the Go port does not currently consume them. Until that wiring lands, setting them has no effect.
+
+| Variable | Planned purpose |
+|---|---|
+| `PGS_LOG_LEVEL` | `debug` / `info` / `warn` / `error`. The parser exists in `internal/ui/log.go` but the dispatcher does not yet thread it through; logging is currently fixed at `info`. |
+| `PGS_CONFIG_FILE` | Override of the global config file path. Today the path is computed from `XDG_CONFIG_HOME` only. |
+| `PGS_DEBUG` | Top-level alias for "debug logging + external command tracing". No top-level debug switch exists yet — for build-specific tracing use `PGS_BUILD_DEBUG`. |
+| `NO_COLOR` | Standard "disable ANSI color" var. The Go port emits no color output today, so there's nothing to suppress. |

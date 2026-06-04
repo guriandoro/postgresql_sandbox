@@ -1,6 +1,6 @@
 # Examples
 
-> **Note:** These examples reflect the *planned* behavior described in [`../SPEC.md`](../SPEC.md). Today, every subcommand in the Go binary prints "not yet implemented" — use the Python `pg_sandbox` at the repository root until the Go port reaches parity.
+> **Note:** Every recipe below runs end-to-end against the Go binary. The Python `pg_sandbox` at the repository root remains the canonical recommendation until the Go port is declared GA, but the Go tool is broadly functional today.
 
 ## A single sandbox
 
@@ -34,12 +34,14 @@ pg_sandbox deploy -s ~/sandboxes/primary
 pg_sandbox deploy -s ~/sandboxes/standby1 \
     --replicate-from primary --slot primary_standby1_slot
 
-# Synchronous standby
+# Second async standby (synchronous replication is wired at the cluster
+# level via `cluster deploy --sync-count`; that flag is currently
+# accepted-but-deferred — see commands.md).
 pg_sandbox deploy -s ~/sandboxes/standby2 \
-    --replicate-from primary --slot primary_standby2_slot --sync
+    --replicate-from primary --slot primary_standby2_slot
 
-# Inspect
-pg_sandbox status -s ~/sandboxes/primary --json | jq
+# Inspect (text output — `status --json` currently emits a stub payload).
+pg_sandbox status -s ~/sandboxes/primary
 
 # Promote standby1 if primary dies
 pg_sandbox promote -s ~/sandboxes/standby1

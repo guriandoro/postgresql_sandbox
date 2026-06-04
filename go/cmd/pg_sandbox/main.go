@@ -3,11 +3,11 @@
 // specification.
 //
 // This file deliberately contains only the top-level subcommand
-// dispatcher and the --version / --help bootstrap. Real command
-// implementations live under internal/<domain>/ packages and are
-// wired in here as they land. Keeping this file thin makes the
-// dispatch logic easy to audit and lets each subcommand be developed
-// in isolation.
+// dispatcher and the --version / --help bootstrap. Each subcommand's
+// CLI wiring lives next to it in cmd/pg_sandbox/<cmd>.go and delegates
+// to the relevant internal/<domain>/ package for the actual work.
+// Keeping this file thin makes the dispatch logic easy to audit and
+// lets each subcommand be developed in isolation.
 package main
 
 import (
@@ -30,12 +30,10 @@ var (
 	commit  = "unknown"
 )
 
-// subcommands enumerates every top-level command the binary will
-// eventually accept. Each entry maps the user-typed name to a stub
-// that prints a clear "not yet implemented" message and exits with
-// the documented EXIT_GENERIC code (1). As real implementations
-// land, the stub is replaced with a call into the appropriate
-// internal/ package.
+// subcommands enumerates every top-level command the binary accepts.
+// Each entry maps the user-typed name to its real handler, which
+// lives next to this file (one `cmd/pg_sandbox/<cmd>.go` per
+// command); `help` is the exception, handled inline below.
 //
 // Keeping the list here (rather than scattered through internal
 // packages) means the help output, validation, and dispatcher all
@@ -136,20 +134,10 @@ dispatch:
 	os.Exit(cmd.run(rest, os.Stdout, os.Stderr))
 }
 
-// notImplemented is the temporary run-func for every subcommand whose
-// real implementation has not yet landed. It prints a single, clear
-// line to stderr and returns the generic error exit code so scripts
-// can detect the situation.
-func notImplemented(_ []string, _, stderr io.Writer) int {
-	fmt.Fprintln(stderr, "pg_sandbox: this command is not yet implemented in the Go port.")
-	fmt.Fprintln(stderr, "See SPEC.md for the planned behavior, or use the Python pg_sandbox at the repo root.")
-	return ui.ExitGeneric.Int()
-}
-
 // runHelp implements `pg_sandbox help [command]`. With no argument it
 // prints the top-level command index; with a command name it prints
 // the (currently brief) per-command summary. Per-command detailed
-// help will be expanded as commands gain real implementations.
+// flag help is still TBD — for now we point readers at SPEC.md §6.
 func runHelp(args []string, stdout, _ io.Writer) int {
 	if len(args) == 0 {
 		printTopHelp(stdout)
