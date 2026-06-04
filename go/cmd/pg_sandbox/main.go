@@ -62,7 +62,7 @@ func init() {
 		"promote": {summary: "Promote a physical standby", run: notImplemented},
 
 		// Configuration (replaces Python `setenv`; see SPEC §3 and §6.7).
-		"config": {summary: "Inspect/mutate sandbox or global config", run: notImplemented},
+		"config": {summary: "Inspect/mutate sandbox or global config", run: runConfig},
 
 		// Logical replication.
 		"publish":   {summary: "Create a logical replication publication", run: notImplemented},
