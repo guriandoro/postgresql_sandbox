@@ -39,7 +39,7 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&sandboxRoot, "root", "", "Sandbox root to walk (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)")
 
 	// Reorder bool flags ahead of positionals so `cleanup-install-
-	// versions 18.3 --force` works. See parseSubcommandArgs in argv.go
+	// versions 18.4 --force` works. See parseSubcommandArgs in argv.go
 	// for the full rationale and the structural reason this is a
 	// single call rather than a two-step pattern.
 	if err := parseSubcommandArgs(fs, args); err != nil {

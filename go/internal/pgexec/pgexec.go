@@ -95,7 +95,7 @@ type Exec struct {
 	// BinDir is the directory checked first for every binary name
 	// passed to Run/Locate. If empty, Exec falls back to PATH only.
 	// Typical value: the sandbox's resolved bin-dir (e.g.
-	// "/opt/postgresql/16.2/bin").
+	// "/opt/postgresql/18.4/bin").
 	BinDir string
 
 	// Env is appended to the parent's environment when spawning

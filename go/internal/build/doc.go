@@ -36,7 +36,7 @@
 //     tarball so a rebuild is fast).
 //
 // On success we print the install prefix to STDOUT (so users can do
-// `pg_sandbox deploy -b "$(pg_sandbox build 17.3)/bin"`) and a
+// `pg_sandbox deploy -b "$(pg_sandbox build 18.4)/bin"`) and a
 // structured "built" line to STDERR.
 //
 // Cancellation: the caller's ctx is plumbed through every child

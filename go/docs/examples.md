@@ -6,22 +6,22 @@
 
 ```sh
 # Make life easier for the session
-export PGS_BIN_DIR=/opt/postgresql/16.2
+export PGS_BIN_DIR=/opt/postgresql/18.4
 
 # Deploy a standalone instance
-pg_sandbox deploy -s ~/postgresql-sandboxes/pg16
+pg_sandbox deploy -s ~/postgresql-sandboxes/pg18
 
 # Connect with psql
-pg_sandbox use -s ~/postgresql-sandboxes/pg16
+pg_sandbox use -s ~/postgresql-sandboxes/pg18
 
 # Run any utility (auto-injected -h/-p/-U)
-pg_sandbox run -s ~/postgresql-sandboxes/pg16 pgbench -i postgres
+pg_sandbox run -s ~/postgresql-sandboxes/pg18 pgbench -i postgres
 
 # Status (or status --json for a machine-readable object)
-pg_sandbox status -s ~/postgresql-sandboxes/pg16
+pg_sandbox status -s ~/postgresql-sandboxes/pg18
 
 # Stop and tear down
-pg_sandbox destroy -s ~/postgresql-sandboxes/pg16 --force
+pg_sandbox destroy -s ~/postgresql-sandboxes/pg18 --force
 ```
 
 ## Physical streaming replication
@@ -76,13 +76,13 @@ pg_sandbox cluster destroy -s ~/postgresql-sandboxes/mycluster --force
 
 ```sh
 # What is this sandbox actually going to use, and where does each value come from?
-pg_sandbox config show -s ~/postgresql-sandboxes/pg16
+pg_sandbox config show -s ~/postgresql-sandboxes/pg18
 
 # Read a single key
-pg_sandbox config get port -s ~/postgresql-sandboxes/pg16
+pg_sandbox config get port -s ~/postgresql-sandboxes/pg18
 
 # Change values atomically (either all apply or none do)
-pg_sandbox config set host=0.0.0.0 port=5433 -s ~/postgresql-sandboxes/pg16
+pg_sandbox config set host=0.0.0.0 port=5433 -s ~/postgresql-sandboxes/pg18
 
 # Convert a Python-era pg_sandbox.env into the new format
 pg_sandbox config migrate -s ~/postgresql-sandboxes/legacy-sandbox

@@ -3,7 +3,7 @@
 // Go's standard library `flag` package stops parsing at the first
 // non-flag argument. That makes the very common invocation
 //
-//	pg_sandbox cleanup-install-versions 18.3 --force
+//	pg_sandbox cleanup-install-versions 18.4 --force
 //
 // surprising: `--force` is treated as a positional, not a flag, and
 // the destructive prompt that --force was meant to suppress fires
@@ -159,7 +159,7 @@ func boolFlagNames(fs *flag.FlagSet) []string {
 // between a manual reorder call and a manual Parse call would
 // silently regress the positional-before-bool UX for that flag —
 // boolFlagNames already ran, the frozen result misses "dry-run", and
-// `<cmd> 18.3 --dry-run` treats --dry-run as a positional again. By
+// `<cmd> 18.4 --dry-run` treats --dry-run as a positional again. By
 // folding the two steps into one call we make the mis-sequencing
 // structurally impossible: every BoolVar registered on `fs` before
 // this call is picked up automatically, there is no parallel

@@ -121,7 +121,7 @@ type Sandbox struct {
 
 	// DataDir is the absolute path to the PostgreSQL data
 	// directory (initdb's output). Typically inside the sandbox
-	// dir, e.g. "~/postgresql-sandboxes/pg16/data".
+	// dir, e.g. "~/postgresql-sandboxes/pg18/data".
 	DataDir string `json:"dataDir"`
 
 	// LogFile is the absolute path to the server.log written by

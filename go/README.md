@@ -79,7 +79,7 @@ make fmt           # gofmt -s -w .
 Integration smoke tests are opt-in and require a real PostgreSQL install:
 
 ```sh
-PGS_BIN_DIR=/opt/postgresql/16.2 go test -tags=integration ./...
+PGS_BIN_DIR=/opt/postgresql/18.4 go test -tags=integration ./...
 ```
 
 ## Documentation

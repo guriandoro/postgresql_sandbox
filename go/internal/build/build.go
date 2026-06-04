@@ -47,7 +47,7 @@ const tarballURLTemplate = "https://ftp.postgresql.org/pub/source/v%s/postgresql
 // Options captures every input to Build. The CLI layer populates this
 // from flag parsing; everything in this file consumes it.
 type Options struct {
-	// Version is the requested PG release (e.g. "17.3"). Required.
+	// Version is the requested PG release (e.g. "18.4"). Required.
 	Version string
 
 	// BinDir is the install root (per-version subdirs created under
@@ -249,7 +249,7 @@ func validateVersion(v string) error {
 		return fmt.Errorf("build: <version> is required")
 	}
 	if !versionRE.MatchString(v) {
-		return fmt.Errorf("build: invalid version %q; expected major.minor (e.g. 17.3)", v)
+		return fmt.Errorf("build: invalid version %q; expected major.minor (e.g. 18.4)", v)
 	}
 	return nil
 }

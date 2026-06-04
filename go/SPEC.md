@@ -449,7 +449,7 @@ Behavior:
 
 ### 7.1 `build` (Phase 2)
 
-Compile PostgreSQL from source. Inputs: positional `<version>` (e.g. `18.3`); optional `--with-icu`, `--with-openssl`, `--configure-opts="…"`. Downloads tarball, extracts under build dir, runs `./configure`, `make -j`, `make install`, then `make` + `make install` in `contrib/`. Per-step logs under build dir.
+Compile PostgreSQL from source. Inputs: positional `<version>` (e.g. `18.4`); optional `--with-icu`, `--with-openssl`, `--configure-opts="…"`. Downloads tarball, extracts under build dir, runs `./configure`, `make -j`, `make install`, then `make` + `make install` in `contrib/`. Per-step logs under build dir.
 
 ### 7.2 `cleanup-install-versions` (Phase 2)
 

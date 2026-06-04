@@ -9,7 +9,7 @@
 //
 // The legacy format is plain shell `export`-able lines:
 //
-//   PGS_BIN_DIR=/opt/postgresql/16.2
+//   PGS_BIN_DIR=/opt/postgresql/18.4
 //   PGS_DATADIR=data
 //   PGS_PORT=65432
 //   ...

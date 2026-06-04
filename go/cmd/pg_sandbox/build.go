@@ -57,7 +57,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&buildDir, "build-dir", "", "Build scratch dir. Default $PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/")
 
-	// Reorder bool flags ahead of positionals so `build 17.3 --force`
+	// Reorder bool flags ahead of positionals so `build 18.4 --force`
 	// works. See parseSubcommandArgs in argv.go for the full rationale
 	// and the structural reason this is a single call rather than a
 	// two-step pattern.
@@ -67,7 +67,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 
 	rest := fs.Args()
 	if len(rest) == 0 {
-		fmt.Fprintln(stderr, "pg_sandbox build: <version> is required (e.g. 17.3)")
+		fmt.Fprintln(stderr, "pg_sandbox build: <version> is required (e.g. 18.4)")
 		usageHint(stderr, "build")
 		return ui.ExitUsage.Int()
 	}
@@ -113,7 +113,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 		return ui.ExitBuildFailed.Int()
 	}
 	// SPEC §4.6: stdout is for machine-consumable output. Print just
-	// the install prefix so users can `$(pg_sandbox build 17.3)/bin`.
+	// the install prefix so users can `$(pg_sandbox build 18.4)/bin`.
 	fmt.Fprintln(stdout, res.InstallPrefix)
 	return ui.ExitOK.Int()
 }
