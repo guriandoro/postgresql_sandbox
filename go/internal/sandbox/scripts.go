@@ -78,6 +78,11 @@ var convenienceScripts = []struct {
 	{"status", false},
 	{"use", true},
 	{"run", true},
+	// `promote` is included so a standby author can run
+	// `./promote` from inside the sandbox dir. The script is
+	// harmless on a primary (the command itself refuses with
+	// ExitNotAStandby) so we always emit it.
+	{"promote", false},
 }
 
 // writeConvenienceScripts renders each entry of convenienceScripts

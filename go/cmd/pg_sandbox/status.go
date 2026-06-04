@@ -53,7 +53,11 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 
 	runner := pgexec.New(cfg.BinDir)
-	rep, err := sandbox.Status(ctx, runner, sandboxDir)
+	// StatusWithStderr emits warning lines for any failed
+	// best-effort replication probe (see SPEC §6.4) so the user
+	// sees why a sub-section was skipped without having to grep
+	// server.log.
+	rep, err := sandbox.StatusWithStderr(ctx, runner, sandboxDir, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox status: %v\n", err)
 		return sandbox.ExitCodeFor(err).Int()

@@ -104,6 +104,19 @@ type DeployOptions struct {
 	// (the CLI, tests) don't have to set it explicitly. Override
 	// at runtime via the PG_SANDBOX_BIN env var when needed.
 	SelfPath string
+
+	// ReplicateFrom names the source sandbox this new sandbox should
+	// stream-replicate from (physical streaming replication, SPEC
+	// §6.1). Empty means a standalone deploy. When non-empty,
+	// SlotName is REQUIRED. The string is interpreted via
+	// resolveSourceSandbox: absolute path, relative path, or bare
+	// sibling name.
+	ReplicateFrom string
+
+	// SlotName is the physical replication slot name created on the
+	// source via `pg_basebackup -C --slot=…`. Required when
+	// ReplicateFrom is set; ignored otherwise.
+	SlotName string
 }
 
 // DeployResult is what Deploy returns on success: the resolved
@@ -118,7 +131,10 @@ type DeployResult struct {
 	ConnString string
 }
 
-// Deploy performs the standalone-sandbox path of SPEC §6.1.
+// Deploy is SPEC §6.1's entry point. It dispatches between the
+// standalone path (no replication) and the physical-standby path
+// (`--replicate-from`); see deployStandalone and deployStandby for
+// the per-path bodies. Logical replication is a separate slice.
 //
 // Diagnostic output (info-level summary and warnings) is written via
 // stderrW; the connection string is NOT written here — the CLI layer
@@ -142,6 +158,24 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 		return nil, err
 	}
 
+	// Branch: SPEC §6.1's two code paths. ReplicateFrom non-empty
+	// dispatches to the physical-standby flow; otherwise the
+	// standalone flow runs initdb fresh. We do this before port
+	// resolution because the standby path uses a different runner
+	// for the source (its own bin-dir) but allocates its own port
+	// the same way, so port logic still happens inside the chosen
+	// flow.
+	if opts.ReplicateFrom != "" {
+		return deployStandby(ctx, runner, opts, stderrW)
+	}
+	return deployStandalone(ctx, runner, opts, stderrW)
+}
+
+// deployStandalone implements SPEC §6.1's standalone path: fresh
+// initdb + pg_ctl start, no replication. This is the original Deploy
+// body; it's been split out so the dispatcher in Deploy is short and
+// the standby path can be added without an N-way branch.
+func deployStandalone(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stderrW io.Writer) (*DeployResult, error) {
 	// SPEC §6.1 step 3 + §4.3: port allocation.
 	port, err := resolvePort(opts)
 	if err != nil {

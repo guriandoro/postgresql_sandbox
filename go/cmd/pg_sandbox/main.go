@@ -59,7 +59,7 @@ func init() {
 		"status":  {summary: "Report sandbox running/replication state", run: runStatus},
 		"use":     {summary: "Open psql against a sandbox", run: runUse},
 		"run":     {summary: "Run any PG utility against a sandbox", run: runRun},
-		"promote": {summary: "Promote a physical standby", run: notImplemented},
+		"promote": {summary: "Promote a physical standby", run: runPromote},
 
 		// Configuration (replaces Python `setenv`; see SPEC §3 and §6.7).
 		"config": {summary: "Inspect/mutate sandbox or global config", run: runConfig},

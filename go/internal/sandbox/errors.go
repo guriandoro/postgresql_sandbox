@@ -24,17 +24,21 @@ import (
 // returned value reads as ExitInitdbFailed, not ui.ExitInitdbFailed,
 // in this package's own error messages).
 const (
-	ExitOK            = ui.ExitOK
-	ExitUsage         = ui.ExitUsage
-	ExitNotASandbox   = ui.ExitNotASandbox
-	ExitSandboxExists = ui.ExitSandboxExists
-	ExitPortInUse     = ui.ExitPortInUse
-	ExitNoFreePort    = ui.ExitNoFreePort
-	ExitInitdbFailed  = ui.ExitInitdbFailed
-	ExitPgctlFailed   = ui.ExitPgctlFailed
-	ExitDestroyFailed = ui.ExitDestroyFailed
-	ExitNotATTY       = ui.ExitNotATTY
-	ExitPsqlFailed    = ui.ExitPsqlFailed
+	ExitOK                = ui.ExitOK
+	ExitUsage             = ui.ExitUsage
+	ExitNotASandbox       = ui.ExitNotASandbox
+	ExitSandboxExists     = ui.ExitSandboxExists
+	ExitPortInUse         = ui.ExitPortInUse
+	ExitNoFreePort        = ui.ExitNoFreePort
+	ExitInitdbFailed      = ui.ExitInitdbFailed
+	ExitPgctlFailed       = ui.ExitPgctlFailed
+	ExitBasebackupFailed  = ui.ExitBasebackupFailed
+	ExitSourceUnreachable = ui.ExitSourceUnreachable
+	ExitNotAStandby       = ui.ExitNotAStandby
+	ExitPromoteFailed     = ui.ExitPromoteFailed
+	ExitDestroyFailed     = ui.ExitDestroyFailed
+	ExitNotATTY           = ui.ExitNotATTY
+	ExitPsqlFailed        = ui.ExitPsqlFailed
 )
 
 // exitErr pairs a ui.ExitCode with an underlying error. The CLI

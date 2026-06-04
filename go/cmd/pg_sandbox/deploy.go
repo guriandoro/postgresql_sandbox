@@ -38,14 +38,16 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 
 	var (
-		sandboxDir  string
-		binDir      string
-		host        string
-		port        int
-		user        string
-		dbname      string
-		dataDirName string
-		logName     string
+		sandboxDir    string
+		binDir        string
+		host          string
+		port          int
+		user          string
+		dbname        string
+		dataDirName   string
+		logName       string
+		replicateFrom string
+		slotName      string
 	)
 	fs.StringVar(&sandboxDir, "sandbox-dir", "", "Target sandbox directory (required)")
 	fs.StringVar(&sandboxDir, "s", "", "Alias for --sandbox-dir")
@@ -63,6 +65,11 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	// flag name, matching what the spec promises users.
 	fs.StringVar(&dataDirName, "data-dir", "", "Basename of data dir under --sandbox-dir (default \"data\")")
 	fs.StringVar(&logName, "log", "", "Basename of server log under --sandbox-dir (default \"server.log\")")
+	// SPEC §6.1 physical-replication flags. --slot is REQUIRED when
+	// --replicate-from is set; we enforce that in the sandbox package
+	// rather than here so the same check guards programmatic callers.
+	fs.StringVar(&replicateFrom, "replicate-from", "", "Source sandbox name (or absolute path) to stream-replicate from")
+	fs.StringVar(&slotName, "slot", "", "Physical replication slot name (required with --replicate-from)")
 
 	if err := fs.Parse(args); err != nil {
 		// flag already wrote the error to stderr via SetOutput.
@@ -105,18 +112,20 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	selfPath, _ := os.Executable() // empty on rare failure → Deploy retries internally
 
 	opts := sandbox.DeployOptions{
-		SandboxDir:   sandboxDir,
-		BinDir:       firstNonEmpty(binDir, base.BinDir),
-		Host:         firstNonEmpty(host, base.Host),
-		Port:         portOrEnv(port, portExplicit, base.Port),
-		PortExplicit: portExplicit,
-		Superuser:    firstNonEmpty(user, base.Superuser),
-		Dbname:       firstNonEmpty(dbname, base.DefaultDatabase),
-		DataDirName:  firstNonEmpty(dataDirName, "data"),
-		LogName:      firstNonEmpty(logName, "server.log"),
-		PortBase:     portalloc.DefaultBasePort,
-		PortRange:    portalloc.DefaultRange,
-		SelfPath:     selfPath,
+		SandboxDir:    sandboxDir,
+		BinDir:        firstNonEmpty(binDir, base.BinDir),
+		Host:          firstNonEmpty(host, base.Host),
+		Port:          portOrEnv(port, portExplicit, base.Port),
+		PortExplicit:  portExplicit,
+		Superuser:     firstNonEmpty(user, base.Superuser),
+		Dbname:        firstNonEmpty(dbname, base.DefaultDatabase),
+		DataDirName:   firstNonEmpty(dataDirName, "data"),
+		LogName:       firstNonEmpty(logName, "server.log"),
+		PortBase:      portalloc.DefaultBasePort,
+		PortRange:     portalloc.DefaultRange,
+		SelfPath:      selfPath,
+		ReplicateFrom: replicateFrom,
+		SlotName:      slotName,
 	}
 
 	// SPEC §4.1: Ctrl-C must propagate to child processes. Cancel
