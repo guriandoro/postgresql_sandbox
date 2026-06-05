@@ -117,3 +117,32 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, res.InstallPrefix)
 	return ui.ExitOK.Int()
 }
+
+// buildHelp prints `pg_sandbox help build`. SPEC §7.1.
+func buildHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox build — compile a PostgreSQL version from source")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox build <version> [flags]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Downloads, configures, builds, and installs PostgreSQL <version> (e.g. 18.4)")
+	fmt.Fprintln(w, "under <bin-dir>/<version>/. Prints the install prefix on stdout so it can be")
+	fmt.Fprintln(w, "captured: `BIN=$(pg_sandbox build 18.4)`.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-b, --bin-dir <dir>", "Install root (default $PGS_BIN_DIR, global defaultBinDir, or /opt/postgresql)"},
+		{"    --build-dir <dir>", "Build scratch dir (default $PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/)"},
+		{"    --with-icu", "Pass --with-icu to configure"},
+		{"    --with-openssl", "Pass --with-openssl to configure"},
+		{"    --configure-opts <s>", "Extra ./configure flags (whitespace-split, NOT shell-parsed)"},
+		{"-j, --jobs <n>", "Parallelism for make (default: runtime.NumCPU())"},
+		{"-f, --force", "Overwrite an existing install prefix"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Examples:")
+	fmt.Fprintln(w, "  pg_sandbox build 18.4")
+	fmt.Fprintln(w, "  pg_sandbox build 17.2 --with-icu --with-openssl -j 8")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §7.1; docs/examples.md has a source-build recipe.")
+}

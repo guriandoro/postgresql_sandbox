@@ -103,3 +103,26 @@ func runPublish(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	return ui.ExitOK.Int()
 }
+
+// publishHelp prints `pg_sandbox help publish`. SPEC §6.9.
+func publishHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox publish — create a logical replication publication")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox publish -s <dir> --pub-name <name> --all-tables [--dbname <db>]")
+	fmt.Fprintln(w, "  pg_sandbox publish -s <dir> --pub-name <name> --tables <t1,t2,...> [--dbname <db>]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Issues CREATE PUBLICATION on the sandbox. Exactly one of --all-tables or")
+	fmt.Fprintln(w, "--tables is required.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+		{"    --pub-name <name>", "Publication name (required)"},
+		{"    --all-tables", "Publish FOR ALL TABLES (mutually exclusive with --tables)"},
+		{"    --tables <csv>", "Comma-separated table list (mutually exclusive with --all-tables)"},
+		{"-d, --dbname <name>", "Database to create the publication in (default: sandbox default)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.9.")
+}

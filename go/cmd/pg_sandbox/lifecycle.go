@@ -85,3 +85,28 @@ func lifecycleCommand(
 	}
 	return ui.ExitOK.Int()
 }
+
+// lifecycleHelp prints help for one of start/stop/restart. The three
+// share argv shape and flag set, so they share their help template.
+// verb is the imperative used in the description (e.g. "start",
+// "stop", "restart"); ctlVerb is what pg_ctl calls under the hood.
+func lifecycleHelp(w io.Writer, name, verb, ctlVerb string) {
+	fmt.Fprintf(w, "pg_sandbox %s — %s a sandbox's PostgreSQL instance\n", name, verb)
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintf(w, "  pg_sandbox %s -s <dir>\n", name)
+	fmt.Fprintln(w, "")
+	fmt.Fprintf(w, "Loads the sandbox config and runs `pg_ctl %s` against it. Refuses if <dir>\n", ctlVerb)
+	fmt.Fprintln(w, "is not a sandbox directory.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.2.")
+}
+
+func startHelp(w io.Writer)   { lifecycleHelp(w, "start", "start", "start") }
+func stopHelp(w io.Writer)    { lifecycleHelp(w, "stop", "stop", "stop -m fast") }
+func restartHelp(w io.Writer) { lifecycleHelp(w, "restart", "restart", "restart") }

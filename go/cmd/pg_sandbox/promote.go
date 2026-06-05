@@ -59,3 +59,21 @@ func runPromote(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	return ui.ExitOK.Int()
 }
+
+// promoteHelp prints `pg_sandbox help promote`. SPEC §6.8.
+func promoteHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox promote — promote a physical standby to primary")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox promote -s <dir>")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Runs `pg_ctl promote` against a standby sandbox so it accepts writes. The")
+	fmt.Fprintln(w, "sandbox role flips from standby to primary; the upstream sandbox is left as is.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.8.")
+}

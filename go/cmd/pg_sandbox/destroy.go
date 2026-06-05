@@ -80,6 +80,25 @@ func runDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 	return ui.ExitOK.Int()
 }
 
+// destroyHelp prints `pg_sandbox help destroy`. SPEC §6.3.
+func destroyHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox destroy — tear down a sandbox")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox destroy -s <dir> [--force]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Stops the cluster (if running) and removes the sandbox directory tree.")
+	fmt.Fprintln(w, "Without --force, prompts y/N on stderr; refuses if stdin is not a TTY.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+		{"-f, --force", "Skip the confirmation prompt"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.3.")
+}
+
 // stdinIsTTY reports whether os.Stdin is connected to a terminal.
 // Stdlib-only: we check the Mode flags. ModeCharDevice is set on a
 // stdin connected to a TTY (canonical pattern; see e.g. mattn/go-

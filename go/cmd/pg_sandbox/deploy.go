@@ -176,6 +176,46 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	return ui.ExitOK.Int()
 }
 
+// deployHelp prints `pg_sandbox help deploy`. SPEC §6.1.
+func deployHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox deploy — create a new sandbox")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox deploy -s <dir> -b <bin-dir> [flags]")
+	fmt.Fprintln(w, "  pg_sandbox deploy -s <dir> -b <bin-dir> --replicate-from <src> --slot <name>")
+	fmt.Fprintln(w, "  pg_sandbox deploy -s <dir> -b <bin-dir> --subscribe-to <src> --pub-name <name>")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Provisions a PostgreSQL sandbox in <dir> using the binaries at <bin-dir>.")
+	fmt.Fprintln(w, "Picks an unused TCP port unless --port is set, runs initdb, starts the cluster,")
+	fmt.Fprintln(w, "and prints the connection string on stdout. With --replicate-from a physical")
+	fmt.Fprintln(w, "streaming replica is created; with --subscribe-to a logical subscriber.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (required; or set PGS_BIN_DIR)"},
+		{"    --host <addr>", "Listen address (default 127.0.0.1)"},
+		{"-p, --port <n>", "TCP port (auto-allocated when omitted)"},
+		{"-U, --user <name>", "PG superuser (default postgres)"},
+		{"-d, --dbname <name>", "Default database name (default postgres)"},
+		{"    --data-dir <name>", "Basename of data dir under --sandbox-dir (default \"data\")"},
+		{"    --log <name>", "Basename of server log under --sandbox-dir (default \"server.log\")"},
+		{"    --replicate-from <ref>", "Source sandbox name (or absolute path) to stream-replicate from"},
+		{"    --slot <name>", "Physical replication slot name (required with --replicate-from)"},
+		{"    --subscribe-to <ref>", "Publisher sandbox name (or absolute path) to subscribe to"},
+		{"    --pub-name <name>", "Publication name on the publisher (required with --subscribe-to)"},
+		{"    --sub-name <name>", "Subscription name (default <this-sandbox-basename>_sub)"},
+		{"    --copy-schema", "pg_dump --schema-only from the publisher before CREATE SUBSCRIPTION"},
+		{"    --no-copy-data", "Create subscription with WITH (copy_data = false)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Environment:")
+	fmt.Fprintln(w, "  PGS_BIN_DIR fills in --bin-dir; PGS_* also supplies defaults for host/port/user/dbname.")
+	fmt.Fprintln(w, "  -s accepts a bare name (resolved under sandboxRoot) or an absolute path.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.1 for the full behavior; docs/examples.md for end-to-end recipes.")
+}
+
 // firstNonEmpty returns the first non-empty string in args. It's
 // the common "flag won? env won? default won?" tiebreaker.
 func firstNonEmpty(values ...string) string {

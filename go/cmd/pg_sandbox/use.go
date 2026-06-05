@@ -92,3 +92,26 @@ func runUse(args []string, _ io.Writer, stderr io.Writer) int {
 	// signature; this line never actually executes.
 	return ui.ExitOK.Int()
 }
+
+// useHelp prints `pg_sandbox help use`. SPEC §6.5.
+func useHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox use — open psql against a sandbox")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox use -s <dir> [-- <psql args>...]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "execs psql with PG* env (host, port, user, dbname) sourced from the sandbox")
+	fmt.Fprintln(w, "config so the current process is replaced by psql — signals, TTY, exit code")
+	fmt.Fprintln(w, "all behave as if you ran psql directly. Anything after `--` is forwarded.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Examples:")
+	fmt.Fprintln(w, "  pg_sandbox use -s mybox")
+	fmt.Fprintln(w, "  pg_sandbox use -s mybox -- -c 'select version()'")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.5.")
+}

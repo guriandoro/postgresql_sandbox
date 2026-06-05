@@ -121,3 +121,29 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stderr, "level=INFO msg=%q removed=%d\n", "cleanup complete", removed)
 	return ui.ExitOK.Int()
 }
+
+// cleanupInstallVersionsHelp prints help for `cleanup-install-versions`.
+// SPEC §7.2.
+func cleanupInstallVersionsHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox cleanup-install-versions — prune unused PostgreSQL install dirs")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox cleanup-install-versions [--bin-dir <dir>] [--root <dir>] [--force] [<version>...]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Walks <bin-dir> for installed PG versions, cross-references which ones are")
+	fmt.Fprintln(w, "used by sandboxes under <root>, and removes the unused ones after a y/N prompt.")
+	fmt.Fprintln(w, "Positional <version>s narrow the scan to just those names.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Caveat: only sandboxes under the resolved --root are scanned to mark versions")
+	fmt.Fprintln(w, "as in-use. Sandboxes that live elsewhere will NOT block deletion — pass --root")
+	fmt.Fprintln(w, "explicitly when sandboxes span multiple roots.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-b, --bin-dir <dir>", "Install root to prune (default $PGS_BIN_DIR, global defaultBinDir, or /opt/postgresql)"},
+		{"    --root <dir>", "Sandbox root to walk (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)"},
+		{"-f, --force", "Skip confirmation prompt"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §7.2.")
+}

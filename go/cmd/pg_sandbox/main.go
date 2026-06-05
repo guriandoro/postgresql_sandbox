@@ -49,47 +49,52 @@ var subcommands map[string]subcommand
 func init() {
 	subcommands = map[string]subcommand{
 		// Single-instance lifecycle.
-		"deploy":  {summary: "Create a new sandbox", run: runDeploy},
-		"destroy": {summary: "Tear down a sandbox", run: runDestroy},
-		"start":   {summary: "Start a sandbox's PostgreSQL instance", run: runStart},
-		"stop":    {summary: "Stop a sandbox's PostgreSQL instance", run: runStop},
-		"restart": {summary: "Restart a sandbox's PostgreSQL instance", run: runRestart},
-		"status":  {summary: "Report sandbox running/replication state", run: runStatus},
-		"use":     {summary: "Open psql against a sandbox", run: runUse},
-		"run":     {summary: "Run any PG utility against a sandbox", run: runRun},
-		"promote": {summary: "Promote a physical standby", run: runPromote},
+		"deploy":  {summary: "Create a new sandbox", run: runDeploy, help: deployHelp},
+		"destroy": {summary: "Tear down a sandbox", run: runDestroy, help: destroyHelp},
+		"start":   {summary: "Start a sandbox's PostgreSQL instance", run: runStart, help: startHelp},
+		"stop":    {summary: "Stop a sandbox's PostgreSQL instance", run: runStop, help: stopHelp},
+		"restart": {summary: "Restart a sandbox's PostgreSQL instance", run: runRestart, help: restartHelp},
+		"status":  {summary: "Report sandbox running/replication state", run: runStatus, help: statusHelp},
+		"use":     {summary: "Open psql against a sandbox", run: runUse, help: useHelp},
+		"run":     {summary: "Run any PG utility against a sandbox", run: runRun, help: runRunHelp},
+		"promote": {summary: "Promote a physical standby", run: runPromote, help: promoteHelp},
 
 		// Configuration (replaces Python `setenv`; see SPEC §3 and §6.7).
-		"config": {summary: "Inspect/mutate sandbox or global config", run: runConfig},
+		"config": {summary: "Inspect/mutate sandbox or global config", run: runConfig, help: printConfigUsage},
 
 		// Logical replication.
-		"publish":   {summary: "Create a logical replication publication", run: runPublish},
-		"subscribe": {summary: "Create a logical replication subscription", run: runSubscribe},
+		"publish":   {summary: "Create a logical replication publication", run: runPublish, help: publishHelp},
+		"subscribe": {summary: "Create a logical replication subscription", run: runSubscribe, help: subscribeHelp},
 
 		// Cluster orchestration.
-		"cluster": {summary: "Manage a named group of sandboxes (deploy/status/destroy)", run: runCluster},
+		"cluster": {summary: "Manage a named group of sandboxes (deploy/status/destroy)", run: runCluster, help: printClusterUsage},
 
 		// Cross-host listing and reports.
-		"global_status": {summary: "List every sandbox on the host", run: runGlobalStatus},
-		"report":        {summary: "Generate a pg_gather HTML report", run: runReport},
+		"global_status": {summary: "List every sandbox on the host", run: runGlobalStatus, help: globalStatusHelp},
+		"report":        {summary: "Generate a pg_gather HTML report", run: runReport, help: reportHelp},
 
 		// Phase 2: source compilation + install pruning.
-		"build":                    {summary: "Compile a PostgreSQL version from source", run: runBuild},
-		"cleanup-install-versions": {summary: "Prune unused PostgreSQL install dirs", run: runCleanupInstallVersions},
+		"build":                    {summary: "Compile a PostgreSQL version from source", run: runBuild, help: buildHelp},
+		"cleanup-install-versions": {summary: "Prune unused PostgreSQL install dirs", run: runCleanupInstallVersions, help: cleanupInstallVersionsHelp},
 
 		// Help is a real implementation even at this stage.
-		"help": {summary: "Show help for a command", run: runHelp},
+		"help": {summary: "Show help for a command", run: runHelp, help: helpHelp},
 	}
 }
 
 // subcommand bundles the metadata needed by the dispatcher: a short
-// summary used in `pg_sandbox help`, and the function that actually
-// runs the command. The run signature passes the already-stripped
-// argv (without the program name and without the subcommand name)
-// plus the writers to use, so subcommands are easy to test.
+// summary used in `pg_sandbox help`, the function that actually runs
+// the command, and a per-command help printer used by both
+// `pg_sandbox help <cmd>` and the dispatcher's `<cmd> --help` hook.
+// The run signature passes the already-stripped argv (without the
+// program name and without the subcommand name) plus the writers to
+// use, so subcommands are easy to test. `help` writes the detailed
+// usage/flags block to the given writer; nil falls back to the brief
+// summary line.
 type subcommand struct {
 	summary string
 	run     func(args []string, stdout, stderr io.Writer) int
+	help    func(w io.Writer)
 }
 
 func main() {
@@ -131,6 +136,19 @@ dispatch:
 		fmt.Fprintln(os.Stderr, "Run 'pg_sandbox help' to see available commands.")
 		os.Exit(ui.ExitUsage.Int())
 	}
+	// Intercept `<cmd> --help` / `<cmd> -h` so it always renders the
+	// rich help on stdout and exits 0, rather than dropping into the
+	// flag package's terser default usage on stderr.
+	//
+	// We only check the FIRST positional after the subcommand name —
+	// that's the canonical placement for --help and avoids second-
+	// guessing argv shapes that the subcommand's FlagSet handles
+	// (e.g. `cluster deploy --help`, which the inner dispatcher
+	// already maps to a rich block).
+	if len(rest) > 0 && (rest[0] == "--help" || rest[0] == "-h") && cmd.help != nil {
+		cmd.help(os.Stdout)
+		os.Exit(ui.ExitOK.Int())
+	}
 	os.Exit(cmd.run(rest, os.Stdout, os.Stderr))
 }
 
@@ -149,9 +167,10 @@ func usageHint(w io.Writer, cmd string) {
 }
 
 // runHelp implements `pg_sandbox help [command]`. With no argument it
-// prints the top-level command index; with a command name it prints
-// the (currently brief) per-command summary. Per-command detailed
-// flag help is still TBD — for now we point readers at SPEC.md §6.
+// prints the top-level command index; with a command name it calls
+// that command's detailed `help` printer. Commands without a help
+// printer fall back to the short summary line (kept as a safety net
+// so a missing wiring doesn't silently crash).
 func runHelp(args []string, stdout, _ io.Writer) int {
 	if len(args) == 0 {
 		printTopHelp(stdout)
@@ -163,9 +182,52 @@ func runHelp(args []string, stdout, _ io.Writer) int {
 		fmt.Fprintf(stdout, "pg_sandbox: no help available for %q\n", name)
 		return ui.ExitUsage.Int()
 	}
+	if cmd.help != nil {
+		cmd.help(stdout)
+		return ui.ExitOK.Int()
+	}
 	fmt.Fprintf(stdout, "pg_sandbox %s — %s\n", name, cmd.summary)
-	fmt.Fprintln(stdout, "(Detailed flags TBD; see SPEC.md §6 for the planned behavior.)")
 	return ui.ExitOK.Int()
+}
+
+// helpFlag describes one flag row in a `pg_sandbox help <cmd>` block.
+// names is the left-column text (e.g. "-s, --sandbox-dir <dir>") and
+// desc is the right-column description. Authoring is by hand rather
+// than reflecting over a real flag.FlagSet because the help text
+// merges the short-alias and long-form rows into a single line that
+// the flag package doesn't model.
+type helpFlag struct {
+	names string
+	desc  string
+}
+
+// writeHelpFlags renders a list of helpFlag rows with the left column
+// padded to the widest names string. Used by every per-command help
+// printer so flag tables across commands look uniform.
+func writeHelpFlags(w io.Writer, flags []helpFlag) {
+	width := 0
+	for _, f := range flags {
+		if l := len(f.names); l > width {
+			width = l
+		}
+	}
+	for _, f := range flags {
+		fmt.Fprintf(w, "  %-*s  %s\n", width, f.names, f.desc)
+	}
+}
+
+// helpHelp prints `pg_sandbox help help`. Useful as a discovery aid
+// for `pg_sandbox help <tab>`-style completion users — they should
+// learn that `--help` and `help <cmd>` are equivalent.
+func helpHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox help — show help for a command")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox help [<command>]")
+	fmt.Fprintln(w, "  pg_sandbox <command> --help")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "With no argument, lists every top-level command. With a command name,")
+	fmt.Fprintln(w, "prints that command's usage, flags, and notes.")
 }
 
 // printTopHelp writes the top-level usage to the given writer. We
@@ -178,9 +240,19 @@ func printTopHelp(w io.Writer) {
 	b.WriteString("  pg_sandbox [--version|--help] <command> [flags] [args]\n\n")
 	b.WriteString("Commands:\n")
 	// Print commands in a stable order rather than map order so the
-	// help output diff-cleanly across runs.
-	for _, name := range orderedCommandNames() {
-		fmt.Fprintf(&b, "  %-14s %s\n", name, subcommands[name].summary)
+	// help output diff-cleanly across runs. Column width is computed
+	// from the widest command name so longer names (e.g.
+	// "cleanup-install-versions") don't bust the layout — the prior
+	// hardcoded 14-char width misaligned that row.
+	names := orderedCommandNames()
+	width := 0
+	for _, n := range names {
+		if l := len(n); l > width {
+			width = l
+		}
+	}
+	for _, name := range names {
+		fmt.Fprintf(&b, "  %-*s  %s\n", width, name, subcommands[name].summary)
 	}
 	b.WriteString("\nRun 'pg_sandbox help <command>' for more on a command.\n")
 	b.WriteString("Full specification: go/SPEC.md\n")

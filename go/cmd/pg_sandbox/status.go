@@ -73,3 +73,23 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	rep.RenderText(stdout)
 	return ui.ExitOK.Int()
 }
+
+// statusHelp prints `pg_sandbox help status`. SPEC §6.4.
+func statusHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox status — report sandbox running/replication state")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox status -s <dir> [--json]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Prints whether the cluster is running, plus best-effort replication info")
+	fmt.Fprintln(w, "(physical/logical slots, subscriptions). Probes that fail emit a warning")
+	fmt.Fprintln(w, "on stderr but do not change the exit code.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+		{"    --json", "Reserved for JSON output (currently a stable stub)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.4.")
+}

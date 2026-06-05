@@ -108,3 +108,31 @@ func runRun(args []string, _ io.Writer, stderr io.Writer) int {
 	// Unreachable on success.
 	return ui.ExitOK.Int()
 }
+
+// runRunHelp prints `pg_sandbox help run`. SPEC §6.6. The function
+// is named runRunHelp rather than runHelp because runHelp is the
+// dispatcher entry for `pg_sandbox help` itself, defined in main.go.
+func runRunHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox run — run any PG utility against a sandbox")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox run -s <dir> [--no-dsn] -- <binary> [args...]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "execs <binary> with PG* env (host, port, user, dbname) sourced from the")
+	fmt.Fprintln(w, "sandbox config. By default the same values are also injected on the argv as")
+	fmt.Fprintln(w, "-h/-p/-U/-d (so e.g. pg_dump picks them up even when it ignores env); pass")
+	fmt.Fprintln(w, "--no-dsn to skip the argv injection while keeping env. <binary> is looked up")
+	fmt.Fprintln(w, "in the sandbox's bin/ dir first, then PATH.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+		{"-n, --no-dsn", "Skip argv-side -h/-p/-U/-d injection (env still set)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Examples:")
+	fmt.Fprintln(w, "  pg_sandbox run -s mybox -- pg_dump -t mytable")
+	fmt.Fprintln(w, "  pg_sandbox run -s mybox --no-dsn -- vacuumdb --all")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.6.")
+}

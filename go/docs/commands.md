@@ -1,6 +1,6 @@
 # Commands
 
-This is the user-facing command reference for the Go port. It mirrors the entries in `cmd/pg_sandbox/main.go` and the detailed sections in [`../SPEC.md`](../SPEC.md) — the SPEC remains the authoritative behavior contract; this document is the friendlier per-command summary that `--help` output should match.
+This is the user-facing command reference for the Go port. It mirrors the entries in `cmd/pg_sandbox/main.go` and the detailed sections in [`../SPEC.md`](../SPEC.md) — the SPEC remains the authoritative behavior contract; this document is the at-a-glance index of what each command does. For full usage, flags, and examples on a single command, run `pg_sandbox help <command>` (or equivalently `pg_sandbox <command> --help`).
 
 See `SPEC.md` §6 for the full RFC-2119 behavior of each command.
 
@@ -66,7 +66,7 @@ These are *not* global — each command parses its own flag set — but they app
 - `cleanup-install-versions [--force]` — prune unused PG installs
 
 ### Meta
-- `help [<command>]` — print the top-level command index, or the brief summary for a single command.
+- `help [<command>]` — print the top-level command index, or the detailed usage / flags / examples for a single command. Equivalent to `pg_sandbox <command> --help` (the two forms are byte-identical).
 
 ## Examples
 

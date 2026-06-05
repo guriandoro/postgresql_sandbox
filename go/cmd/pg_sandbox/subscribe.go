@@ -84,3 +84,28 @@ func runSubscribe(args []string, _ io.Writer, stderr io.Writer) int {
 	}
 	return ui.ExitOK.Int()
 }
+
+// subscribeHelp prints `pg_sandbox help subscribe`. SPEC §6.10.
+func subscribeHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox subscribe — create a logical replication subscription")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox subscribe -s <dir> --from <publisher> --pub-name <name> [flags]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Issues CREATE SUBSCRIPTION on the sandbox, pointing at <publisher>. With")
+	fmt.Fprintln(w, "--copy-schema, pg_dump --schema-only is run from the publisher first so the")
+	fmt.Fprintln(w, "subscription can succeed against a fresh sandbox.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
+		{"    --from <ref>", "Publisher sandbox name (or absolute path) (required)"},
+		{"    --pub-name <name>", "Publication name on the publisher (required)"},
+		{"    --sub-name <name>", "Subscription name (default <this-sandbox-basename>_sub)"},
+		{"    --copy-schema", "Run pg_dump --schema-only from the publisher before CREATE SUBSCRIPTION"},
+		{"    --no-copy-data", "Create subscription with WITH (copy_data = false)"},
+		{"-d, --dbname <name>", "Database name on both ends (default: sandbox default)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.10.")
+}

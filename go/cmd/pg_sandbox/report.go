@@ -174,3 +174,27 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	}
 	return ui.ExitOK.Int()
 }
+
+// reportHelp prints `pg_sandbox help report`. SPEC §6.13.
+func reportHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox report — generate a pg_gather HTML report")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox report --input <out.txt> --pg-gather-dir <dir> --bin-dir <dir> [--output <html>]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Loads a captured pg_gather out.txt into a throwaway sandbox, runs the gather")
+	fmt.Fprintln(w, "report scripts against it, and writes the rendered HTML to --output (default")
+	fmt.Fprintln(w, "report.html in CWD). Prints the output path on stdout.")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"    --input <path>", "Captured pg_gather out.txt (required)"},
+		{"    --output <path>", "Rendered HTML output path (default report.html in CWD)"},
+		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (or set PGS_BIN_DIR / global defaultBinDir)"},
+		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir)"},
+		{"    --root <dir>", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)"},
+		{"-f, --force", "Accepted but currently unused (reserved for prompt suppression)"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.13.")
+}

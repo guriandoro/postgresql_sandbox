@@ -63,3 +63,22 @@ func runGlobalStatus(args []string, stdout, stderr io.Writer) int {
 	gs.RenderText(stdout)
 	return ui.ExitOK.Int()
 }
+
+// globalStatusHelp prints `pg_sandbox help global_status`. SPEC §6.12.
+func globalStatusHelp(w io.Writer) {
+	fmt.Fprintln(w, "pg_sandbox global_status — list every sandbox on the host")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Usage:")
+	fmt.Fprintln(w, "  pg_sandbox global_status [--root <dir>] [--json]")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Walks the sandbox root and prints a one-line summary per sandbox (name, role,")
+	fmt.Fprintln(w, "port, running/stopped, bin-dir). Useful for triaging \"what do I have running?\"")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "Flags:")
+	writeHelpFlags(w, []helpFlag{
+		{"    --root <dir>", "Sandbox root to walk (default $PGS_SANDBOX_ROOT, global sandboxRoot, or ~/postgresql-sandboxes/)"},
+		{"    --json", "Emit machine-readable JSON to stdout"},
+	})
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "See SPEC.md §6.12.")
+}
