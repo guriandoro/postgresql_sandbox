@@ -1,6 +1,6 @@
 # pg_sandbox (Go port)
 
-> **Status:** Broadly functional. Every documented subcommand has a real handler — single-sandbox lifecycle, replication (physical + logical), cluster orchestration, config, reporting, source build, and install pruning are all wired in. The known gap is `status --json`, which is accepted but emits a stub payload. The full functional specification is in [`SPEC.md`](./SPEC.md) — that document is still the contract for what this port must do.
+> **Status:** Broadly functional. Every documented subcommand has a real handler — single-sandbox lifecycle, replication (physical + logical), cluster orchestration, config, reporting, source build, and install pruning are all wired in. The full functional specification is in [`SPEC.md`](./SPEC.md) — that document is still the contract for what this port must do.
 
 `pg_sandbox` is a command-line tool that provisions, manages, and tears down local PostgreSQL sandbox instances for development, testing, and bug reproduction. This directory hosts a Go re-implementation of the original Python tool (which lives at the repository root and continues to be the working version until this port reaches parity).
 

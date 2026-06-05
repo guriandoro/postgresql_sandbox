@@ -60,7 +60,7 @@ pg_sandbox deploy -s standby1 \
 pg_sandbox deploy -s standby2 \
     --replicate-from primary --slot primary_standby2_slot
 
-# Inspect (text output — `status --json` currently emits a stub payload).
+# Inspect (text output by default; pass `--json` for a JSON object).
 pg_sandbox status -s primary
 
 # Promote standby1 if primary dies

@@ -545,7 +545,6 @@ In addition to this SPEC, the port MUST maintain:
 1. **JSON-with-comments or strict JSON?** Self-describing-on-disk goal (§3.1.6) may push us toward JSONC or YAML — but YAML breaks "stdlib only". Default proposal: strict JSON + a generated `docs/config-schema.md`.
 2. **Subscription credentials.** Logical replication needs a usable connection string from subscriber to publisher. Decision needed on whether to use `trust` in pg_hba on the publisher (acceptable for a sandbox tool) or a `.pgpass` file. Default proposal: `trust` from `127.0.0.1`, since the entire tool's scope is local.
 3. **Concurrent cluster member deploy.** Cluster deploy of N members is currently sequential. Decision: keep sequential (simpler, easier to reason about failures) or parallelize (faster but harder to diagnose). Default proposal: sequential for Phase 1.
-4. **What does `status --json` look like exactly?** Schema deferred to implementation.
-5. **Should `run` set `PGPASSWORD`?** The sandbox uses `trust` auth locally so usually no, but consider for future non-trust configurations.
+4. **Should `run` set `PGPASSWORD`?** The sandbox uses `trust` auth locally so usually no, but consider for future non-trust configurations.
 
 These are tracked here so we don't forget; implementation may resolve them with reasonable defaults.

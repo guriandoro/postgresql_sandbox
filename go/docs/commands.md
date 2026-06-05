@@ -26,7 +26,7 @@ These are *not* global — each command parses its own flag set — but they app
 | `--user <name>` / `-U` | `deploy`, `publish`, `subscribe` | PG superuser. |
 | `--dbname <name>` / `-d` | `deploy`, `publish`, `subscribe`, `config` | Database name. |
 | `--force` / `-f` | `destroy`, `cluster destroy`, `cleanup-install-versions`, `build`, `report` | Skip confirmation prompts. |
-| `--json` | `status`, `config show`, `global_status`, `cluster status`, `report` | Machine-readable output. (See per-command notes below — `status --json` is still a stub.) |
+| `--json` | `status`, `config show`, `global_status`, `cluster status`, `report` | Machine-readable output. |
 | `--global` | `config show` / `get` / `set` / `validate` | Operate on global config instead of the sandbox config. |
 | `--root <path>` | `global_status`, `report`, `cleanup-install-versions` | Override the sandbox-root scan path. |
 
@@ -38,7 +38,7 @@ These are *not* global — each command parses its own flag set — but they app
 - `deploy` — create a new sandbox (optional `--replicate-from` / `--subscribe-to`)
 - `destroy` — tear down a sandbox (`--force` to skip prompt)
 - `start` / `stop` / `restart` — control PostgreSQL on an existing sandbox
-- `status` — report running state + replication info. `--json` is accepted but currently emits a stub payload (`{"todo":"json output deferred to a later slice"}`) and exits OK; the text output is production-ready.
+- `status` — report running state + replication info. `--json` emits the report as a JSON object (shape mirrors the `key=value` text render).
 - `use` — open `psql` against a sandbox
 - `run <bin> [args]` — run any PG utility with auto-injected connection flags
 - `promote` — promote a physical standby to a standalone primary

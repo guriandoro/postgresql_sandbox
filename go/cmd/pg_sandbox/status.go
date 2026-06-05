@@ -1,9 +1,9 @@
 // CLI wiring for `pg_sandbox status`. SPEC §6.4.
 //
-// In this slice the report is rendered to stdout as key=value lines.
-// --json is accepted but documented as deferred: passing it emits a
-// stub line and exits OK. Dropping the flag would be a breaking
-// surface change later; the stub keeps it stable.
+// The default render is key=value lines via sandbox.StatusReport's
+// RenderText. --json swaps in RenderJSON, which emits a JSON object
+// whose shape is defined by the struct tags in
+// internal/sandbox/status.go.
 
 package main
 
@@ -30,7 +30,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	)
 	fs.StringVar(&sandboxDir, "sandbox-dir", "", "Target sandbox directory (required)")
 	fs.StringVar(&sandboxDir, "s", "", "Alias for --sandbox-dir")
-	fs.BoolVar(&asJSON, "json", false, "Reserved for JSON output (deferred to a later slice)")
+	fs.BoolVar(&asJSON, "json", false, "Emit the report as a JSON object instead of key=value lines")
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
@@ -65,9 +65,10 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if asJSON {
-		// Documented as deferred. Stable stub so scripts piping it
-		// can see "this flag is accepted, output schema TBD".
-		fmt.Fprintln(stdout, `{"todo":"json output deferred to a later slice"}`)
+		if err := rep.RenderJSON(stdout); err != nil {
+			fmt.Fprintf(stderr, "pg_sandbox status: marshal: %v\n", err)
+			return ui.ExitGeneric.Int()
+		}
 		return ui.ExitOK.Int()
 	}
 	rep.RenderText(stdout)
@@ -88,7 +89,7 @@ func statusHelp(w io.Writer) {
 	fmt.Fprintln(w, "Flags:")
 	writeHelpFlags(w, []helpFlag{
 		{"-s, --sandbox-dir <dir>", "Target sandbox directory (required)"},
-		{"    --json", "Reserved for JSON output (currently a stable stub)"},
+		{"    --json", "Emit the report as a JSON object instead of key=value lines"},
 	})
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "See SPEC.md §6.4.")

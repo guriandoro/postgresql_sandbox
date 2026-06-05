@@ -21,14 +21,15 @@
 // warning to stderrW and continue. SPEC §6.4 frames status as
 // diagnostic — a partial report is more useful than no report.
 //
-// The --json flag is still accepted as a no-op stub at the CLI
-// layer; this file produces a structured StatusReport that the CLI
-// renders as key=value text.
+// The CLI layer renders the structured StatusReport as either
+// key=value text (RenderText) or a JSON object (RenderJSON). The
+// JSON schema is defined by the struct tags in this file.
 
 package sandbox
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"strings"
@@ -59,12 +60,12 @@ const (
 // ReplicaRow is one row from pg_stat_replication, the primary's view
 // of a connected standby.
 type ReplicaRow struct {
-	AppName   string
-	State     string
-	SyncState string
-	WriteLag  string
-	FlushLag  string
-	ReplayLag string
+	AppName   string `json:"app_name"`
+	State     string `json:"state"`
+	SyncState string `json:"sync_state"`
+	WriteLag  string `json:"write_lag"`
+	FlushLag  string `json:"flush_lag"`
+	ReplayLag string `json:"replay_lag"`
 }
 
 // WalReceiverRow is the single row from pg_stat_wal_receiver on a
@@ -76,11 +77,11 @@ type ReplicaRow struct {
 // stream started; the catalog column is `receive_start_lsn` from
 // PG 10 onward (PG 18 dropped the legacy `received_lsn` alias).
 type WalReceiverRow struct {
-	Status          string
-	ReceiveStartLSN string
-	WrittenLSN      string
-	FlushedLSN      string
-	LatestEndLSN    string
+	Status          string `json:"status"`
+	ReceiveStartLSN string `json:"receive_start_lsn"`
+	WrittenLSN      string `json:"written_lsn"`
+	FlushedLSN      string `json:"flushed_lsn"`
+	LatestEndLSN    string `json:"latest_end_lsn"`
 }
 
 // SubscriptionRow combines pg_subscription (catalog) and
@@ -89,66 +90,71 @@ type WalReceiverRow struct {
 // no live worker (subenabled=f) still reports its enabled state.
 type SubscriptionRow struct {
 	// Name is subname from pg_subscription.
-	Name string
+	Name string `json:"name"`
 	// Enabled mirrors pg_subscription.subenabled.
-	Enabled bool
+	Enabled bool `json:"enabled"`
 	// PID of the worker; empty when subenabled=f or worker not yet
 	// started.
-	WorkerPID string
+	WorkerPID string `json:"worker_pid"`
 	// ReceivedLSN is pg_stat_subscription.received_lsn.
-	ReceivedLSN string
+	ReceivedLSN string `json:"received_lsn"`
 	// LatestEndLSN is pg_stat_subscription.latest_end_lsn.
-	LatestEndLSN string
+	LatestEndLSN string `json:"latest_end_lsn"`
 	// LastMsgSendTime is pg_stat_subscription.last_msg_send_time.
-	LastMsgSendTime string
+	LastMsgSendTime string `json:"last_msg_send_time"`
 }
 
 // StatusReport is the structured form of `pg_sandbox status` output.
-// The CLI layer chooses how to render this (text for default, JSON
-// for --json once that lands).
+// The CLI layer chooses how to render this — text via RenderText,
+// JSON via RenderJSON. The JSON shape is defined by the struct tags
+// on this and its nested types; null vs empty-slice carries semantic
+// meaning for Replicas and Publications (see field comments).
 type StatusReport struct {
-	Name     string
-	State    RunState
-	Role     config.Role
-	Host     string
-	Port     int
-	User     string
-	Database string
-	DataDir  string
-	LogFile  string
+	Name     string      `json:"name"`
+	State    RunState    `json:"state"`
+	Role     config.Role `json:"role,omitempty"`
+	Host     string      `json:"host"`
+	Port     int         `json:"port"`
+	User     string      `json:"user"`
+	Database string      `json:"database"`
+	DataDir  string      `json:"data_dir"`
+	LogFile  string      `json:"log_file"`
 
 	// Version is the trimmed PostgreSQL version string, or empty if
 	// the sandbox is stopped or version probing failed.
-	Version string
+	Version string `json:"version,omitempty"`
 
 	// Replicas is the parsed pg_stat_replication output. Populated
 	// when Role is RolePrimary or RoleUnknown and the query
 	// succeeded. nil otherwise (including for "no replicas
-	// connected" — distinguish via len(Replicas) == 0).
-	Replicas []ReplicaRow
+	// connected" — distinguish via len(Replicas) == 0). The JSON
+	// encoding deliberately preserves null vs [] so consumers can
+	// tell "probe failed" from "no connected replicas".
+	Replicas []ReplicaRow `json:"replicas"`
 
 	// InRecovery reflects pg_is_in_recovery(): true on a standby,
 	// false on a primary. Only meaningful when Role is RoleStandby
 	// and the query succeeded.
-	InRecovery bool
+	InRecovery bool `json:"in_recovery"`
 
 	// WalReceiver is the single-row pg_stat_wal_receiver snapshot
 	// when this sandbox is a standby and the query succeeded. nil
 	// otherwise (including for "no receiver active yet").
-	WalReceiver *WalReceiverRow
+	WalReceiver *WalReceiverRow `json:"wal_receiver,omitempty"`
 
 	// Publications is the list of pg_publication.pubname rows on
 	// this sandbox. Populated for ANY role when the query succeeded
 	// (a primary that's also a publisher reports both replicas AND
 	// publications). nil when the probe failed; empty slice when the
-	// query ran with no rows.
-	Publications []string
+	// query ran with no rows. Encoded the same way as Replicas
+	// (null vs [] is meaningful).
+	Publications []string `json:"publications"`
 
 	// Subscription is the joined pg_subscription /
 	// pg_stat_subscription snapshot for this sandbox. Populated
 	// when the sandbox has a Logical config block AND the probe
 	// succeeded with a row. nil otherwise.
-	Subscription *SubscriptionRow
+	Subscription *SubscriptionRow `json:"subscription,omitempty"`
 }
 
 // Status loads the sandbox config and probes the instance's runtime
@@ -549,4 +555,16 @@ func (r *StatusReport) RenderText(w io.Writer) {
 			"subscription=name=%s enabled=%t worker_pid=%s received_lsn=%s latest_end_lsn=%s last_msg_send_time=%q\n",
 			s.Name, s.Enabled, s.WorkerPID, s.ReceivedLSN, s.LatestEndLSN, s.LastMsgSendTime)
 	}
+}
+
+// RenderJSON writes the StatusReport as a single JSON object. The
+// shape is documented by the struct tags on StatusReport and its
+// nested types.
+func (r *StatusReport) RenderJSON(w io.Writer) error {
+	data, err := json.MarshalIndent(r, "", "  ")
+	if err != nil {
+		return fmt.Errorf("sandbox.StatusReport.RenderJSON: marshal: %w", err)
+	}
+	_, err = fmt.Fprintln(w, string(data))
+	return err
 }
