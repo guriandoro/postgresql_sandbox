@@ -162,6 +162,59 @@ func TestLocateBinDirDoesNotExist(t *testing.T) {
 	}
 }
 
+// UX: users naturally pass the install prefix (e.g.
+// /opt/postgresql/18.3) rather than the bin/ subdir. Locate must
+// find the binary under <BinDir>/bin/ when it isn't directly under
+// <BinDir>, so deploy works whether the user wrote
+// `--bin-dir /opt/postgresql/18.3` or
+// `--bin-dir /opt/postgresql/18.3/bin`.
+func TestLocateBinDirHasBinSubdir(t *testing.T) {
+	dir := t.TempDir()
+	binSub := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binSub, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	fake := filepath.Join(binSub, "initdb")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write fake: %v", err)
+	}
+	e := &Exec{BinDir: dir}
+	got, err := e.Locate("initdb")
+	if err != nil {
+		t.Fatalf("Locate: %v", err)
+	}
+	if got != fake {
+		t.Errorf("Locate: got %q, want bin/ fallback %q", got, fake)
+	}
+}
+
+// Direct-in-BinDir wins over bin/ subdir: SPEC's documented
+// semantics (BinDir IS the bin/ dir) keep priority even when both
+// layouts exist. Guards against an accidental swap of the two
+// checks.
+func TestLocateBinDirDirectWinsOverBinSubdir(t *testing.T) {
+	dir := t.TempDir()
+	binSub := filepath.Join(dir, "bin")
+	if err := os.MkdirAll(binSub, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	direct := filepath.Join(dir, "initdb")
+	if err := os.WriteFile(direct, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write direct: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(binSub, "initdb"), []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+		t.Fatalf("write sub: %v", err)
+	}
+	e := &Exec{BinDir: dir}
+	got, err := e.Locate("initdb")
+	if err != nil {
+		t.Fatalf("Locate: %v", err)
+	}
+	if got != direct {
+		t.Errorf("Locate: got %q, want direct %q (SPEC says BinDir IS the bin/ dir)", got, direct)
+	}
+}
+
 // Regression: a BinDir that exists but isn't a directory must
 // surface as "bin-dir is not a directory", not as a generic
 // "<name> not found" error.

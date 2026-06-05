@@ -122,8 +122,11 @@ func New(binDir string) *Exec { return &Exec{BinDir: binDir} }
 //  2. If BinDir is set, stat it first. A missing or non-directory
 //     BinDir surfaces with a focused error rather than being
 //     buried inside a "<name> not found in BinDir or PATH" wrap.
-//     Then try BinDir/name; if it exists and is executable,
-//     return it.
+//     Then look for the binary in two spots:
+//       a. BinDir/name (SPEC: BinDir IS the bin/ directory).
+//       b. BinDir/bin/name (UX: users naturally pass the install
+//          prefix, e.g. /opt/postgresql/18.3, expecting the tool
+//          to find bin/initdb underneath).
 //  3. Fall back to exec.LookPath (which scans PATH).
 //
 // Returns the absolute path on success. On failure the error names
@@ -155,17 +158,23 @@ func (e *Exec) Locate(name string) (string, error) {
 		case !st.IsDir():
 			return "", fmt.Errorf("bin-dir is not a directory: %s", e.BinDir)
 		}
-		cand := filepath.Join(e.BinDir, name)
-		if isExecutable(cand) {
+		// Prefer BinDir/name (matches SPEC's "BinDir is bin/")
+		// but also accept BinDir/bin/name so users can hand us
+		// the install prefix (/opt/postgresql/18.3) without
+		// remembering to append /bin.
+		if cand := filepath.Join(e.BinDir, name); isExecutable(cand) {
 			return cand, nil
 		}
-		// BinDir is a real directory but doesn't contain the
-		// binary. Fall back to PATH; on failure, frame the error
-		// around the bin-dir since that's what the user configured.
+		if cand := filepath.Join(e.BinDir, "bin", name); isExecutable(cand) {
+			return cand, nil
+		}
+		// Neither layout matched. Try PATH; on failure, frame the
+		// error around the bin-dir since that's what the user
+		// configured.
 		if p, err := exec.LookPath(name); err == nil {
 			return p, nil
 		}
-		return "", fmt.Errorf("%s not found in bin-dir %s (and not in PATH)", name, e.BinDir)
+		return "", fmt.Errorf("%s not found in bin-dir %s or its bin/ subdir (and not in PATH)", name, e.BinDir)
 	}
 	p, err := exec.LookPath(name)
 	if err != nil {
