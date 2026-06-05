@@ -39,6 +39,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 		usageHint(stderr, "status")
 		return ui.ExitUsage.Int()
 	}
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox status: not a sandbox: %s\n", sandboxDir)
 		return ui.ExitNotASandbox.Int()

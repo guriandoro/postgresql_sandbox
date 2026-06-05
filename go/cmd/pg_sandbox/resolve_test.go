@@ -12,11 +12,43 @@
 package main
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
 )
+
+// markSandbox drops the canonical marker file in dir so
+// config.IsSandboxDir(dir) returns true. Returns the absolute path.
+// Used by the resolveSandboxArg tests to fabricate "this is a
+// sandbox" without bringing up a real PostgreSQL initdb run.
+func markSandbox(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	marker := filepath.Join(dir, config.SandboxFilename)
+	if err := os.WriteFile(marker, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", marker, err)
+	}
+	return dir
+}
+
+// markCluster is the cluster-manifest sibling of markSandbox: drops
+// pg_sandbox-cluster.json so config.IsClusterDir(dir) returns true
+// without standing up real member sandboxes.
+func markCluster(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	marker := filepath.Join(dir, config.ClusterFilename)
+	if err := os.WriteFile(marker, []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write %s: %v", marker, err)
+	}
+	return dir
+}
 
 // resetEnv clears every env var the helpers consult, then restores
 // the test-supplied overrides. We can't use t.Setenv("", "") to
@@ -228,5 +260,142 @@ func TestResolveSandboxRoot_nilGlobalIsSafe(t *testing.T) {
 	}
 	if got != "/from/env" {
 		t.Errorf("got %q, want %q", got, "/from/env")
+	}
+}
+
+// resolveSandboxArg lets per-sandbox commands accept `-s name` from
+// any working directory. The contract is local-first (existing
+// invocations never change behavior) with a bare-name fallback into
+// the configured sandboxRoot. Tests below pin each branch.
+
+func TestResolveSandboxArg_emptyPassesThrough(t *testing.T) {
+	// Empty input is the caller's "--sandbox-dir is required" path;
+	// the helper must not rewrite it.
+	resetEnv(t)
+	if got := resolveSandboxArg("", nil); got != "" {
+		t.Errorf("got %q, want %q", got, "")
+	}
+}
+
+func TestResolveSandboxArg_localMatchWins(t *testing.T) {
+	// A literal value that already points at a sandbox dir must be
+	// returned untouched, regardless of what sandboxRoot says — this
+	// is the "preserve historical cd-into-the-root then -s name"
+	// workflow.
+	resetEnv(t)
+	tmp := t.TempDir()
+	local := markSandbox(t, filepath.Join(tmp, "local"))
+	rootElsewhere := t.TempDir()
+	markSandbox(t, filepath.Join(rootElsewhere, "local")) // same name, but under sandboxRoot
+	t.Setenv("PGS_SANDBOX_ROOT", rootElsewhere)
+	got := resolveSandboxArg(local, nil)
+	if got != local {
+		t.Errorf("got %q, want %q (local match must win over sandboxRoot)", got, local)
+	}
+}
+
+func TestResolveSandboxArg_pathWithSeparatorPassesThrough(t *testing.T) {
+	// A value containing a path separator was an explicit path
+	// statement by the user — even if it doesn't resolve to a
+	// sandbox, we don't silently rewrite it to <root>/basename. That
+	// would mask typos like `-s ./missign` → `<root>/missign`.
+	resetEnv(t)
+	tmp := t.TempDir()
+	markSandbox(t, filepath.Join(tmp, "pg18"))
+	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	got := resolveSandboxArg("./missing/pg18", nil)
+	if got != "./missing/pg18" {
+		t.Errorf("got %q, want %q (paths with separators must not be rewritten)", got, "./missing/pg18")
+	}
+}
+
+func TestResolveSandboxArg_bareNameResolvesUnderSandboxRoot(t *testing.T) {
+	// The headline case: from any cwd, `-s pg18` must find
+	// <sandboxRoot>/pg18.
+	resetEnv(t)
+	tmp := t.TempDir()
+	want := markSandbox(t, filepath.Join(tmp, "pg18"))
+	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	got := resolveSandboxArg("pg18", nil)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveSandboxArg_bareNameNoMatchReturnsOriginal(t *testing.T) {
+	// When the joined path is not a sandbox either, the helper
+	// returns the user-typed token so the caller's "not a sandbox:
+	// <name>" error reads naturally instead of leaking an opaque
+	// joined path.
+	resetEnv(t)
+	t.Setenv("PGS_SANDBOX_ROOT", t.TempDir())
+	got := resolveSandboxArg("nope", nil)
+	if got != "nope" {
+		t.Errorf("got %q, want %q", got, "nope")
+	}
+}
+
+func TestResolveSandboxArg_usesGlobalConfigWhenEnvUnset(t *testing.T) {
+	// Pins that the sandboxRoot lookup goes through the same layered
+	// chain resolveSandboxRoot uses — including the global config —
+	// not just PGS_SANDBOX_ROOT.
+	resetEnv(t)
+	tmp := t.TempDir()
+	want := markSandbox(t, filepath.Join(tmp, "pg18"))
+	g := &config.Global{SandboxRoot: tmp}
+	got := resolveSandboxArg("pg18", g)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// resolveClusterArg mirrors resolveSandboxArg but gates on
+// IsClusterDir. We pin the same four branches plus one cross-marker
+// check (a sandbox-marked dir under sandboxRoot must NOT pose as a
+// cluster, even though they share a parent root).
+
+func TestResolveClusterArg_bareNameResolvesUnderSandboxRoot(t *testing.T) {
+	resetEnv(t)
+	tmp := t.TempDir()
+	want := markCluster(t, filepath.Join(tmp, "mycluster"))
+	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	got := resolveClusterArg("mycluster", nil)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveClusterArg_bareNameNoMatchReturnsOriginal(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("PGS_SANDBOX_ROOT", t.TempDir())
+	got := resolveClusterArg("nope", nil)
+	if got != "nope" {
+		t.Errorf("got %q, want %q", got, "nope")
+	}
+}
+
+func TestResolveClusterArg_pathWithSeparatorPassesThrough(t *testing.T) {
+	resetEnv(t)
+	tmp := t.TempDir()
+	markCluster(t, filepath.Join(tmp, "mycluster"))
+	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	got := resolveClusterArg("./missing/mycluster", nil)
+	if got != "./missing/mycluster" {
+		t.Errorf("got %q, want %q", got, "./missing/mycluster")
+	}
+}
+
+func TestResolveClusterArg_sandboxMarkerDoesNotPoseAsCluster(t *testing.T) {
+	// Cross-marker isolation: a `-s pg18` at the cluster surface must
+	// fall through to the "not a cluster" error path, NOT silently
+	// succeed because pg_sandbox.json exists. The two markers gate
+	// distinct surfaces and the SPEC treats them as non-substitutable.
+	resetEnv(t)
+	tmp := t.TempDir()
+	markSandbox(t, filepath.Join(tmp, "pg18"))
+	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	got := resolveClusterArg("pg18", nil)
+	if got != "pg18" {
+		t.Errorf("got %q, want %q (sandbox marker must not satisfy cluster gate)", got, "pg18")
 	}
 }

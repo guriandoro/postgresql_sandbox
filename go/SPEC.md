@@ -215,7 +215,7 @@ These MAY be supplied to any command (subcommand parser MUST accept them either 
 
 | Flag | Meaning |
 |---|---|
-| `--sandbox-dir <path>` / `-s <path>` | Target sandbox directory |
+| `--sandbox-dir <path>` / `-s <path>` | Target sandbox (or cluster) directory. See §5.1. |
 | `--bin-dir <path>` / `-b <path>` | PostgreSQL `bin/` directory |
 | `--host <addr>` | Listen / connect host |
 | `--port <n>` / `-p <n>` | TCP port |
@@ -228,6 +228,17 @@ These MAY be supplied to any command (subcommand parser MUST accept them either 
 | `--help` / `-h` | Per-command help |
 | `--version` | Print version and exit |
 | `--json` | Machine-readable output (for commands that support it: `status`, `global_status`, `cluster status`, `config show`, `config get`) |
+
+### 5.1 `--sandbox-dir` value resolution
+
+The `--sandbox-dir` / `-s` value is resolved as follows:
+
+1. **Empty** — the command fails with `ExitUsage` ("--sandbox-dir is required").
+2. **The literal value already points at a sandbox** (contains `pg_sandbox.json`) **or cluster** (contains `pg_sandbox-cluster.json`) — used verbatim. Covers absolute paths, `./`-prefixed relative paths, and the historical "cd into the sandbox-root, then `-s name`" workflow.
+3. **The value contains a path separator** (`/`) but does not point at a sandbox/cluster — used verbatim and the command fails with the usual "not a sandbox / not a cluster" error. A path was an explicit user intent; the tool MUST NOT silently rewrite `./missign` to `<sandboxRoot>/missign`.
+4. **Bare name** (no separator, literal does not exist as a sandbox/cluster) — joined onto the resolved `sandboxRoot` (§3.3). If `<sandboxRoot>/<name>` is a sandbox (or cluster, for cluster commands), THAT path is used. Otherwise the bare token is used verbatim and the usual "not a sandbox / not a cluster" error fires.
+
+`deploy` and `cluster deploy` are the exception: they treat `--sandbox-dir` as the *creation target* (the path where the new sandbox/cluster will be initialized), so no bare-name lookup is performed — the value lands at `<cwd>/<value>` if relative.
 
 ---
 

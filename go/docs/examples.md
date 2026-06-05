@@ -6,14 +6,15 @@
 
 ## Session setup
 
-Each recipe below assumes you've run the following once in your shell, so that bare names like `-s pg18` resolve under the default sandbox root:
+Each recipe below assumes you've exported the install root:
 
 ```sh
 export PGS_BIN_DIR=/opt/postgresql/18.4
-cd ~/postgresql-sandboxes/
 ```
 
-`-s <name>` is resolved against the current working directory — bare names land under `~/postgresql-sandboxes/`; explicit absolute or `./`-prefixed paths still resolve normally.
+Commands that operate on an *existing* sandbox or cluster (`status`, `start`, `stop`, `restart`, `use`, `run`, `destroy`, `promote`, `publish`, `subscribe`, `config show`/`get`/`set`/`validate`, `cluster status`, `cluster destroy`) accept `-s <name>` from any working directory — the name resolves to `<sandboxRoot>/<name>` (default `~/postgresql-sandboxes/<name>`). Absolute paths and `./`-prefixed relative paths are still honored verbatim.
+
+`deploy` and `cluster deploy` use `-s` as the *creation target*: a bare name lands under the current directory. To create new sandboxes under the default root, `cd ~/postgresql-sandboxes/` first.
 
 ## Build the version from source
 

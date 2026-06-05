@@ -62,6 +62,7 @@ func runRun(args []string, _ io.Writer, stderr io.Writer) int {
 	binary := tail[0]
 	forwarded := tail[1:]
 
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox run: not a sandbox: %s\n", sandboxDir)
 		return ui.ExitNotASandbox.Int()

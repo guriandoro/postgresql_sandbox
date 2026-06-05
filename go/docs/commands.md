@@ -19,7 +19,7 @@ These are *not* global — each command parses its own flag set — but they app
 
 | Flag | Where it applies | Meaning |
 |---|---|---|
-| `--sandbox-dir <path>` / `-s` | All single-sandbox + cluster commands | Target sandbox (or cluster) directory. |
+| `--sandbox-dir <path>` / `-s` | All single-sandbox + cluster commands | Target sandbox (or cluster) directory. Accepts an absolute path, a `./`-prefixed relative path, or — for commands operating on an *existing* sandbox/cluster — a bare name that resolves to `<sandboxRoot>/<name>` (default `~/postgresql-sandboxes/<name>`). `deploy` and `cluster deploy` treat the value as the literal creation target. |
 | `--bin-dir <path>` / `-b` | `deploy`, `build`, `report`, `cleanup-install-versions` | PostgreSQL `bin/` directory. |
 | `--host <addr>` | `deploy`, `cluster deploy` | Listen / connect host. |
 | `--port <n>` / `-p` | `deploy` | TCP port (auto-allocated when omitted). |

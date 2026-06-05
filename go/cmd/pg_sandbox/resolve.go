@@ -40,6 +40,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/guriandoro/postgresql_sandbox/go/internal/config"
 )
@@ -126,4 +127,85 @@ func loadGlobalConfig() *config.Global {
 		return nil
 	}
 	return g
+}
+
+// resolveSandboxArg lets per-sandbox commands accept a bare sandbox
+// name in addition to a path. The original surface (`-s ./pg18`,
+// `-s /abs/path/pg18`) is preserved; the new surface (`-s pg18` from
+// any working directory) is additive.
+//
+// Resolution order — strictly local-first, so no existing invocation
+// changes behavior:
+//
+//  1. Empty → return "" so the caller's "--sandbox-dir is required"
+//     check fires unchanged.
+//  2. The literal value already resolves to a sandbox dir → return
+//     it untouched. This covers `-s .`, `-s ./pg18`, `-s /abs/path`,
+//     and the historical "cd into the sandbox-root, then -s name"
+//     workflow.
+//  3. The value contains a path separator → return untouched. The
+//     user wrote a path; let the existing IsSandboxDir + error path
+//     speak for themselves (this avoids `-s ./missing` silently
+//     resolving to a same-named sandbox under sandboxRoot).
+//  4. Bare name → join onto the resolved sandboxRoot and return THAT
+//     if it's a sandbox dir; otherwise return the original (so the
+//     caller's existing "not a sandbox: <name>" error fires with
+//     the user-typed token, not the joined path).
+//
+// Best-effort: any failure to determine sandboxRoot (e.g. HOME unset
+// AND no flag/env/global value) is swallowed by returning the input
+// untouched. The point of this helper is convenience, not a new
+// failure surface.
+func resolveSandboxArg(raw string, globalCfg *config.Global) string {
+	if raw == "" {
+		return raw
+	}
+	if config.IsSandboxDir(raw) {
+		return raw
+	}
+	if strings.ContainsRune(raw, filepath.Separator) {
+		return raw
+	}
+	root, err := resolveSandboxRoot("", globalCfg)
+	if err != nil {
+		return raw
+	}
+	candidate := filepath.Join(root, raw)
+	if config.IsSandboxDir(candidate) {
+		return candidate
+	}
+	return raw
+}
+
+// resolveClusterArg is the cluster sibling of resolveSandboxArg —
+// same local-first / has-separator-passes-through / bare-name-under-
+// sandboxRoot rules, gated on config.IsClusterDir instead of
+// IsSandboxDir. Used by `cluster status` and `cluster destroy` so
+// `pg_sandbox cluster status -s mycluster` works from any cwd.
+//
+// We keep this as a separate helper rather than parametrising
+// resolveSandboxArg on a predicate: the two markers live in
+// different schema files (pg_sandbox.json vs pg_sandbox-cluster.json)
+// and the SPEC treats sandboxes and clusters as distinct surfaces,
+// so a typed helper per surface reads better at the call sites than
+// a generic one would.
+func resolveClusterArg(raw string, globalCfg *config.Global) string {
+	if raw == "" {
+		return raw
+	}
+	if config.IsClusterDir(raw) {
+		return raw
+	}
+	if strings.ContainsRune(raw, filepath.Separator) {
+		return raw
+	}
+	root, err := resolveSandboxRoot("", globalCfg)
+	if err != nil {
+		return raw
+	}
+	candidate := filepath.Join(root, raw)
+	if config.IsClusterDir(candidate) {
+		return candidate
+	}
+	return raw
 }

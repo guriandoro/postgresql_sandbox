@@ -64,6 +64,7 @@ func lifecycleCommand(
 	// check is intentional belt-and-braces — we want a clean exit
 	// code from the CLI even if the package is later extended to
 	// accept non-sandbox dirs in some mode.
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox %s: not a sandbox: %s\n", name, sandboxDir)
 		return ui.ExitNotASandbox.Int()

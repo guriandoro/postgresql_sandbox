@@ -44,6 +44,7 @@ func runDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 		usageHint(stderr, "destroy")
 		return ui.ExitUsage.Int()
 	}
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox destroy: not a sandbox: %s\n", sandboxDir)
 		return ui.ExitNotASandbox.Int()

@@ -54,6 +54,7 @@ func runSubscribe(args []string, _ io.Writer, stderr io.Writer) int {
 		usageHint(stderr, "subscribe")
 		return ui.ExitUsage.Int()
 	}
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox subscribe: not a sandbox: %s\n", sandboxDir)
 		return ui.ExitNotASandbox.Int()

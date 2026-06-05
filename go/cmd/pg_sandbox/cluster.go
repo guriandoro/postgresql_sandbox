@@ -232,6 +232,7 @@ func runClusterStatus(args []string, stdout, stderr io.Writer) int {
 		usageHint(stderr, "cluster")
 		return ui.ExitUsage.Int()
 	}
+	clusterDir = resolveClusterArg(clusterDir, loadGlobalConfig())
 	if !config.IsClusterDir(clusterDir) {
 		fmt.Fprintf(stderr, "pg_sandbox cluster status: not a cluster: %s\n", clusterDir)
 		return ui.ExitNotACluster.Int()
@@ -301,6 +302,7 @@ func runClusterDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 		usageHint(stderr, "cluster")
 		return ui.ExitUsage.Int()
 	}
+	clusterDir = resolveClusterArg(clusterDir, loadGlobalConfig())
 	if !config.IsClusterDir(clusterDir) {
 		fmt.Fprintf(stderr, "pg_sandbox cluster destroy: not a cluster: %s\n", clusterDir)
 		return ui.ExitNotACluster.Int()

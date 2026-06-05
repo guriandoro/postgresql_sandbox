@@ -158,6 +158,7 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 
 // showSandbox renders the per-sandbox config view.
 func showSandbox(sandboxDir string, asJSON bool, stdout, stderr io.Writer) int {
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox config show: not a sandbox: %s\n", sandboxDir)
 		return ui.ExitNotASandbox.Int()
@@ -345,6 +346,7 @@ func runConfigGet(args []string, stdout, stderr io.Writer) int {
 			return ui.ExitBadConfig.Int()
 		}
 	} else {
+		sc.sandboxDir = resolveSandboxArg(sc.sandboxDir, loadGlobalConfig())
 		if !config.IsSandboxDir(sc.sandboxDir) {
 			fmt.Fprintf(stderr, "pg_sandbox config get: not a sandbox: %s\n", sc.sandboxDir)
 			return ui.ExitNotASandbox.Int()
@@ -450,6 +452,7 @@ func splitKV(s string) (string, string, error) {
 
 // applySandboxSet handles the per-sandbox branch of `config set`.
 func applySandboxSet(sandboxDir string, parsed []kvPair, stderr io.Writer) int {
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox config set: not a sandbox: %s\n", sandboxDir)
 		return ui.ExitNotASandbox.Int()
@@ -675,6 +678,7 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 		return ui.ExitOK.Int()
 	}
 
+	sc.sandboxDir = resolveSandboxArg(sc.sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sc.sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox config validate: not a sandbox: %s\n", sc.sandboxDir)
 		return ui.ExitNotASandbox.Int()

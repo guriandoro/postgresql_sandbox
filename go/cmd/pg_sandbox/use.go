@@ -51,6 +51,7 @@ func runUse(args []string, _ io.Writer, stderr io.Writer) int {
 	// even loading the config. The sandbox package re-checks; the
 	// double check guarantees a clean ExitNotASandbox even if the
 	// package surface later changes.
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 	if !config.IsSandboxDir(sandboxDir) {
 		fmt.Fprintf(stderr, "pg_sandbox use: not a sandbox: %s\n", sandboxDir)
 		return ui.ExitNotASandbox.Int()
