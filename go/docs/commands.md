@@ -31,7 +31,7 @@ These are *not* global — each command parses its own flag set — but they app
 | `--root <path>` | `global_status`, `report`, `cleanup-install-versions` | Override the sandbox-root scan path. |
 | `--debug` | All commands | Lowers the log threshold to debug and prints a `# exec: …` line for every external process before invoking it. |
 | `--quiet` | All commands | Raises the log threshold to error: suppresses INFO/WARN diagnostic lines. Mutually exclusive with `--debug`. |
-| `--color <when>` | All commands | `auto` (default), `always`, or `never`. `auto` enables color only when stderr is a TTY and `NO_COLOR` is unset. Currently parsed and validated; ANSI emission is deferred to a later slice. |
+| `--color <when>` | All commands | `auto` (default), `always`, or `never`. `auto` enables color only when stderr is a TTY and `NO_COLOR` is unset. Currently parsed and validated; no ANSI color is emitted yet. |
 
 `--debug`, `--quiet`, and `--color` MAY appear before OR after the subcommand name (e.g. both `pg_sandbox --debug status -s X` and `pg_sandbox status --debug -s X` work).
 
