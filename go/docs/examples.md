@@ -33,8 +33,8 @@ pg_sandbox deploy -s pg18
 # Connect with psql
 pg_sandbox use -s pg18
 
-# Run any utility (auto-injected -h/-p/-U)
-pg_sandbox run -s pg18 pgbench -i postgres
+# Run any utility (auto-injected -h/-p/-U/-d)
+pg_sandbox run -s pg18 -- pgbench -i
 
 # Status (or status --json for a machine-readable object)
 pg_sandbox status -s pg18
