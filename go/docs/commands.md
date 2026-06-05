@@ -29,8 +29,11 @@ These are *not* global — each command parses its own flag set — but they app
 | `--json` | `status`, `config show`, `global_status`, `cluster status`, `report` | Machine-readable output. |
 | `--global` | `config show` / `get` / `set` / `validate` | Operate on global config instead of the sandbox config. |
 | `--root <path>` | `global_status`, `report`, `cleanup-install-versions` | Override the sandbox-root scan path. |
+| `--debug` | All commands | Lowers the log threshold to debug and prints a `# exec: …` line for every external process before invoking it. |
+| `--quiet` | All commands | Raises the log threshold to error: suppresses INFO/WARN diagnostic lines. Mutually exclusive with `--debug`. |
+| `--color <when>` | All commands | `auto` (default), `always`, or `never`. `auto` enables color only when stderr is a TTY and `NO_COLOR` is unset. Currently parsed and validated; ANSI emission is deferred to a later slice. |
 
-`--debug`, `--quiet`, and `--color` are described in `SPEC.md` §5 but are **not yet wired** in the Go port — passing them today is a usage error.
+`--debug`, `--quiet`, and `--color` MAY appear before OR after the subcommand name (e.g. both `pg_sandbox --debug status -s X` and `pg_sandbox status --debug -s X` work).
 
 ## Commands
 

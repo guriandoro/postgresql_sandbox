@@ -51,14 +51,22 @@ import (
 
 // runConfig is the dispatcher for `config`. Pattern matches the
 // top-level dispatcher in main.go: args[0] is the sub-subcommand
-// name, args[1:] is passed through.
+// name, args[1:] is passed through. As with the top-level dispatcher,
+// any --debug / --quiet / --color that landed at the head of args
+// (because they appeared before the sub-subcommand name) is captured
+// and re-prepended onto args[1:] so the leaf FlagSet sees them in
+// the position it expects.
 func runConfig(args []string, stdout, stderr io.Writer) int {
+	leading, args := captureGlobalFlags(args)
 	if len(args) == 0 {
 		printConfigUsage(stderr)
 		return ui.ExitUsage.Int()
 	}
 	sub := args[0]
 	rest := args[1:]
+	if len(leading) > 0 {
+		rest = append(append([]string{}, leading...), rest...)
+	}
 	switch sub {
 	case "show":
 		return runConfigShow(rest, stdout, stderr)
@@ -138,6 +146,7 @@ func validateScope(name string, sc scope) error {
 func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("config show", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var sc scope
 	var asJSON bool
 	parseScopeFlags(fs, &sc)
@@ -145,6 +154,11 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if err := validateScope("show", sc); err != nil {
 		fmt.Fprintln(stderr, err)
 		return ui.ExitUsage.Int()
@@ -312,11 +326,17 @@ func formatValue(v any) string {
 func runConfigGet(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("config get", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var sc scope
 	parseScopeFlags(fs, &sc)
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if err := validateScope("get", sc); err != nil {
 		fmt.Fprintln(stderr, err)
 		return ui.ExitUsage.Int()
@@ -395,11 +415,17 @@ func runConfigGet(args []string, stdout, stderr io.Writer) int {
 func runConfigSet(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("config set", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var sc scope
 	parseScopeFlags(fs, &sc)
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if err := validateScope("set", sc); err != nil {
 		fmt.Fprintln(stderr, err)
 		return ui.ExitUsage.Int()
@@ -650,11 +676,17 @@ func logSetApplied(stderr io.Writer, pairs []kvPair) {
 func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("config validate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var sc scope
 	parseScopeFlags(fs, &sc)
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if err := validateScope("validate", sc); err != nil {
 		fmt.Fprintln(stderr, err)
 		return ui.ExitUsage.Int()
@@ -707,6 +739,7 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 func runConfigMigrate(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("config migrate", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var (
 		sandboxDir string
 		replace    bool
@@ -717,6 +750,11 @@ func runConfigMigrate(args []string, _ io.Writer, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox config migrate: --sandbox-dir is required")
 		return ui.ExitUsage.Int()

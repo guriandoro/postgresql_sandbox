@@ -26,6 +26,7 @@ import (
 func runSubscribe(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("subscribe", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 
 	var (
 		sandboxDir string
@@ -49,6 +50,12 @@ func runSubscribe(args []string, _ io.Writer, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" || from == "" || pubName == "" {
 		fmt.Fprintln(stderr, "pg_sandbox subscribe: --sandbox-dir, --from, and --pub-name are required")
 		usageHint(stderr, "subscribe")
@@ -68,7 +75,7 @@ func runSubscribe(args []string, _ io.Writer, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	runner := pgexec.New(cfg.BinDir)
+	runner := pgexec.New(cfg.BinDir).WithLogger(logger)
 	opts := sandbox.SubscribeOptions{
 		SandboxDir:   sandboxDir,
 		PublisherRef: from,

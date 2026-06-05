@@ -39,13 +39,20 @@ import (
 
 // runCluster is the dispatcher for `cluster`. Pattern matches the
 // top-level dispatcher in main.go and the `config` sub-dispatcher.
+// Global flags (--debug / --quiet / --color) that landed at the head
+// of args are captured and re-prepended onto args[1:] so the leaf
+// FlagSet sees them in the position it expects.
 func runCluster(args []string, stdout, stderr io.Writer) int {
+	leading, args := captureGlobalFlags(args)
 	if len(args) == 0 {
 		printClusterUsage(stderr)
 		return ui.ExitUsage.Int()
 	}
 	sub := args[0]
 	rest := args[1:]
+	if len(leading) > 0 {
+		rest = append(append([]string{}, leading...), rest...)
+	}
 	switch sub {
 	case "deploy":
 		return runClusterDeploy(rest, stdout, stderr)
@@ -93,6 +100,7 @@ func printClusterUsage(w io.Writer) {
 func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("cluster deploy", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 
 	var (
 		clusterDir  string
@@ -130,6 +138,12 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if clusterDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox cluster deploy: --sandbox-dir is required")
 		usageHint(stderr, "cluster")
@@ -198,7 +212,7 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	runner := pgexec.New(opts.BinDir)
+	runner := pgexec.New(opts.BinDir).WithLogger(logger)
 	manifest, err := cluster.Deploy(ctx, runner, opts, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox cluster deploy: %v\n", err)
@@ -217,6 +231,7 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 func runClusterStatus(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("cluster status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var (
 		clusterDir string
 		asJSON     bool
@@ -227,6 +242,12 @@ func runClusterStatus(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if clusterDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox cluster status: --sandbox-dir is required")
 		usageHint(stderr, "cluster")
@@ -257,7 +278,7 @@ func runClusterStatus(args []string, stdout, stderr io.Writer) int {
 			runnerBinDir = cfg.BinDir
 		}
 	}
-	runner := pgexec.New(runnerBinDir)
+	runner := pgexec.New(runnerBinDir).WithLogger(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -286,6 +307,7 @@ func runClusterStatus(args []string, stdout, stderr io.Writer) int {
 func runClusterDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("cluster destroy", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var (
 		clusterDir string
 		force      bool
@@ -297,6 +319,12 @@ func runClusterDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if clusterDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox cluster destroy: --sandbox-dir is required")
 		usageHint(stderr, "cluster")
@@ -336,7 +364,7 @@ func runClusterDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 			runnerBinDir = cfg.BinDir
 		}
 	}
-	runner := pgexec.New(runnerBinDir)
+	runner := pgexec.New(runnerBinDir).WithLogger(logger)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

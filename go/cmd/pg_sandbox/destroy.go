@@ -28,6 +28,7 @@ import (
 func runDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("destroy", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var (
 		sandboxDir string
 		force      bool
@@ -39,6 +40,12 @@ func runDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox destroy: --sandbox-dir is required")
 		usageHint(stderr, "destroy")
@@ -71,7 +78,7 @@ func runDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	runner := pgexec.New(cfg.BinDir)
+	runner := pgexec.New(cfg.BinDir).WithLogger(logger)
 	err = sandbox.Destroy(ctx, runner, sandbox.DestroyOptions{SandboxDir: sandboxDir}, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox destroy: %v\n", err)

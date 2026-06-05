@@ -37,5 +37,5 @@ These appear in `SPEC.md` §4.9 but the Go port does not currently consume them.
 |---|---|
 | `PGS_LOG_LEVEL` | `debug` / `info` / `warn` / `error`. The parser exists in `internal/ui/log.go` but the dispatcher does not yet thread it through; logging is currently fixed at `info`. |
 | `PGS_CONFIG_FILE` | Override of the global config file path. Today the path is computed from `XDG_CONFIG_HOME` only. |
-| `PGS_DEBUG` | Top-level alias for "debug logging + external command tracing". No top-level debug switch exists yet — for build-specific tracing use `PGS_BUILD_DEBUG`. |
-| `NO_COLOR` | Standard "disable ANSI color" var. The Go port emits no color output today, so there's nothing to suppress. |
+| `PGS_DEBUG` | Top-level alias for "debug logging + external command tracing". The flag `--debug` provides this today; the env-var alias is not yet wired. For build-specific tracing use `PGS_BUILD_DEBUG`. |
+| `NO_COLOR` | Standard "disable ANSI color" var. Consulted by `--color=auto` (the default): when stderr is a TTY and `NO_COLOR` is unset, color would render — but the Go port emits no color output today, so there's nothing to suppress. |

@@ -235,18 +235,60 @@ func TestLocateBinDirIsAFile(t *testing.T) {
 }
 
 func TestRunLogsAtDebug(t *testing.T) {
-	// When Logger is set, Run emits a debug line with the exec
-	// path and args. Verify the prefix and args are visible.
+	// SPEC §4.6: when --debug is on (Debug logger attached), every
+	// external invocation emits one `# exec: <path> <args>` line to
+	// the debug writer (defaults to os.Stderr; swapped out here so
+	// the test can capture it). The literal `# exec: ` prefix is
+	// grep-load-bearing and is asserted exactly.
 	var buf bytes.Buffer
-	log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	e := &Exec{Logger: log}
+	orig := debugExecWriter
+	debugExecWriter = &buf
+	t.Cleanup(func() { debugExecWriter = orig })
+
+	log := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	e := (&Exec{}).WithLogger(log)
 	_ = e.Run(context.Background(), "/bin/sh", "-c", "true")
 	out := buf.String()
-	if !strings.Contains(out, "exec") {
-		t.Errorf("debug log missing 'exec' tag: %q", out)
+	if !strings.HasPrefix(out, "# exec: ") {
+		t.Errorf("debug line missing literal `# exec: ` prefix: %q", out)
 	}
 	if !strings.Contains(out, "/bin/sh") {
-		t.Errorf("debug log missing resolved path: %q", out)
+		t.Errorf("debug line missing resolved path: %q", out)
+	}
+	if !strings.Contains(out, "-c true") {
+		t.Errorf("debug line missing args: %q", out)
+	}
+}
+
+func TestRunSilentWithoutDebugLogger(t *testing.T) {
+	// An Info-level logger (default) MUST NOT produce the `# exec: `
+	// line — the line is gated on the logger's Debug enablement so
+	// --quiet and the no-flag default both stay quiet.
+	var buf bytes.Buffer
+	orig := debugExecWriter
+	debugExecWriter = &buf
+	t.Cleanup(func() { debugExecWriter = orig })
+
+	log := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	e := (&Exec{}).WithLogger(log)
+	_ = e.Run(context.Background(), "/bin/sh", "-c", "true")
+	if buf.Len() != 0 {
+		t.Errorf("expected no debug output at Info level, got %q", buf.String())
+	}
+}
+
+func TestWithLoggerChainable(t *testing.T) {
+	// The WithLogger setter MUST return the receiver so callers can
+	// chain it onto pgexec.New. Without this, the global-flags slice
+	// has to break its idiomatic one-line construction at every call
+	// site.
+	log := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	e := New("/tmp").WithLogger(log)
+	if e.Logger != log {
+		t.Errorf("WithLogger did not attach the logger")
+	}
+	if e.BinDir != "/tmp" {
+		t.Errorf("WithLogger clobbered BinDir: got %q", e.BinDir)
 	}
 }
 

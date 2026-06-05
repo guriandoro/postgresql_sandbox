@@ -109,8 +109,13 @@ func main() {
 		os.Exit(ui.ExitUsage.Int())
 	}
 
-	// Strip any leading global flags that we handle here. Anything
-	// not matched falls through to the subcommand.
+	// Strip any leading global flags that we handle here. --version /
+	// --help short-circuit immediately; --debug / --quiet / --color
+	// are SPEC §5 global flags (accepted before OR after the
+	// subcommand name) — we capture and re-prepend them so the
+	// subcommand's FlagSet sees them in the position it expects.
+	// Anything else falls through to the subcommand.
+	var leadingGlobals []string
 	for len(args) > 0 {
 		switch args[0] {
 		case "--version", "-V":
@@ -120,14 +125,28 @@ func main() {
 		case "--help", "-h":
 			printTopHelp(os.Stdout)
 			os.Exit(ui.ExitOK.Int())
-		default:
-			// Not a known top-level-only flag; let the subcommand
-			// dispatcher handle it.
-			goto dispatch
 		}
+		// Pull --debug / --quiet / --color off the head, then
+		// continue the loop in case more global flags follow before
+		// the subcommand name. captureGlobalFlags stops at the first
+		// non-matching token (which is typically the subcommand
+		// name), so we use len(after)<len(args) as the "we ate at
+		// least one token" sentinel.
+		captured, after := captureGlobalFlags(args)
+		if len(captured) == 0 {
+			break
+		}
+		leadingGlobals = append(leadingGlobals, captured...)
+		args = after
 	}
 
-dispatch:
+	if len(args) == 0 {
+		// User typed only global flags, no subcommand. Mirror the
+		// no-arg branch above.
+		printTopHelp(os.Stderr)
+		os.Exit(ui.ExitUsage.Int())
+	}
+
 	name := args[0]
 	rest := args[1:]
 	cmd, ok := subcommands[name]
@@ -148,6 +167,13 @@ dispatch:
 	if len(rest) > 0 && (rest[0] == "--help" || rest[0] == "-h") && cmd.help != nil {
 		cmd.help(os.Stdout)
 		os.Exit(ui.ExitOK.Int())
+	}
+	// Re-prepend any global flags we swept off the head so the
+	// subcommand's FlagSet sees them in the position it expects.
+	// `help` is special — runHelp doesn't take global flags, so we
+	// just drop the captured tokens silently when dispatching to it.
+	if len(leadingGlobals) > 0 && name != "help" {
+		rest = append(append([]string{}, leadingGlobals...), rest...)
 	}
 	os.Exit(cmd.run(rest, os.Stdout, os.Stderr))
 }

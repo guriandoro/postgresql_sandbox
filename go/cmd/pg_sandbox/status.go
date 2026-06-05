@@ -24,6 +24,7 @@ import (
 func runStatus(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var (
 		sandboxDir string
 		asJSON     bool
@@ -34,6 +35,12 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox status: --sandbox-dir is required")
 		usageHint(stderr, "status")
@@ -53,7 +60,7 @@ func runStatus(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	runner := pgexec.New(cfg.BinDir)
+	runner := pgexec.New(cfg.BinDir).WithLogger(logger)
 	// StatusWithStderr emits warning lines for any failed
 	// best-effort replication probe (see SPEC §6.4) so the user
 	// sees why a sub-section was skipped without having to grep

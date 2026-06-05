@@ -26,6 +26,7 @@ import (
 func runPublish(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("publish", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 
 	var (
 		sandboxDir string
@@ -45,6 +46,12 @@ func runPublish(args []string, _ io.Writer, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" || pubName == "" {
 		fmt.Fprintln(stderr, "pg_sandbox publish: --sandbox-dir and --pub-name are required")
 		usageHint(stderr, "publish")
@@ -89,7 +96,7 @@ func runPublish(args []string, _ io.Writer, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	runner := pgexec.New(cfg.BinDir)
+	runner := pgexec.New(cfg.BinDir).WithLogger(logger)
 	opts := sandbox.PublishOptions{
 		SandboxDir: sandboxDir,
 		PubName:    pubName,

@@ -34,6 +34,7 @@ import (
 func runRun(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var (
 		sandboxDir string
 		noDSN      bool
@@ -45,6 +46,12 @@ func runRun(args []string, _ io.Writer, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox run: --sandbox-dir is required")
 		usageHint(stderr, "run")
@@ -90,7 +97,7 @@ func runRun(args []string, _ io.Writer, stderr io.Writer) int {
 	// ExitGeneric matches the spec's notes for `run` (the docs
 	// admit this is a small gap to revisit if it becomes
 	// painful).
-	runner := pgexec.New(cfg.BinDir)
+	runner := pgexec.New(cfg.BinDir).WithLogger(logger)
 	if _, err := sandbox.LocateRunBinary(runner, invoke.Binary); err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox run: %v\n", err)
 		return ui.ExitGeneric.Int()

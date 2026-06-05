@@ -29,12 +29,19 @@ import (
 func runUse(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("use", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var sandboxDir string
 	fs.StringVar(&sandboxDir, "sandbox-dir", "", "Target sandbox directory (required)")
 	fs.StringVar(&sandboxDir, "s", "", "Alias for --sandbox-dir")
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox use: --sandbox-dir is required")
 		usageHint(stderr, "use")
@@ -70,7 +77,7 @@ func runUse(args []string, _ io.Writer, stderr io.Writer) int {
 
 	// Locate the binary up front so a missing psql gives a clean
 	// error before we call into syscall.Exec.
-	runner := pgexec.New(cfg.BinDir)
+	runner := pgexec.New(cfg.BinDir).WithLogger(logger)
 	if _, err := sandbox.LocateUseBinary(runner); err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox use: %v\n", err)
 		return ui.ExitPsqlFailed.Int()

@@ -26,12 +26,19 @@ import (
 func runPromote(args []string, _ io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("promote", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var sandboxDir string
 	fs.StringVar(&sandboxDir, "sandbox-dir", "", "Target sandbox directory (required)")
 	fs.StringVar(&sandboxDir, "s", "", "Alias for --sandbox-dir")
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox promote: --sandbox-dir is required")
 		usageHint(stderr, "promote")
@@ -52,7 +59,7 @@ func runPromote(args []string, _ io.Writer, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	runner := pgexec.New(cfg.BinDir)
+	runner := pgexec.New(cfg.BinDir).WithLogger(logger)
 	if err := sandbox.Promote(ctx, runner, sandbox.PromoteOptions{SandboxDir: sandboxDir}, stderr); err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox promote: %v\n", err)
 		return sandbox.ExitCodeFor(err).Int()

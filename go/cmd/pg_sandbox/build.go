@@ -36,6 +36,7 @@ import (
 func runBuild(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("build", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 
 	var (
 		withICU       bool
@@ -64,6 +65,11 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	if err := parseSubcommandArgs(fs, args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 
 	rest := fs.Args()
 	if len(rest) == 0 {

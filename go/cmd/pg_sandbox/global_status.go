@@ -25,6 +25,7 @@ import (
 func runGlobalStatus(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("global_status", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 	var (
 		root   string
 		asJSON bool
@@ -34,6 +35,11 @@ func runGlobalStatus(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 
 	// SPEC §3.1 layered resolution: flag → env → global config →
 	// built-in default (~/postgresql-sandboxes/ per SPEC §4.9).

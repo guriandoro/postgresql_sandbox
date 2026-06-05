@@ -26,6 +26,7 @@ import (
 func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("cleanup-install-versions", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 
 	var (
 		force       bool
@@ -45,6 +46,11 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 	if err := parseSubcommandArgs(fs, args); err != nil {
 		return ui.ExitUsage.Int()
 	}
+	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	onlyVersions := fs.Args()
 
 	// Layered resolution: flag → env → global config → default. Both

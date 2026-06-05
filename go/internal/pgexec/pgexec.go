@@ -48,6 +48,13 @@ import (
 	"syscall"
 )
 
+// debugExecWriter is where the `# exec: ...` debug line goes. We
+// publish it as a package var (default os.Stderr) so tests can swap
+// in a bytes.Buffer without bringing up a real subprocess pipeline.
+// SPEC §4.6 requires the line on stderr; production callers should
+// not change this.
+var debugExecWriter io.Writer = os.Stderr
+
 // Result is what Run-family methods return. ExitCode is always
 // populated (it's 0 on success, the child's exit code on a clean
 // non-zero exit, -1 if Err is set before the process even started).
@@ -289,21 +296,48 @@ func (e *Exec) Exec(name string, args ...string) error {
 }
 
 // logExec writes a single debug-level line per invocation when a
-// logger is configured. The message format `# exec: ...` matches
-// SPEC §4.6 so users grepping debug output get a stable prefix.
+// logger is configured. SPEC §4.6 requires a stable `# exec: …`
+// prefix so users grepping --debug output get one line per external
+// process with the full argv. We emit the literal text rather than
+// going through slog's TextHandler because the handler would prefix
+// each line with `level=DEBUG msg=…` and key=value pairs that break
+// the documented grep-by-`^# exec: ` shape.
 //
-// We log the full path and shell-quoted args. We don't log env —
-// it can contain PGPASSWORD and other secrets, and the user can
-// see what they passed via --debug at the command-construction
+// The line is gated on the logger having Debug level enabled, which
+// in turn is controlled by the --debug global flag (NewLogger is
+// constructed at Info by default). Without --debug the call is a
+// cheap level check and nothing is written.
+//
+// We log the full path and the args joined by spaces. We don't log
+// env — it can contain PGPASSWORD and other secrets, and the user
+// can see what they passed via --debug at the command-construction
 // layer.
 func (e *Exec) logExec(full string, args []string) {
 	if e.Logger == nil {
 		return
 	}
-	e.Logger.Debug("# exec",
-		"path", full,
-		"args", args,
-	)
+	if !e.Logger.Enabled(context.Background(), slog.LevelDebug) {
+		return
+	}
+	if len(args) == 0 {
+		fmt.Fprintf(debugExecWriter, "# exec: %s\n", full)
+		return
+	}
+	fmt.Fprintf(debugExecWriter, "# exec: %s %s\n", full, strings.Join(args, " "))
+}
+
+// WithLogger attaches the given logger to the receiver and returns
+// the receiver, enabling fluent construction:
+//
+//	runner := pgexec.New(cfg.BinDir).WithLogger(logger)
+//
+// Nil is accepted and clears any previously attached logger. The
+// chainable shape exists so existing call sites that don't care
+// about exec logging keep working — the global-flags slice only
+// adds .WithLogger(globals.Logger) where appropriate.
+func (e *Exec) WithLogger(l *slog.Logger) *Exec {
+	e.Logger = l
+	return e
 }
 
 // exitCodeOf inspects the error from exec.Cmd.Run and decomposes

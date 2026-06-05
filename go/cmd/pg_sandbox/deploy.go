@@ -36,6 +36,7 @@ import (
 func runDeploy(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("deploy", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	globals := registerGlobalFlags(fs)
 
 	var (
 		sandboxDir    string
@@ -89,6 +90,12 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		// flag already wrote the error to stderr via SetOutput.
 		return ui.ExitUsage.Int()
 	}
+	logger, _, gErr := globals.Resolve(stderr)
+	if gErr != nil {
+		fmt.Fprintln(stderr, gErr)
+		return ui.ExitUsage.Int()
+	}
+	stderr = globals.WrapStderr(stderr)
 	if sandboxDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox deploy: --sandbox-dir is required")
 		usageHint(stderr, "deploy")
@@ -165,7 +172,7 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	runner := pgexec.New(opts.BinDir)
+	runner := pgexec.New(opts.BinDir).WithLogger(logger)
 	res, err := sandbox.Deploy(ctx, runner, opts, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox deploy: %v\n", err)
