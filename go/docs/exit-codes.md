@@ -40,6 +40,5 @@ Conventions:
 | 25 | `EXIT_PSQL_FAILED` | A `psql` invocation failed unexpectedly (server crash, connection drop). |
 | 26 | `EXIT_INTERRUPTED` | Tool caught `SIGINT` or `SIGTERM` and is exiting mid-operation. |
 | 27 | `EXIT_NOT_A_TTY` | A confirmation prompt was needed, `--force` wasn't set, and stdin isn't a TTY. Re-run with `--force` if you really mean it. |
-| 28 | `EXIT_RESTART_REQUIRED_REFUSED` | Reserved for a future `--no-restart` flag on `publish` / `subscribe`. |
-| 29 | `EXIT_INIT_SQL_FAILED` | `cluster deploy --init-sql` failed to apply the supplied SQL file against the primary/publisher (psql `ON_ERROR_STOP=1` returned non-zero). The cluster dir + partial primary are left on disk for inspection. |
-| 30 | `EXIT_BUILD_FAILED` | `build` (source compilation) failed. |
+| 28 | `EXIT_INIT_SQL_FAILED` | `cluster deploy --init-sql` failed to apply the supplied SQL file against the primary/publisher (psql `ON_ERROR_STOP=1` returned non-zero). The cluster dir + partial primary are left on disk for inspection. |
+| 29 | `EXIT_BUILD_FAILED` | `build` (source compilation) failed. |

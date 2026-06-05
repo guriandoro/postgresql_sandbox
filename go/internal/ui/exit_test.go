@@ -45,9 +45,8 @@ func TestExitCodesMatchSpec(t *testing.T) {
 		{"ExitPsqlFailed", ExitPsqlFailed, 25},
 		{"ExitInterrupted", ExitInterrupted, 26},
 		{"ExitNotATTY", ExitNotATTY, 27},
-		{"ExitRestartRequiredRefused", ExitRestartRequiredRefused, 28},
-		{"ExitInitSQLFailed", ExitInitSQLFailed, 29},
-		{"ExitBuildFailed", ExitBuildFailed, 30},
+		{"ExitInitSQLFailed", ExitInitSQLFailed, 28},
+		{"ExitBuildFailed", ExitBuildFailed, 29},
 	}
 	for _, tc := range cases {
 		if tc.code.Int() != tc.want {

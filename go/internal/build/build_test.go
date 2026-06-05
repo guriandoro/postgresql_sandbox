@@ -303,8 +303,8 @@ func TestBuild_RejectsExistingInstall(t *testing.T) {
 		t.Fatalf("want *BuildError, got %T", err)
 	}
 	// ExitBuildFailed is the documented code for this case.
-	if be.ExitCode.Int() != 30 {
-		t.Errorf("ExitCode = %d, want 30 (ExitBuildFailed)", be.ExitCode.Int())
+	if be.ExitCode.Int() != 29 {
+		t.Errorf("ExitCode = %d, want 29 (ExitBuildFailed)", be.ExitCode.Int())
 	}
 }
 

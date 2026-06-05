@@ -386,7 +386,7 @@ This replaces the Python `setenv` and is the implementation of §3.
 
 **Behavior.** Ensure `wal_level >= logical` and `max_replication_slots`/`max_wal_senders` are sufficient; raise via `ALTER SYSTEM` and restart if needed (with a clear message that restart will happen). Then `CREATE PUBLICATION <pub-name> …`. Update sandbox config to record the publication.
 
-**Failure modes.** `EXIT_PUBLICATION_FAILED`, `EXIT_RESTART_REQUIRED_REFUSED` (if running config changes need restart and `--no-restart` was passed — TBD if we include `--no-restart`; default is "restart if needed").
+**Failure modes.** `EXIT_PUBLICATION_FAILED`.
 
 ### 6.10 `subscribe` — create a subscription
 
@@ -500,11 +500,10 @@ Prune unused PostgreSQL install dirs under `binDir`. Cross-references with sandb
 | 25 | `EXIT_PSQL_FAILED` | A `psql` call failed unexpectedly |
 | 26 | `EXIT_INTERRUPTED` | Caught SIGINT/SIGTERM mid-operation |
 | 27 | `EXIT_NOT_A_TTY` | Confirmation needed but stdin not a TTY and `--force` not set |
-| 28 | `EXIT_RESTART_REQUIRED_REFUSED` | Reserved for the `--no-restart` future flag |
-| 29 | `EXIT_INIT_SQL_FAILED` | `cluster deploy --init-sql` file failed to apply against the primary/publisher |
-| 30 | `EXIT_BUILD_FAILED` | Phase 2: source build failed |
+| 28 | `EXIT_INIT_SQL_FAILED` | `cluster deploy --init-sql` file failed to apply against the primary/publisher |
+| 29 | `EXIT_BUILD_FAILED` | Phase 2: source build failed |
 
-Reserved range 31–63 left for additions. Codes >= 64 are reserved for shell convention (e.g. signals).
+Reserved range 30–63 left for additions. Codes >= 64 are reserved for shell convention (e.g. signals).
 
 ---
 
