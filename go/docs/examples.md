@@ -15,6 +15,15 @@ cd ~/postgresql-sandboxes/
 
 `-s <name>` is resolved against the current working directory — bare names land under `~/postgresql-sandboxes/`; explicit absolute or `./`-prefixed paths still resolve normally.
 
+## Build the version from source
+
+`build` takes the install root via `--bin-dir`; each version lands under `<bin-dir>/<version>/`, so this populates `/opt/postgresql/18.4/` — what the setup snippet above already points at.
+
+```sh
+# Compile and install PG 18.4 under /opt/postgresql/18.4/
+pg_sandbox build 18.4 --bin-dir /opt/postgresql
+```
+
 ## A single sandbox
 
 ```sh
