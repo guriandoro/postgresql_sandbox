@@ -9,8 +9,12 @@
 //  1. Validate the requested version against ^[0-9]+\.[0-9]+$ — anything
 //     else is a typo and we refuse with ExitUsage. We never touch the
 //     network on a malformed version.
-//  2. Resolve paths: install prefix (PGS_BIN_DIR/<ver>/), build scratch
-//     (PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/), per-step log dir.
+//  2. Resolve paths: install prefix (PGS_BIN_DIR/<ver>/, OR PGS_BIN_DIR
+//     itself when its basename already matches major.minor — to avoid
+//     surprising `/opt/pg/18.4/18.4`-style double-nesting; a mismatch
+//     between that basename and the build version emits a warning),
+//     build scratch (PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/),
+//     per-step log dir.
 //  3. Handle --force: if the install prefix already exists, abort
 //     (ExitBuildFailed) unless --force was passed; with --force we
 //     RemoveAll the existing prefix so make install has a clean target.

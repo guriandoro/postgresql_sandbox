@@ -126,7 +126,19 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 		opts.BinDir = abs
 	}
 
-	installPrefix := filepath.Join(opts.BinDir, opts.Version)
+	installPrefix, binDirVersion := installPrefixFor(opts.BinDir, opts.Version)
+	if binDirVersion != "" && binDirVersion != opts.Version {
+		// User pointed --bin-dir / PGS_BIN_DIR at a directory whose
+		// basename already looks like a major.minor version, but it
+		// disagrees with the version they're building. We honor the
+		// path they passed (no double-nesting) and warn so the
+		// mismatch is visible in the log.
+		logger.Warn("bin-dir basename looks like a version that does not match the build version; installing into bin-dir as-is",
+			"bin_dir", opts.BinDir,
+			"bin_dir_version", binDirVersion,
+			"build_version", opts.Version,
+		)
+	}
 	buildDir := opts.BuildDir
 	if buildDir == "" {
 		tmp := os.TempDir()
@@ -258,6 +270,32 @@ func validateVersion(v string) error {
 // the CLI / tests can include it in error messages.
 func TarballURL(v string) string {
 	return fmt.Sprintf(tarballURLTemplate, v, v)
+}
+
+// installPrefixFor decides where `make install` should land given the
+// resolved BinDir and the requested build version.
+//
+// The normal layout is BinDir/<version>/ — BinDir is a parent that
+// holds one subdir per installed PG version. But users (and PGS_BIN_DIR
+// values) sometimes already point at a version-shaped directory like
+// `/opt/postgresql/18.4`; appending the version again would produce
+// `/opt/postgresql/18.4/18.4` and silently surprise them. So when the
+// basename of binDir matches the major.minor shape we recognize, we
+// treat binDir as the install prefix itself and don't nest again.
+//
+// Returns:
+//   - prefix: the directory to use as --prefix for ./configure.
+//   - binDirVersion: the version-shaped basename we detected on
+//     binDir, or "" if binDir did not look version-shaped. The caller
+//     compares this against the requested version to decide whether to
+//     emit a mismatch warning; keeping that decision out of this pure
+//     helper makes it trivially unit-testable.
+func installPrefixFor(binDir, version string) (prefix, binDirVersion string) {
+	base := filepath.Base(binDir)
+	if versionRE.MatchString(base) {
+		return binDir, base
+	}
+	return filepath.Join(binDir, version), ""
 }
 
 // assembleConfigureArgs builds the argv to ./configure. Pure function,

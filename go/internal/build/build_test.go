@@ -225,6 +225,63 @@ func TestDownloadTarball_cached(t *testing.T) {
 	}
 }
 
+func TestInstallPrefixFor(t *testing.T) {
+	tests := []struct {
+		name        string
+		binDir      string
+		version     string
+		wantPrefix  string
+		wantVerSeen string
+	}{
+		{
+			name:        "no version segment: append version",
+			binDir:      "/opt/postgresql",
+			version:     "18.4",
+			wantPrefix:  "/opt/postgresql/18.4",
+			wantVerSeen: "",
+		},
+		{
+			name:        "binDir already ends in matching version: use as-is",
+			binDir:      "/opt/postgresql/18.4",
+			version:     "18.4",
+			wantPrefix:  "/opt/postgresql/18.4",
+			wantVerSeen: "18.4",
+		},
+		{
+			name:        "binDir ends in mismatching version: use as-is, report basename for warning",
+			binDir:      "/opt/postgresql/18.4",
+			version:     "18.3",
+			wantPrefix:  "/opt/postgresql/18.4",
+			wantVerSeen: "18.4",
+		},
+		{
+			name:        "basename only looks numeric but not major.minor: append (safe default)",
+			binDir:      "/opt/postgresql/18",
+			version:     "18.4",
+			wantPrefix:  "/opt/postgresql/18/18.4",
+			wantVerSeen: "",
+		},
+		{
+			name:        "trailing slash is normalized by filepath.Base: detection still fires",
+			binDir:      "/opt/postgresql/18.4/",
+			version:     "18.4",
+			wantPrefix:  "/opt/postgresql/18.4/",
+			wantVerSeen: "18.4",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gotPrefix, gotVerSeen := installPrefixFor(tc.binDir, tc.version)
+			if gotPrefix != tc.wantPrefix {
+				t.Errorf("prefix: got %q want %q", gotPrefix, tc.wantPrefix)
+			}
+			if gotVerSeen != tc.wantVerSeen {
+				t.Errorf("binDirVersion: got %q want %q", gotVerSeen, tc.wantVerSeen)
+			}
+		})
+	}
+}
+
 func TestBuild_RejectsExistingInstall(t *testing.T) {
 	bin := t.TempDir()
 	build := t.TempDir()
@@ -267,6 +324,68 @@ func TestBuild_RejectsBadVersion(t *testing.T) {
 	if be.ExitCode.Int() != 2 {
 		t.Errorf("ExitCode = %d, want 2 (ExitUsage)", be.ExitCode.Int())
 	}
+}
+
+// TestBuild_VersionShapedBinDir covers the version-collision behavior end
+// to end through Build(): a version-shaped BinDir basename means we do
+// NOT nest the version under it, and a mismatch between that basename
+// and the requested build version emits a WARN log line. Both subtests
+// rely on the "install dir already exists" check firing on the resolved
+// installPrefix to stop the pipeline before any network / compile work,
+// which is exactly the assertion: if Build had appended the version
+// again, the pre-created install dir would have been BinDir/<ver>/ and
+// the check would not have triggered.
+func TestBuild_VersionShapedBinDir(t *testing.T) {
+	t.Run("matching version does not warn and uses bin-dir as install prefix", func(t *testing.T) {
+		bin := filepath.Join(t.TempDir(), "18.4")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		_, err := Build(context.Background(), Options{
+			Version:  "18.4",
+			BinDir:   bin,
+			BuildDir: t.TempDir(),
+		}, &buf)
+		if err == nil {
+			t.Fatal("expected error: existing install dir at bin-dir itself")
+		}
+		if !strings.Contains(err.Error(), bin) {
+			t.Errorf("error should reference %q (the install prefix), got: %v", bin, err)
+		}
+		if strings.Contains(buf.String(), "level=WARN") {
+			t.Errorf("did not expect a WARN line when basename matches build version; stderr=\n%s", buf.String())
+		}
+	})
+
+	t.Run("mismatching version warns but still uses bin-dir as install prefix", func(t *testing.T) {
+		bin := filepath.Join(t.TempDir(), "18.4")
+		if err := os.MkdirAll(bin, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		var buf bytes.Buffer
+		_, err := Build(context.Background(), Options{
+			Version:  "18.3",
+			BinDir:   bin,
+			BuildDir: t.TempDir(),
+		}, &buf)
+		if err == nil {
+			t.Fatal("expected error: existing install dir at bin-dir itself")
+		}
+		if !strings.Contains(err.Error(), bin) {
+			t.Errorf("error should reference %q (the install prefix), got: %v", bin, err)
+		}
+		out := buf.String()
+		if !strings.Contains(out, "level=WARN") {
+			t.Errorf("expected a WARN line; stderr=\n%s", out)
+		}
+		if !strings.Contains(out, "bin_dir_version=18.4") {
+			t.Errorf("warn should include bin_dir_version=18.4; stderr=\n%s", out)
+		}
+		if !strings.Contains(out, "build_version=18.3") {
+			t.Errorf("warn should include build_version=18.3; stderr=\n%s", out)
+		}
+	})
 }
 
 // assertArgs compares two argv slices and fails the test with a
