@@ -1,16 +1,11 @@
 # Cursor, Claude Code, etc. — local IDE metadata (match .cursor and similar .c* dot paths)
 .c*
 
-# Python bytecode caches (regenerated on import; interpreter-version specific)
-__pycache__/
-*.pyc
+# Compiled binaries — produced by `make build` and `make build-all`.
+# Released builds are published as release artifacts, not via the repo.
+bin/
 
-# Standalone binary produced by build/build_executable.sh (PyInstaller --onefile)
-bin/pg_sandbox*
-
-# PyInstaller working directory and generated spec (under build/)
-build/pyinstaller-work/
-build/pg_sandbox.spec
-
-# Local venv created by build/build_executable.sh when PyInstaller is missing (PEP 668)
-build/.venv/
+# Common Go scratch files.
+*.test
+*.out
+coverage.txt

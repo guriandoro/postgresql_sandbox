@@ -1,0 +1,46 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history + tags so `git describe` produces the proper version stamp.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          check-latest: true
+          cache: true
+
+      - name: Cross-compile all release binaries
+        run: make build-all
+
+      - name: Generate SHA256SUMS
+        working-directory: bin
+        run: |
+          sha256sum -b pg_sandbox-* > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Create GitHub Release with binaries
+        uses: softprops/action-gh-release@v2
+        with:
+          # Use the annotated tag message as the release body. Falls back to an
+          # auto-generated summary if the tag has no body.
+          generate_release_notes: true
+          files: |
+            bin/pg_sandbox-linux-amd64
+            bin/pg_sandbox-linux-arm64
+            bin/pg_sandbox-darwin-amd64
+            bin/pg_sandbox-darwin-arm64
+            bin/SHA256SUMS

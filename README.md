@@ -1,134 +1,107 @@
-# postgresql_sandbox
-A simple-to-use PostgreSQL sandbox helper.
+# pg_sandbox
 
-> **Which tool does this README describe?**
-> This file documents the **Python** `pg_sandbox` that lives at the repository root and is bundled into `bin/pg_sandbox` by `build/build_executable.sh`. A Go re-implementation lives under [`go/`](./go/); it has its own docs ([`go/README.md`](./go/README.md), [`go/SPEC.md`](./go/SPEC.md), [`go/docs/`](./go/docs/)) and uses different environment-variable names (e.g. `PGS_SANDBOX_ROOT`, not `PGS_ROOT_DIR`) and JSON-based per-sandbox configuration (no `pg_sandbox.env` file). Until the Go port reaches GA, the Python tool described here is the recommended entry point.
+`pg_sandbox` is a command-line tool that provisions, manages, and tears down local PostgreSQL sandbox instances for development, testing, and bug reproduction. It targets macOS and Linux on `amd64` and `arm64`, and ships as a single static binary with no runtime dependencies beyond the PostgreSQL binaries you point it at.
 
-Check `pg_sandbox --help` for detailed usage information and tips.
+The canonical functional contract lives in [`SPEC.md`](./SPEC.md).
 
-# Standalone executable (macOS / Linux)
+## Install
 
-You can bundle the Python CLI (`pg_sandbox`, `pg_sandbox_help.py`, `pg_sandbox_errors.py`) into a **single executable** with [PyInstaller](https://pyinstaller.org/). PostgreSQL itself is **not** included; installs under `PGS_BIN_DIR` (or `-b`) are unchanged.
+Pre-built binaries are attached to each [GitHub Release](https://github.com/guriandoro/postgresql_sandbox/releases). Pick the artifact matching your platform:
 
-**Requirements**
+| Platform | Artifact |
+|---|---|
+| Linux x86_64 | `pg_sandbox-linux-amd64` |
+| Linux ARM64 (Graviton, RPi, ARM cloud VMs) | `pg_sandbox-linux-arm64` |
+| macOS Intel | `pg_sandbox-darwin-amd64` |
+| macOS Apple Silicon | `pg_sandbox-darwin-arm64` |
 
-- Build machine runs **macOS** or **Linux** (`build/build_executable.sh` does not support Windows).
-- **Python 3** on `PATH` (`venv` module required for the automatic PyInstaller bootstrap below).
-- Run the build **on each OS** (and CPU architecture) you distribute for — the binary is platform-specific.
-
-**Steps**
-
-```bash
-chmod +x build/build_executable.sh    # once, if needed
-./build/build_executable.sh
+```sh
+# Example: install the Linux x86_64 binary into /usr/local/bin
+curl -L -o /usr/local/bin/pg_sandbox \
+  https://github.com/guriandoro/postgresql_sandbox/releases/latest/download/pg_sandbox-linux-amd64
+chmod +x /usr/local/bin/pg_sandbox
 ```
 
-If `python3` does not already have PyInstaller (common on **Homebrew Python** / **PEP 668** systems where global `pip install` is blocked), the script creates **`build/.venv`**, installs PyInstaller there, and uses it for the bundle. You can still install PyInstaller yourself (`python3 -m pip install pyinstaller` in a venv or with your distro’s packaging) and the script will use that instead.
+A `SHA256SUMS` file is published alongside each release for checksum verification.
 
-The output is **`bin/pg_sandbox`**. Use it like the script version, for example `bin/pg_sandbox --help`.
+## Build from source
 
-Intermediate PyInstaller files stay under `build/` (`pyinstaller-work/`, optional `pg_sandbox.spec`, and `.venv/` when auto-created). Those paths are listed in `.gitignore`; the binary under `bin/pg_sandbox` is ignored so only `bin/.gitkeep` is tracked.
+```sh
+# Local-arch binary into ./bin/pg_sandbox
+make build
 
-# Environment Variables
+# All four release binaries into ./bin/
+make build-all
 
-> **Python tool.** The variables below are read by the Python `pg_sandbox`. The Go port under [`go/`](./go/) consumes a different set — see [`go/docs/environment.md`](./go/docs/environment.md). The two most common renamings: `PGS_ROOT_DIR` → `PGS_SANDBOX_ROOT`, and `PGS_ENV_FILE` is dropped (the Go port persists per-sandbox state as JSON).
-
-The following environment variables can be used to customize the behavior of pg_sandbox:
-
-- `PGS_ROOT_DIR`: Sets the root directory where all PostgreSQL sandboxes are stored. Defaults to `~/postgresql-sandboxes/` if not set.
-- `PGS_BIN_DIR`: Sets the directory where PostgreSQL binaries are installed. Defaults to `/opt/postgresql/` if not set.
-- `PGS_ENV_FILE`: Sets the name of the environment file used to store sandbox configuration. Defaults to `pg_sandbox.env` if not set.
-- `PGS_PG_GATHER_DIR`: Sets the directory where pg_gather scripts are located. Defaults to `~/src/support-snippets/postgresql/pg_gather/` if not set.
-- `PGS_BUILD_DIR`: Sets the directory where PostgreSQL source code is downloaded and compiled during the build process. Defaults to `/tmp/postgresql-sandbox-build/` if not set.
-- `PGS_BUILD_DEBUG`: When set to "1", enables debug flags during PostgreSQL compilation (--enable-cassert, --enable-debug, and debug CFLAGS).
-- `PGS_DEBUG`: When set, enables debug output throughout the pg_sandbox script execution.
-
-# Basic workflow
-
-Deploy a sandbox.
-```
-pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18.3
+# Or, without GNU make:
+./scripts/build.sh
 ```
 
-Use the sandbox.
+Requires **Go 1.22 or newer**. Binaries are stripped (`-ldflags="-s -w"`) and stamped with the current version + commit (`./bin/pg_sandbox --version` shows both). `CGO_ENABLED=0` is set in the cross-compile path, so the Linux artifacts have no glibc dependency and run on any reasonably-recent kernel.
+
+## Requirements
+
+- **Go 1.22+** (only for building from source — pre-built binaries have no Go requirement).
+- **PostgreSQL binaries** (`initdb`, `pg_ctl`, `psql`, `pg_basebackup`, `pg_dump`) reachable on disk. `pg_sandbox` does not bundle PostgreSQL; it points at an existing install via `--bin-dir` or `PGS_BIN_DIR`.
+- **macOS or Linux.** Windows is not supported.
+
+## Test
+
+```sh
+make test          # all unit + component tests
+make vet           # go vet
+make lint          # go vet + golangci-lint (if installed)
+make fmt           # gofmt -s -w .
 ```
-cd ~/postgresql-sandboxes/pg-18.3/
-./use
+
+Integration smoke tests are opt-in and require a real PostgreSQL install:
+
+```sh
+PGS_BIN_DIR=/opt/postgresql/18.4 go test -tags=integration ./...
 ```
 
-Destroy the sandbox.
+## Project layout
+
 ```
-pg_sandbox destroy -s pg-18.3
+.
+├── README.md                  this file
+├── SPEC.md                    canonical functional spec — the contract
+├── docs/                      user-facing reference (commands, env vars, exit codes, examples)
+├── go.mod                     module declaration; no external deps
+├── Makefile                   build / test / lint / cross-compile
+├── scripts/build.sh           shell mirror of `make build-all`
+├── .golangci.yml              optional lint configuration
+├── cmd/pg_sandbox/main.go     CLI entry point and subcommand dispatcher
+├── internal/                  implementation packages (see below)
+├── testdata/                  fixtures for unit + integration tests
+└── deprecated/                archival snapshot of the Python tool — see below
 ```
 
-# Physical replication
+The `internal/` packages are domain-scoped:
 
-`pg_sandbox` can also build streaming replication topologies. Each standby is its own sandbox, attached to an existing one via `pg_basebackup -R`.
+| Package | Responsibility |
+|---|---|
+| `internal/sandbox` | Single-instance lifecycle (deploy / destroy / start / stop / status) |
+| `internal/cluster` | Cluster manifest + multi-member orchestration |
+| `internal/replication` | Physical + logical replication primitives |
+| `internal/pgexec` | Thin, testable wrappers around `psql` / `pg_ctl` / `initdb` / `pg_basebackup` / `pg_dump` |
+| `internal/config` | Per-sandbox and global config: schema, load/save, resolution, migration |
+| `internal/portalloc` | Free TCP port detection |
+| `internal/report` | `pg_gather` HTML report generation pipeline |
+| `internal/ui` | Logging, prompts, exit codes |
 
-Two equivalent entry points:
+## Documentation
 
-- Incremental, one node at a time:
-  ```
-  pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-primary
-  pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-s1 \
-      --replicate-from pg-18-primary --slot pg_18_s1_slot
-  pg_sandbox deploy -b /opt/postgresql/18.3 -s pg-18-s2 \
-      --replicate-from pg-18-primary --slot pg_18_s2_slot --sync
-  ```
-  `--replicate-from` may also point at another standby (cascading).
+- [`SPEC.md`](./SPEC.md) — **canonical** functional specification.
+- [`docs/commands.md`](./docs/commands.md) — per-command reference.
+- [`docs/environment.md`](./docs/environment.md) — environment variables.
+- [`docs/exit-codes.md`](./docs/exit-codes.md) — exit code reference.
+- [`docs/examples.md`](./docs/examples.md) — end-to-end recipes.
 
-- One-shot cluster:
-  ```
-  pg_sandbox cluster deploy  -s rep -b /opt/postgresql/18.3 -N 2 --sync-count 1
-  pg_sandbox cluster status  -s rep
-  pg_sandbox cluster destroy -s rep -f
-  ```
-  This creates a per-cluster directory `<PGS_ROOT_DIR>/rep/` containing `rep_p/`, `rep_s1/`, `rep_s2/`, plus a manifest at `<PGS_ROOT_DIR>/rep/cluster.json` used by `cluster status` / `cluster destroy`.
+## Deprecated Python tool
 
-Other replication-related commands:
+This project previously shipped as a Python script (`pg_sandbox`, `pg_sandbox_help.py`, `pg_sandbox_errors.py`) packaged via PyInstaller. That implementation has been superseded by the Go port and is no longer maintained.
 
-- `pg_sandbox status -s NAME` also prints `pg_stat_replication` (primaries) or `pg_stat_wal_receiver` + `pg_is_in_recovery()` (standbys) when the instance is running.
-- `pg_sandbox promote -s STANDBY` runs `pg_ctl promote` and updates the sandbox env file so subsequent commands treat it as a primary.
+An archival snapshot of the Python sources and their docs is kept under [`deprecated/`](./deprecated/) for users mid-migration. The full Python commit history is reachable via the `python-final` git tag.
 
-The per-sandbox env file (`pg_sandbox.env`) gains optional fields when a sandbox participates in replication: `PGS_ROLE`, `PGS_REPLICATE_FROM`, `PGS_SLOT_NAME`, `PGS_REPL_USER`, `PGS_CLUSTER`. Plain primaries continue to be persisted with the original field set.
-
-# Logical replication
-
-`pg_sandbox` also supports logical replication: a fresh primary subscribes to a publication on another sandbox via `CREATE SUBSCRIPTION`. Unlike physical replication, subscribers are independent primaries (not `pg_basebackup` clones), DDL is not replicated, and a subscription is per-database.
-
-Three entry points cover the common cases:
-
-- Publish on an existing sandbox, then attach a subscriber sandbox:
-  ```
-  pg_sandbox deploy   -b /opt/postgresql/18.3 -s pg-18-pub
-  pg_sandbox publish  -s pg-18-pub --pub-name app_pub --all-tables
-
-  pg_sandbox deploy   -b /opt/postgresql/18.3 -s pg-18-sub \
-      --subscribe-to pg-18-pub --pub-name app_pub --copy-schema
-  ```
-  `--copy-schema` runs `pg_dump --schema-only | psql` from publisher to subscriber before `CREATE SUBSCRIPTION` (logical replication does NOT replicate DDL, so the subscriber needs matching tables before the initial copy can land).
-
-- Subscribe an already-deployed sandbox to a remote publication:
-  ```
-  pg_sandbox deploy    -b /opt/postgresql/18.3 -s pg-18-sub
-  pg_sandbox subscribe -s pg-18-sub --from pg-18-pub --pub-name app_pub --copy-schema
-  ```
-
-- One-shot logical cluster (1 publisher + N subscribers, defaults to `FOR ALL TABLES`):
-  ```
-  pg_sandbox cluster deploy -s lrep -b /opt/postgresql/18.3 -N 2 --logical --copy-schema
-  pg_sandbox cluster status -s lrep
-  pg_sandbox cluster destroy -s lrep -f
-  ```
-  This creates `<PGS_ROOT_DIR>/lrep/lrep_p` (publisher), `lrep_s1`, `lrep_s2` (subscribers), and a manifest with `mode: "logical"`, `publication`, `dbname`, `subscriptions`. `cluster destroy` best-effort drops each subscription on the subscriber and the publication on the publisher before tearing members down, so logical slots don't leak.
-
-Notes:
-
-- `--sync` (deploy/subscribe) and `--sync-count` (cluster) work in logical mode the same way they do in physical mode: subscriptions carry `application_name=<sub_name>` so they can match `synchronous_standby_names` on the publisher.
-- `pg_sandbox status -s NAME` prints `pg_publication`, `pg_subscription`, and `pg_stat_subscription` whenever they have rows, so the same command surfaces both physical and logical replication state.
-- `destroy` best-effort runs `DROP SUBSCRIPTION` against a subscriber sandbox (recorded via `PGS_SUBSCRIPTION_NAME`) before stopping it, mirroring how today's destroy best-effort drops physical slots.
-- New optional env keys persisted when a sandbox participates in logical replication: `PGS_SUBSCRIBE_FROM`, `PGS_SUBSCRIPTION_NAME`, `PGS_PUBLICATION_NAME`, `PGS_SUBSCRIPTION_DBNAME`, `PGS_PUBLICATIONS`.
-
-# Demo file with examples
-
-To read more on how to use the different functionality provided by pg_sandbox, you can check the [Demo](DEMO.md) file.
+The two implementations are **not drop-in compatible**: env var names and per-sandbox state file format differ. Sandboxes created by the Python tool need to be re-created with the Go binary — there is no automatic migration.
