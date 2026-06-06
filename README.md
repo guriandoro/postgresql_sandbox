@@ -1,6 +1,9 @@
 # postgresql_sandbox
 A simple-to-use PostgreSQL sandbox helper.
 
+> **Which tool does this README describe?**
+> This file documents the **Python** `pg_sandbox` that lives at the repository root and is bundled into `bin/pg_sandbox` by `build/build_executable.sh`. A Go re-implementation lives under [`go/`](./go/); it has its own docs ([`go/README.md`](./go/README.md), [`go/SPEC.md`](./go/SPEC.md), [`go/docs/`](./go/docs/)) and uses different environment-variable names (e.g. `PGS_SANDBOX_ROOT`, not `PGS_ROOT_DIR`) and JSON-based per-sandbox configuration (no `pg_sandbox.env` file). Until the Go port reaches GA, the Python tool described here is the recommended entry point.
+
 Check `pg_sandbox --help` for detailed usage information and tips.
 
 # Standalone executable (macOS / Linux)
@@ -27,6 +30,8 @@ The output is **`bin/pg_sandbox`**. Use it like the script version, for example 
 Intermediate PyInstaller files stay under `build/` (`pyinstaller-work/`, optional `pg_sandbox.spec`, and `.venv/` when auto-created). Those paths are listed in `.gitignore`; the binary under `bin/pg_sandbox` is ignored so only `bin/.gitkeep` is tracked.
 
 # Environment Variables
+
+> **Python tool.** The variables below are read by the Python `pg_sandbox`. The Go port under [`go/`](./go/) consumes a different set — see [`go/docs/environment.md`](./go/docs/environment.md). The two most common renamings: `PGS_ROOT_DIR` → `PGS_SANDBOX_ROOT`, and `PGS_ENV_FILE` is dropped (the Go port persists per-sandbox state as JSON).
 
 The following environment variables can be used to customize the behavior of pg_sandbox:
 

@@ -2,6 +2,9 @@
 
 Repo at: https://github.com/guriandoro/postgresql_sandbox
 
+> **Which tool does this demo describe?**
+> This file documents the **Python** `pg_sandbox` at the repository root. A Go port lives under [`go/`](./go/) with its own examples in [`go/docs/examples.md`](./go/docs/examples.md). The two ports differ in env-var names (e.g. `PGS_ROOT_DIR` here vs. `PGS_SANDBOX_ROOT` in the Go port) and per-sandbox state format (env file here, JSON in the Go port), so commands below are not directly portable.
+
 ## Environment Variables Examples
 
 The following examples show how to use environment variables to customize the PostgreSQL sandbox behavior:

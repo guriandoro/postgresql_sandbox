@@ -97,4 +97,10 @@ Until this Go port is declared GA, both coexist:
 - The **Python** tool is the recommended one for real use. It lives at the repository root.
 - The **Go** tool is under active development under `go/`. It is broadly functional — most workflows succeed end-to-end — but has not yet been declared the canonical entry point.
 
+Surface-level differences to watch for when switching between the two:
+
+- **Environment variables.** The Python tool reads `PGS_ROOT_DIR`; the Go port reads `PGS_SANDBOX_ROOT` (different name, same role). `PGS_ENV_FILE` does not exist in the Go port — per-sandbox state is JSON (`pg_sandbox.json`), not env-format. `PGS_DEBUG` works in both. `PGS_LOG_LEVEL` / `PGS_CONFIG_FILE` are Python-tool-only — the Go port deliberately collapses log control onto `--debug` / `--quiet` and follows XDG for the global config path. The full Go-port matrix is in [`docs/environment.md`](./docs/environment.md).
+- **Per-sandbox state file.** Python writes `pg_sandbox.env` (KEY=VALUE). The Go port writes `pg_sandbox.json` (strict JSON, schema-versioned). `pg_sandbox config migrate` converts a legacy env file into the JSON shape.
+- **`cluster deploy --sync-count`.** Accepted in both, but the Go port treats it as async today (synchronous wiring is deferred) and emits a warn-level diagnostic when `k > 0`.
+
 When the Go port is declared GA, the Go binary will take over the canonical `pg_sandbox` name; the Python entry point will be renamed (e.g., `pg_sandbox.py`) and kept around for users mid-migration. That transition is its own change and won't happen as part of this port.
