@@ -209,6 +209,155 @@ func TestValidatePhysicalRequiresBlock(t *testing.T) {
 	}
 }
 
+// mkStandbySandbox returns a valid standby Sandbox with a fully
+// populated Physical block. Per-field tests mutate one field at a
+// time to introduce a single defect.
+func mkStandbySandbox(dir string) *Sandbox {
+	s := mkSandbox(dir)
+	s.Role = RoleStandby
+	s.Physical = &Physical{
+		SourceSandbox:   "primary",
+		SlotName:        "primary_standby1_slot",
+		ReplicationUser: "replicator",
+		SyncMode:        SyncNone,
+		AppName:         "standby1",
+	}
+	return s
+}
+
+// mkSubscriberSandbox returns a valid subscriber Sandbox with a
+// fully populated Logical block. Per-field tests mutate one field.
+func mkSubscriberSandbox(dir string) *Sandbox {
+	s := mkSandbox(dir)
+	s.Role = RoleSubscriber
+	s.Logical = &Logical{
+		SourceSandbox:    "publisher",
+		PublicationName:  "pub",
+		SubscriptionName: "sub",
+		CopyMode:         CopyAll,
+		TargetDatabase:   "appdb",
+	}
+	return s
+}
+
+// assertValidationContains is a tiny helper to keep the per-field
+// tests concise: run Validate, assert it returned a *ValidationError,
+// and check that each fragment appears in the joined problem list.
+func assertValidationContains(t *testing.T, err error, fragments ...string) *ValidationError {
+	t.Helper()
+	if err == nil {
+		t.Fatal("Validate accepted a config it should have rejected")
+	}
+	var v *ValidationError
+	if !errors.As(err, &v) {
+		t.Fatalf("Validate returned non-ValidationError: %T (%v)", err, err)
+	}
+	joined := strings.Join(v.Problems, " | ")
+	for _, frag := range fragments {
+		if !strings.Contains(joined, frag) {
+			t.Errorf("Validate didn't report %q; problems: %v", frag, v.Problems)
+		}
+	}
+	return v
+}
+
+func TestValidatePhysicalMissingSourceSandbox(t *testing.T) {
+	dir := t.TempDir()
+	s := mkStandbySandbox(dir)
+	s.Physical.SourceSandbox = ""
+	assertValidationContains(t, Validate(s), "physical.sourceSandbox")
+}
+
+func TestValidatePhysicalMissingSlotName(t *testing.T) {
+	dir := t.TempDir()
+	s := mkStandbySandbox(dir)
+	s.Physical.SlotName = ""
+	assertValidationContains(t, Validate(s), "physical.slotName")
+}
+
+func TestValidatePhysicalMissingReplicationUser(t *testing.T) {
+	dir := t.TempDir()
+	s := mkStandbySandbox(dir)
+	s.Physical.ReplicationUser = ""
+	assertValidationContains(t, Validate(s), "physical.replicationUser")
+}
+
+func TestValidatePhysicalInvalidSyncMode(t *testing.T) {
+	dir := t.TempDir()
+	s := mkStandbySandbox(dir)
+	s.Physical.SyncMode = SyncMode("weird")
+	assertValidationContains(t, Validate(s), "physical.syncMode", "weird")
+}
+
+func TestValidateLogicalMissingSourceSandbox(t *testing.T) {
+	dir := t.TempDir()
+	s := mkSubscriberSandbox(dir)
+	s.Logical.SourceSandbox = ""
+	assertValidationContains(t, Validate(s), "logical.sourceSandbox")
+}
+
+func TestValidateLogicalMissingPublicationName(t *testing.T) {
+	dir := t.TempDir()
+	s := mkSubscriberSandbox(dir)
+	s.Logical.PublicationName = ""
+	assertValidationContains(t, Validate(s), "logical.publicationName")
+}
+
+func TestValidateLogicalMissingSubscriptionName(t *testing.T) {
+	dir := t.TempDir()
+	s := mkSubscriberSandbox(dir)
+	s.Logical.SubscriptionName = ""
+	assertValidationContains(t, Validate(s), "logical.subscriptionName")
+}
+
+func TestValidateLogicalMissingTargetDatabase(t *testing.T) {
+	dir := t.TempDir()
+	s := mkSubscriberSandbox(dir)
+	s.Logical.TargetDatabase = ""
+	assertValidationContains(t, Validate(s), "logical.targetDatabase")
+}
+
+func TestValidateLogicalInvalidCopyMode(t *testing.T) {
+	dir := t.TempDir()
+	s := mkSubscriberSandbox(dir)
+	s.Logical.CopyMode = CopyMode("weird")
+	assertValidationContains(t, Validate(s), "logical.copyMode", "weird")
+}
+
+func TestValidateSubscriberRequiresLogicalBlock(t *testing.T) {
+	dir := t.TempDir()
+	s := mkSandbox(dir)
+	s.Role = RoleSubscriber
+	// No Logical block. Validate must complain.
+	assertValidationContains(t, Validate(s), "subscriber", "logical")
+}
+
+func TestValidateAccumulatesPhysicalProblems(t *testing.T) {
+	dir := t.TempDir()
+	s := mkStandbySandbox(dir)
+	// Two simultaneous defects: missing SourceSandbox AND invalid
+	// SyncMode. Both must appear; Validate must not short-circuit.
+	s.Physical.SourceSandbox = ""
+	s.Physical.SyncMode = SyncMode("weird")
+	v := assertValidationContains(t, Validate(s), "physical.sourceSandbox", "physical.syncMode")
+	if len(v.Problems) < 2 {
+		t.Errorf("expected >=2 problems, got %d: %v", len(v.Problems), v.Problems)
+	}
+}
+
+func TestValidateAccumulatesLogicalProblems(t *testing.T) {
+	dir := t.TempDir()
+	s := mkSubscriberSandbox(dir)
+	// Two simultaneous defects: missing PublicationName AND invalid
+	// CopyMode. Both must surface in one pass.
+	s.Logical.PublicationName = ""
+	s.Logical.CopyMode = CopyMode("weird")
+	v := assertValidationContains(t, Validate(s), "logical.publicationName", "logical.copyMode")
+	if len(v.Problems) < 2 {
+		t.Errorf("expected >=2 problems, got %d: %v", len(v.Problems), v.Problems)
+	}
+}
+
 func TestMigrateLegacyEnv(t *testing.T) {
 	dir := t.TempDir()
 	legacy := filepath.Join(dir, "pg_sandbox.env")
