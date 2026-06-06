@@ -98,15 +98,29 @@ type subcommand struct {
 }
 
 func main() {
+	// main is the only place we read os.Args / os.Std{out,err} /
+	// call os.Exit. Everything dispatch-related is delegated to
+	// dispatch so cmd-package tests can drive both global-flag
+	// orderings end-to-end without spawning a subprocess.
+	os.Exit(dispatch(os.Args[1:], os.Stdout, os.Stderr))
+}
+
+// dispatch is the testable seam under main. Given the program argv
+// (sans argv[0]) and the writers to use for output, it does the
+// top-level --version / --help / global-flag sweep / subcommand
+// lookup and returns the exit code its caller should hand to
+// os.Exit. Extracting this from main lets globals_dispatch_test.go
+// exercise the "global flag before OR after the subcommand name"
+// surface against a real run* handler without spawning a binary.
+func dispatch(args []string, stdout, stderr io.Writer) int {
 	// We don't use the top-level `flag.Parse()` here because we
 	// want to recognize --version and --help BEFORE deciding
 	// whether the user typed a subcommand. Doing this by hand
 	// keeps the dispatcher simple and avoids the standard library's
 	// awkward "FlagSet ContinueOnError requires manual --help" dance.
-	args := os.Args[1:]
 	if len(args) == 0 {
-		printTopHelp(os.Stderr)
-		os.Exit(ui.ExitUsage.Int())
+		printTopHelp(stderr)
+		return ui.ExitUsage.Int()
 	}
 
 	// Strip any leading global flags that we handle here. --version /
@@ -119,12 +133,12 @@ func main() {
 	for len(args) > 0 {
 		switch args[0] {
 		case "--version", "-V":
-			fmt.Fprintf(os.Stdout, "pg_sandbox %s (commit %s, %s/%s, %s)\n",
+			fmt.Fprintf(stdout, "pg_sandbox %s (commit %s, %s/%s, %s)\n",
 				version, commit, runtime.GOOS, runtime.GOARCH, runtime.Version())
-			os.Exit(ui.ExitOK.Int())
+			return ui.ExitOK.Int()
 		case "--help", "-h":
-			printTopHelp(os.Stdout)
-			os.Exit(ui.ExitOK.Int())
+			printTopHelp(stdout)
+			return ui.ExitOK.Int()
 		}
 		// Pull --debug / --quiet / --color off the head, then
 		// continue the loop in case more global flags follow before
@@ -143,17 +157,17 @@ func main() {
 	if len(args) == 0 {
 		// User typed only global flags, no subcommand. Mirror the
 		// no-arg branch above.
-		printTopHelp(os.Stderr)
-		os.Exit(ui.ExitUsage.Int())
+		printTopHelp(stderr)
+		return ui.ExitUsage.Int()
 	}
 
 	name := args[0]
 	rest := args[1:]
 	cmd, ok := subcommands[name]
 	if !ok {
-		fmt.Fprintf(os.Stderr, "pg_sandbox: unknown command %q\n", name)
-		fmt.Fprintln(os.Stderr, "Run 'pg_sandbox help' to see available commands.")
-		os.Exit(ui.ExitUsage.Int())
+		fmt.Fprintf(stderr, "pg_sandbox: unknown command %q\n", name)
+		fmt.Fprintln(stderr, "Run 'pg_sandbox help' to see available commands.")
+		return ui.ExitUsage.Int()
 	}
 	// Intercept `<cmd> --help` / `<cmd> -h` so it always renders the
 	// rich help on stdout and exits 0, rather than dropping into the
@@ -165,8 +179,8 @@ func main() {
 	// (e.g. `cluster deploy --help`, which the inner dispatcher
 	// already maps to a rich block).
 	if len(rest) > 0 && (rest[0] == "--help" || rest[0] == "-h") && cmd.help != nil {
-		cmd.help(os.Stdout)
-		os.Exit(ui.ExitOK.Int())
+		cmd.help(stdout)
+		return ui.ExitOK.Int()
 	}
 	// Re-prepend any global flags we swept off the head so the
 	// subcommand's FlagSet sees them in the position it expects.
@@ -175,7 +189,7 @@ func main() {
 	if len(leadingGlobals) > 0 && name != "help" {
 		rest = append(append([]string{}, leadingGlobals...), rest...)
 	}
-	os.Exit(cmd.run(rest, os.Stdout, os.Stderr))
+	return cmd.run(rest, stdout, stderr)
 }
 
 // usageHint prints a one-line pointer at `pg_sandbox help <cmd>`. It
