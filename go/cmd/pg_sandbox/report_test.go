@@ -79,12 +79,12 @@ func TestRunReport_debugQuietMutex(t *testing.T) {
 	}
 }
 
-func TestRunReport_forceAcceptedAtParse(t *testing.T) {
-	// --force / -f are accepted but currently unused (reserved for
-	// prompt suppression in a later slice). Verify Parse accepts both
-	// aliases by combining with the missing-input path: rc=2 with
-	// "--input is required" means Parse accepted -f without rejecting
-	// it as an unknown flag.
+func TestRunReport_forceRejectedAsUnknown(t *testing.T) {
+	// --force used to be accepted-but-unused. It has been dropped: the
+	// report command errors fast on missing inputs with no prompt to
+	// suppress, so the flag was vestigial. Verify Parse now rejects
+	// both aliases with the standard "flag provided but not defined"
+	// shape — defending against re-introduction without a real need.
 	for _, alias := range []string{"--force", "-f"} {
 		t.Run(alias, func(t *testing.T) {
 			var stderr bytes.Buffer
@@ -92,8 +92,9 @@ func TestRunReport_forceAcceptedAtParse(t *testing.T) {
 			if rc != ui.ExitUsage.Int() {
 				t.Errorf("rc = %d, want %d", rc, ui.ExitUsage.Int())
 			}
-			if !strings.Contains(stderr.String(), "--input is required") {
-				t.Errorf("stderr doesn't reach the --input check (parse rejection?): %q", stderr.String())
+			if !strings.Contains(stderr.String(), "flag provided but not defined") &&
+				!strings.Contains(stderr.String(), "not defined") {
+				t.Errorf("stderr does not look like an unknown-flag rejection: %q", stderr.String())
 			}
 		})
 	}

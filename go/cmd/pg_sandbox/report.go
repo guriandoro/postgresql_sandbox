@@ -7,11 +7,9 @@
 // set.
 //
 // We do NOT implement an auto-download for --pg-gather-dir. SPEC
-// §6.13 explicitly says "refuses by default rather than auto-
-// downloading"; the --force flag is reserved for prompt-suppression
-// when we add a future "you have the gather scripts; should we
-// reuse them?" question, but in this slice --force is accepted and
-// ignored. We document that in the help text.
+// §6.13 says "refuses by default rather than auto-downloading" — the
+// missing-everywhere case is a hard error with a precise hint, not a
+// prompt, so there is no prompt to suppress and no --force flag.
 
 package main
 
@@ -42,7 +40,6 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		binDir      string
 		pgGatherDir string
 		sandboxRoot string
-		forceUnused bool // accepted but unused this slice; documented below.
 	)
 	fs.StringVar(&inputPath, "input", "", "Captured pg_gather out.txt (required)")
 	fs.StringVar(&outputPath, "output", "", "Rendered HTML output path (default report.html in CWD)")
@@ -50,12 +47,6 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&pgGatherDir, "pg-gather-dir", "", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / pgGatherDir in global config)")
 	fs.StringVar(&sandboxRoot, "root", "", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)")
-	// SPEC §6.13 mentions --force/-f as a prompt-suppression knob for
-	// the "missing gather dir" case. We don't implement the prompt in
-	// this slice (we error fast instead), so --force is accepted to
-	// keep the documented surface stable but has no effect today.
-	fs.BoolVar(&forceUnused, "force", false, "Accepted but currently unused (reserved for prompt suppression)")
-	fs.BoolVar(&forceUnused, "f", false, "Alias for --force")
 
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
@@ -199,7 +190,6 @@ func reportHelp(w io.Writer) {
 		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (or set PGS_BIN_DIR / global defaultBinDir)"},
 		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir)"},
 		{"    --root <dir>", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)"},
-		{"-f, --force", "Accepted but currently unused (reserved for prompt suppression)"},
 	})
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "See SPEC.md §6.13.")

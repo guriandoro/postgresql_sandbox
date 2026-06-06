@@ -440,7 +440,7 @@ Behavior:
 
 **Purpose.** Run a pg_gather analysis: spin up a throwaway sandbox, load the gather schema, ingest a captured `out.txt`, generate the HTML report, then destroy the sandbox.
 
-**Inputs.** `--input <out.txt>` (required); `--output <report.html>` (default: `report.html` in cwd); `--bin-dir <path>` (required, or resolved from global config); `--pg-gather-dir <path>` (required, or resolved from env / global config); `--force` (suppress prompt if the gather scripts directory is missing — refuses by default rather than auto-downloading).
+**Inputs.** `--input <out.txt>` (required); `--output <report.html>` (default: `report.html` in cwd); `--bin-dir <path>` (required, or resolved from global config); `--pg-gather-dir <path>` (required, or resolved from env / global config). The command refuses by default rather than auto-downloading the gather scripts: missing inputs are errors, not prompts, so there is no `--force` flag.
 
 **Behavior.** Internally calls §6.1, §6.5 (psql piping `gather_schema.sql`, then `\copy out.txt`, then `gather_report.sql > report.html`), §6.3. The throwaway sandbox uses a temp directory inside the sandbox root; on success, it is destroyed; on failure, it is left in place for debugging and the temp path is printed.
 

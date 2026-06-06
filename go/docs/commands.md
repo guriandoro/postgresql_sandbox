@@ -25,7 +25,7 @@ These are *not* global — each command parses its own flag set — but they app
 | `--port <n>` / `-p` | `deploy` | TCP port (auto-allocated when omitted). |
 | `--user <name>` / `-U` | `deploy`, `publish`, `subscribe` | PG superuser. |
 | `--dbname <name>` / `-d` | `deploy`, `publish`, `subscribe`, `config` | Database name. |
-| `--force` / `-f` | `destroy`, `cluster destroy`, `cleanup-install-versions`, `build`, `report` | Skip confirmation prompts. |
+| `--force` / `-f` | `destroy`, `cluster destroy`, `cleanup-install-versions`, `build` | Skip confirmation prompts. |
 | `--json` | `status`, `config show`, `global_status`, `cluster status`, `report` | Machine-readable output. |
 | `--global` | `config show` / `get` / `set` / `validate` | Operate on global config instead of the sandbox config. |
 | `--root <path>` | `global_status`, `report`, `cleanup-install-versions` | Override the sandbox-root scan path. |
