@@ -1,5 +1,8 @@
 # pg_sandbox
 
+[![CI](https://github.com/guriandoro/postgresql_sandbox/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/guriandoro/postgresql_sandbox/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/guriandoro/postgresql_sandbox?sort=semver)](https://github.com/guriandoro/postgresql_sandbox/releases/latest)
+
 `pg_sandbox` is a command-line tool that provisions, manages, and tears down local PostgreSQL sandbox instances for development, testing, and bug reproduction. It targets macOS and Linux on `amd64` and `arm64`, and ships as a single static binary with no runtime dependencies beyond the PostgreSQL binaries you point it at.
 
 The canonical functional contract lives in [`SPEC.md`](./SPEC.md).
