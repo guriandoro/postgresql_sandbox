@@ -13,39 +13,16 @@
 //     scannable in a terminal.
 //
 //   - Levels: debug < info < warn < error. The threshold is set by
-//     NewLogger's argument; main.go resolves the threshold from
-//     PGS_LOG_LEVEL, --debug, --quiet in that order.
+//     NewLogger's argument; the dispatcher resolves it from --debug,
+//     --quiet, and the PGS_DEBUG env-var alias (see SPEC §4.9 and
+//     globals.go::Resolve).
 
 package ui
 
 import (
 	"io"
 	"log/slog"
-	"strings"
 )
-
-// Level maps the string names accepted from PGS_LOG_LEVEL and the
-// --log-level flag to slog.Level values. Unknown names are treated
-// as a usage error by the caller (we return ok=false rather than
-// silently picking a default — silent defaults are exactly the kind
-// of hidden state SPEC §3.1.7 forbids).
-func Level(name string) (slog.Level, bool) {
-	switch strings.ToLower(strings.TrimSpace(name)) {
-	case "debug":
-		return slog.LevelDebug, true
-	case "info", "":
-		// Empty string maps to info because that's the documented
-		// default. Treating "" as a valid input here lets callers
-		// pass os.Getenv("PGS_LOG_LEVEL") through without first
-		// checking for unset.
-		return slog.LevelInfo, true
-	case "warn", "warning":
-		return slog.LevelWarn, true
-	case "error", "err":
-		return slog.LevelError, true
-	}
-	return slog.LevelInfo, false
-}
 
 // NewLogger constructs a leveled logger that writes to w (typically
 // os.Stderr). The handler is slog.TextHandler — human-friendly, one

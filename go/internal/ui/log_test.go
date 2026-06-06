@@ -9,32 +9,6 @@ import (
 	"testing"
 )
 
-func TestLevelParsing(t *testing.T) {
-	cases := []struct {
-		in     string
-		want   slog.Level
-		wantOK bool
-	}{
-		{"debug", slog.LevelDebug, true},
-		{"DEBUG", slog.LevelDebug, true},
-		{" Debug ", slog.LevelDebug, true},
-		{"info", slog.LevelInfo, true},
-		{"", slog.LevelInfo, true}, // documented: empty = info
-		{"warn", slog.LevelWarn, true},
-		{"warning", slog.LevelWarn, true},
-		{"error", slog.LevelError, true},
-		{"err", slog.LevelError, true},
-		{"trace", slog.LevelInfo, false}, // unknown → not ok
-		{"fatal", slog.LevelInfo, false},
-	}
-	for _, tc := range cases {
-		got, ok := Level(tc.in)
-		if got != tc.want || ok != tc.wantOK {
-			t.Errorf("Level(%q) = (%v, %v); want (%v, %v)", tc.in, got, ok, tc.want, tc.wantOK)
-		}
-	}
-}
-
 func TestLoggerRespectsLevel(t *testing.T) {
 	var buf bytes.Buffer
 	log := NewLogger(&buf, slog.LevelWarn)

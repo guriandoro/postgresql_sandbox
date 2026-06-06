@@ -21,6 +21,7 @@ The flag always wins. Setting an env var lets you avoid repeating the same flag 
 | `PGS_PG_GATHER_DIR` | `pg_gather` scripts location (used by `report`) | (none) |
 | `PGS_BUILD_DIR` | Build scratch directory (used by `build`) | `$TMPDIR/pg_sandbox-build/` |
 | `PGS_BUILD_DEBUG` | Set to `1` to retain the build scratch tree and surface raw `./configure` / `make` output. Narrow scope — only `build` reads it. | unset |
+| `PGS_DEBUG` | Set non-empty to behave as if `--debug` was passed (debug-level logging plus `# exec:` traces for every external command). The flag wins when both are present; `--quiet` always wins over both. | unset |
 | `XDG_CONFIG_HOME` | Standard XDG var — controls where the global config file is read from (`$XDG_CONFIG_HOME/pg_sandbox/config.json`) | `$HOME/.config` |
 
 `PGS_BIN_DIR` is the variable you'll set most often — once per shell session — to avoid repeating `--bin-dir /opt/postgresql/.../bin` on every command.
@@ -29,13 +30,12 @@ The flag always wins. Setting an env var lets you avoid repeating the same flag 
 
 When running PostgreSQL utilities via `use`, `run`, etc., `pg_sandbox` sets `PGHOST`, `PGPORT`, `PGUSER`, `PGDATABASE` in the child environment. This means downstream tools work as expected even when invoked without their own connection flags.
 
-## Planned but not yet wired
+## Not consumed in the Go port
 
-These appear in `SPEC.md` §4.9 but the Go port does not currently consume them. Until that wiring lands, setting them has no effect.
+The following variables were considered but are not consumed; setting them has no effect.
 
-| Variable | Planned purpose |
+| Variable | Why not |
 |---|---|
-| `PGS_LOG_LEVEL` | `debug` / `info` / `warn` / `error`. The parser exists in `internal/ui/log.go` but the dispatcher does not yet thread it through; logging is currently fixed at `info`. |
-| `PGS_CONFIG_FILE` | Override of the global config file path. Today the path is computed from `XDG_CONFIG_HOME` only. |
-| `PGS_DEBUG` | Top-level alias for "debug logging + external command tracing". The flag `--debug` provides this today; the env-var alias is not yet wired. For build-specific tracing use `PGS_BUILD_DEBUG`. |
+| `PGS_LOG_LEVEL` | The Go port collapses log control onto `--debug` / `--quiet` (and the `PGS_DEBUG` alias). A separate four-value enum adds surface without a real use case — the same outcomes are reachable through the existing flags. |
+| `PGS_CONFIG_FILE` | The global config path follows the standard XDG convention via `XDG_CONFIG_HOME`. Use that instead of a tool-specific override. |
 | `NO_COLOR` | Standard "disable ANSI color" var. Consulted by `--color=auto` (the default): when stderr is a TTY and `NO_COLOR` is unset, color would render — but the Go port emits no color output today, so there's nothing to suppress. |

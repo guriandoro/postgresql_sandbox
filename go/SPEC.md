@@ -198,12 +198,12 @@ The tool MUST NOT depend on `bash` features, `sed`, `awk`, `perl`, or other core
 | `PGS_PORT` | Default port for new sandboxes | `65432` |
 | `PGS_USER` | Default PG superuser | `postgres` |
 | `PGS_DBNAME` | Default database name | `postgres` |
-| `PGS_LOG_LEVEL` | `debug`/`info`/`warn`/`error` | `info` |
-| `PGS_CONFIG_FILE` | Override global config file path | `$XDG_CONFIG_HOME/pg_sandbox/config.json` |
-| `PGS_DEBUG` | Set non-empty to enable debug logging | unset |
+| `PGS_DEBUG` | Set non-empty to behave as if `--debug` was passed | unset |
 | `PGS_PG_GATHER_DIR` | pg_gather scripts location | (none) |
 | `PGS_BUILD_DIR` | Build scratch dir (Phase 2) | `$TMPDIR/pg_sandbox-build/` |
 | `NO_COLOR` | Standard; disables color output if set | unset |
+
+`PGS_LOG_LEVEL` and `PGS_CONFIG_FILE` are deliberately not consumed in the Go port — log control collapses onto `--debug` / `--quiet` / `PGS_DEBUG`, and the global config path follows standard XDG via `XDG_CONFIG_HOME`. See `docs/environment.md` for the full rationale.
 
 CLI flag always wins over env var (§3.1).
 

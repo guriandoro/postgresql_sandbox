@@ -115,6 +115,65 @@ func TestGlobalOpts_Resolve_levelMapping(t *testing.T) {
 	}
 }
 
+func TestGlobalOpts_Resolve_envDebugFallback(t *testing.T) {
+	// PGS_DEBUG with no --debug flag must lower the threshold to
+	// Debug, matching the Python-era affordance documented in
+	// SPEC §4.9. Empty string is treated as unset.
+	cases := []struct {
+		name     string
+		envValue string
+		argv     []string
+		wantLvl  slog.Level
+	}{
+		{"unset env keeps info", "", nil, slog.LevelInfo},
+		{"empty env keeps info", "", nil, slog.LevelInfo},
+		{"PGS_DEBUG=1 lowers to debug", "1", nil, slog.LevelDebug},
+		{"PGS_DEBUG=anything lowers to debug", "yes", nil, slog.LevelDebug},
+		{"--quiet beats PGS_DEBUG", "1", []string{"--quiet"}, slog.LevelError},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("PGS_DEBUG", tc.envValue)
+			fs := flag.NewFlagSet("test", flag.ContinueOnError)
+			fs.SetOutput(io.Discard)
+			globals := registerGlobalFlags(fs)
+			if err := fs.Parse(tc.argv); err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			logger, _, err := globals.Resolve(io.Discard)
+			if err != nil {
+				t.Fatalf("Resolve: %v", err)
+			}
+			if !logger.Enabled(nil, tc.wantLvl) {
+				t.Errorf("logger not enabled at %v", tc.wantLvl)
+			}
+			if tc.wantLvl > slog.LevelDebug && logger.Enabled(nil, tc.wantLvl-4) {
+				t.Errorf("logger leaked level %v; want threshold %v", tc.wantLvl-4, tc.wantLvl)
+			}
+		})
+	}
+}
+
+func TestGlobalOpts_Resolve_flagDebugBeatsEnv(t *testing.T) {
+	// Symmetric check: --debug works regardless of PGS_DEBUG, and
+	// PGS_DEBUG never overrides an explicit --quiet (covered in the
+	// table above, restated here for clarity).
+	t.Setenv("PGS_DEBUG", "")
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	globals := registerGlobalFlags(fs)
+	if err := fs.Parse([]string{"--debug"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	logger, _, err := globals.Resolve(io.Discard)
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !logger.Enabled(nil, slog.LevelDebug) {
+		t.Errorf("--debug did not enable Debug level")
+	}
+}
+
 func TestGlobalOpts_Resolve_rejectsBadColor(t *testing.T) {
 	// Unknown --color values are usage errors, mirroring how Go's
 	// flag package treats unknown flag values. The error message

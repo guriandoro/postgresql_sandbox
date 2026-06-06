@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 
 	"github.com/guriandoro/postgresql_sandbox/go/internal/ui"
 )
@@ -88,6 +89,12 @@ func registerGlobalFlags(fs *flag.FlagSet) *GlobalOpts {
 // is rejected rather than picking a precedence. SPEC §5's table lists
 // both flags side by side without spelling out a winner, so refusing
 // is the only honest reading.
+//
+// PGS_DEBUG env-var fallback: when neither --debug nor --quiet was
+// passed and PGS_DEBUG is set to a non-empty value, behave as if
+// --debug was given. This is the Python-era muscle-memory affordance
+// SPEC §4.9 advertises. The flag always wins (per SPEC §3.1) — if
+// the user explicitly passed --quiet, env can't reintroduce debug.
 func (o *GlobalOpts) Resolve(stderr io.Writer) (*slog.Logger, ui.ColorMode, error) {
 	if o.Debug && o.Quiet {
 		return nil, ui.ColorAuto, fmt.Errorf("pg_sandbox: --debug and --quiet are mutually exclusive")
@@ -98,9 +105,15 @@ func (o *GlobalOpts) Resolve(stderr io.Writer) (*slog.Logger, ui.ColorMode, erro
 	}
 	o.ColorMode = mode
 
+	debug := o.Debug
+	if !debug && !o.Quiet && os.Getenv("PGS_DEBUG") != "" {
+		debug = true
+		o.Debug = true
+	}
+
 	level := slog.LevelInfo
 	switch {
-	case o.Debug:
+	case debug:
 		level = slog.LevelDebug
 	case o.Quiet:
 		level = slog.LevelError
