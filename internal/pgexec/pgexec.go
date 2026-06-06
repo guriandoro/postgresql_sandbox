@@ -46,6 +46,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 )
 
 // debugExecWriter is where the `# exec: ...` debug line goes. We
@@ -228,6 +229,14 @@ func (e *Exec) runCaptured(ctx context.Context, stdin io.Reader, name string, ar
 	e.logExec(full, args)
 
 	cmd := exec.CommandContext(ctx, full, args...)
+	// WaitDelay bounds how long Wait blocks after the context is done.
+	// Without it, a grandchild (e.g. /bin/sh -c "sleep 5" on Linux,
+	// where the shell forks instead of exec'ing) inherits our captured
+	// pipes and Wait blocks until that grandchild closes them — even
+	// after CommandContext kills the direct child. 500ms is plenty for
+	// well-behaved children to drain output and long enough that we
+	// don't truncate normal completion.
+	cmd.WaitDelay = 500 * time.Millisecond
 	if len(e.Env) > 0 {
 		cmd.Env = append(os.Environ(), e.Env...)
 	}
@@ -253,6 +262,7 @@ func (e *Exec) RunInteractive(ctx context.Context, name string, args ...string) 
 	e.logExec(full, args)
 
 	cmd := exec.CommandContext(ctx, full, args...)
+	cmd.WaitDelay = 500 * time.Millisecond
 	if len(e.Env) > 0 {
 		cmd.Env = append(os.Environ(), e.Env...)
 	}
