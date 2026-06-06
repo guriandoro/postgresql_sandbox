@@ -409,7 +409,7 @@ This replaces the Python `setenv` and is the implementation of §3.
 Additional inputs:
 
 - `-N <n>` / `--nodes <n>` — number of standbys/subscribers (≥1, required).
-- `--sync-count <k>` [0] — first K members marked synchronous.
+- `--sync-count <k>` [0] — first K members will be marked synchronous **once synchronous wiring lands**. In the Go port today the flag is parsed, validated, and emits a warn-level diagnostic line if `k > 0`; every member is deployed async.
 - `--slot-prefix <pfx>` [cluster name] — physical slot name prefix.
 - `--logical` — build a logical pub/sub cluster instead of physical streaming. With `--logical-pub-name <name>` [pgs_pub].
 - All single-sandbox port/host/user/dbname flags apply to the primary/publisher; subsequent members auto-allocate ports.
@@ -419,7 +419,7 @@ Behavior:
 1. Validate inputs; refuse if cluster dir exists.
 2. Create cluster dir + cluster manifest with `mode` set.
 3. Deploy member 0 (primary or publisher) via §6.1's logic, scoped under `<cluster-dir>/<cluster-name>_p/`.
-4. Deploy members 1..N (standbys or subscribers) via §6.1's logic, named `<cluster-name>_s<n>`, attached to member 0, with sync-flag set for the first `sync-count` members.
+4. Deploy members 1..N (standbys or subscribers) via §6.1's logic, named `<cluster-name>_s<n>`, attached to member 0. When synchronous wiring lands, the first `sync-count` members will be marked synchronous on the source; today every member is deployed async regardless of `--sync-count`.
 5. Update cluster manifest with all members and replication details.
 
 **`cluster status`.** Like §6.4 `status` but produces a consolidated view of every member and the inter-member replication state. Supports `--json`.

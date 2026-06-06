@@ -82,7 +82,9 @@ pg_sandbox deploy -s sub \
 ## A managed cluster
 
 ```sh
-# 1 primary + 2 standbys, first one synchronous
+# 1 primary + 2 standbys. --sync-count is accepted but currently
+# treated as async — synchronous wiring is deferred to a follow-up
+# slice; passing -k > 0 emits a warn-level diagnostic line.
 pg_sandbox cluster deploy -s mycluster -N 2 --sync-count 1
 
 # Cluster-wide consolidated status
