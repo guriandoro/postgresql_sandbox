@@ -100,6 +100,10 @@ type httpClient interface {
 	Do(req *http.Request) (*http.Response, error)
 }
 
+// Package-level seam so unit tests can simulate the pipeline without subprocesses.
+var downloadTarballFn = downloadTarball
+var runStepFn = runStep
+
 // Build runs the entire compile pipeline. See doc.go.
 //
 // stderrW is where we write structured "step" log lines and human-
@@ -180,7 +184,7 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 
 	// Stage 1: download.
 	logger.Info("download", "version", opts.Version, "url", TarballURL(opts.Version), "target", tarballPath)
-	if err := downloadTarball(ctx, http.DefaultClient, opts.Version, tarballPath, stderrW); err != nil {
+	if err := downloadTarballFn(ctx, http.DefaultClient, opts.Version, tarballPath, stderrW); err != nil {
 		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: err}
 	}
 
@@ -193,7 +197,7 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 		}
 	}
 	extractInto := filepath.Join(buildDir, "pg_src")
-	if err := runStep(ctx, logger, logsDir, "extract", extractInto,
+	if err := runStepFn(ctx, logger, logsDir, "extract", extractInto,
 		nil, "tar", "-xzf", tarballPath, "-C", extractInto); err != nil {
 		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: err}
 	}
@@ -204,7 +208,7 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 	// Stage 3: configure.
 	confArgs := assembleConfigureArgs(installPrefix, opts)
 	debugEnv := buildDebugEnv() // PGS_BUILD_DEBUG controls CFLAGS injection.
-	if err := runStep(ctx, logger, logsDir, "configure", srcDir, debugEnv,
+	if err := runStepFn(ctx, logger, logsDir, "configure", srcDir, debugEnv,
 		"./configure", confArgs...); err != nil {
 		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: err}
 	}
@@ -214,13 +218,13 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 	if jobs <= 0 {
 		jobs = runtime.NumCPU()
 	}
-	if err := runStep(ctx, logger, logsDir, "make", srcDir, debugEnv,
+	if err := runStepFn(ctx, logger, logsDir, "make", srcDir, debugEnv,
 		"make", "-j", fmt.Sprintf("%d", jobs)); err != nil {
 		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: err}
 	}
 
 	// Stage 5: make install.
-	if err := runStep(ctx, logger, logsDir, "make_install", srcDir, nil,
+	if err := runStepFn(ctx, logger, logsDir, "make_install", srcDir, nil,
 		"make", "install"); err != nil {
 		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: err}
 	}
@@ -230,11 +234,11 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 	// parallelism rarely helps, and the upstream Makefile is robust to
 	// serial builds.
 	contribDir := filepath.Join(srcDir, "contrib")
-	if err := runStep(ctx, logger, logsDir, "contrib_make", contribDir, debugEnv,
+	if err := runStepFn(ctx, logger, logsDir, "contrib_make", contribDir, debugEnv,
 		"make"); err != nil {
 		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: err}
 	}
-	if err := runStep(ctx, logger, logsDir, "contrib_install", contribDir, nil,
+	if err := runStepFn(ctx, logger, logsDir, "contrib_install", contribDir, nil,
 		"make", "install"); err != nil {
 		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: err}
 	}

@@ -12,7 +12,9 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -386,6 +388,256 @@ func TestBuild_VersionShapedBinDir(t *testing.T) {
 			t.Errorf("warn should include build_version=18.3; stderr=\n%s", out)
 		}
 	})
+}
+
+// swapBuildSeams replaces the package-level downloadTarballFn / runStepFn
+// with the supplied test doubles for the duration of the current test.
+// Restoration runs via t.Cleanup so the production functions are always
+// reinstated, even when a subtest fails.
+func swapBuildSeams(
+	t *testing.T,
+	dl func(ctx context.Context, client httpClient, version, target string, stderrW io.Writer) error,
+	step func(ctx context.Context, logger *slog.Logger, logsDir, step, cwd string, extraEnv []string, name string, args ...string) error,
+) {
+	t.Helper()
+	origDL, origStep := downloadTarballFn, runStepFn
+	downloadTarballFn = dl
+	runStepFn = step
+	t.Cleanup(func() {
+		downloadTarballFn = origDL
+		runStepFn = origStep
+	})
+}
+
+// fakeDownload writes a small placeholder tarball to target so the
+// cached-tarball branch is exercised on retry and the file system
+// reflects "download succeeded".
+func fakeDownload(_ context.Context, _ httpClient, _ string, target string, _ io.Writer) error {
+	return os.WriteFile(target, []byte("fake-tarball"), 0o644)
+}
+
+// makeExtractStep returns a runStepFn double that satisfies the
+// post-extract os.Stat(srcDir) check by creating the expected source
+// tree when step == "extract". failStep, when non-empty, identifies
+// the symbolic step that should be reported as failing — the returned
+// error matches the production wrapper shape from runStep itself so
+// the assertion that the wrapped error mentions the step name and log
+// path stays meaningful.
+func makeExtractStep(buildDir, version, failStep string) func(context.Context, *slog.Logger, string, string, string, []string, string, ...string) error {
+	srcDir := filepath.Join(buildDir, "pg_src", "postgresql-"+version)
+	return func(_ context.Context, _ *slog.Logger, logsDir, step, _ string, _ []string, _ string, _ ...string) error {
+		if step == failStep {
+			return fmt.Errorf("build: step %q failed (see %s): boom", step, filepath.Join(logsDir, step+".log"))
+		}
+		if step == "extract" {
+			if err := os.MkdirAll(srcDir, 0o755); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func TestBuild_ForceOverwritesExistingInstall(t *testing.T) {
+	bin := t.TempDir()
+	build := t.TempDir()
+	prefix := filepath.Join(bin, "17.3")
+	if err := os.MkdirAll(prefix, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := filepath.Join(prefix, "sentinel-old.txt")
+	if err := os.WriteFile(sentinel, []byte("from a previous install"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	swapBuildSeams(t, fakeDownload, makeExtractStep(build, "17.3", ""))
+
+	var buf bytes.Buffer
+	res, err := Build(context.Background(), Options{
+		Version:  "17.3",
+		BinDir:   bin,
+		BuildDir: build,
+		Force:    true,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("Build with Force: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil Result on success")
+	}
+	if res.InstallPrefix != prefix {
+		t.Errorf("InstallPrefix = %q, want %q", res.InstallPrefix, prefix)
+	}
+	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("sentinel still exists after --force; stat err=%v", err)
+	}
+}
+
+func TestBuild_ForceOverwritesPopulatedInstall(t *testing.T) {
+	bin := t.TempDir()
+	build := t.TempDir()
+	prefix := filepath.Join(bin, "17.3")
+	// Populate the install dir with nested files to prove --force does a
+	// recursive wipe, not just an empty-dir removal.
+	nested := filepath.Join(prefix, "lib", "postgresql")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(nested, "stale.so"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	swapBuildSeams(t, fakeDownload, makeExtractStep(build, "17.3", ""))
+
+	var buf bytes.Buffer
+	res, err := Build(context.Background(), Options{
+		Version:  "17.3",
+		BinDir:   bin,
+		BuildDir: build,
+		Force:    true,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("Build with Force on populated install: %v", err)
+	}
+	if res == nil || res.InstallPrefix != prefix {
+		t.Fatalf("unexpected Result: %#v", res)
+	}
+	if _, err := os.Stat(filepath.Join(nested, "stale.so")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("nested stale file survived --force; stat err=%v", err)
+	}
+}
+
+func TestBuild_StepFailureMapsToBuildError(t *testing.T) {
+	steps := []string{"extract", "configure", "make", "make_install", "contrib_make", "contrib_install"}
+	for _, failing := range steps {
+		failing := failing
+		t.Run(failing, func(t *testing.T) {
+			bin := t.TempDir()
+			build := t.TempDir()
+			swapBuildSeams(t, fakeDownload, makeExtractStep(build, "17.3", failing))
+
+			var buf bytes.Buffer
+			_, err := Build(context.Background(), Options{
+				Version:  "17.3",
+				BinDir:   bin,
+				BuildDir: build,
+			}, &buf)
+			if err == nil {
+				t.Fatalf("expected error when step %q fails", failing)
+			}
+			var be *BuildError
+			if !errors.As(err, &be) {
+				t.Fatalf("want *BuildError, got %T (%v)", err, err)
+			}
+			if be.ExitCode.Int() != 29 {
+				t.Errorf("ExitCode = %d, want 29 (ExitBuildFailed)", be.ExitCode.Int())
+			}
+			if !strings.Contains(err.Error(), failing) {
+				t.Errorf("error %q should mention failing step %q", err.Error(), failing)
+			}
+			expectLog := filepath.Join(build, "logs", "17.3", failing+".log")
+			if !strings.Contains(err.Error(), expectLog) {
+				t.Errorf("error %q should mention log path %q", err.Error(), expectLog)
+			}
+		})
+	}
+}
+
+func TestBuild_SuccessReturnsExpectedPaths(t *testing.T) {
+	bin := t.TempDir()
+	build := t.TempDir()
+	swapBuildSeams(t, fakeDownload, makeExtractStep(build, "17.3", ""))
+
+	var buf bytes.Buffer
+	res, err := Build(context.Background(), Options{
+		Version:  "17.3",
+		BinDir:   bin,
+		BuildDir: build,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if res == nil {
+		t.Fatal("expected non-nil Result")
+	}
+	wantPrefix := filepath.Join(bin, "17.3")
+	wantTarball := filepath.Join(build, "postgresql-17.3.tar.gz")
+	wantLogs := filepath.Join(build, "logs", "17.3")
+	if res.InstallPrefix != wantPrefix {
+		t.Errorf("InstallPrefix = %q, want %q", res.InstallPrefix, wantPrefix)
+	}
+	if res.TarballPath != wantTarball {
+		t.Errorf("TarballPath = %q, want %q", res.TarballPath, wantTarball)
+	}
+	if res.LogsDir != wantLogs {
+		t.Errorf("LogsDir = %q, want %q", res.LogsDir, wantLogs)
+	}
+	for _, p := range []string{res.InstallPrefix, res.TarballPath, res.LogsDir} {
+		if !filepath.IsAbs(p) {
+			t.Errorf("expected absolute path, got %q", p)
+		}
+	}
+}
+
+func TestBuild_VersionShapedBinDir_Success(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "18.4")
+	build := t.TempDir()
+	// Pre-create so the basename detection sees a real directory; --force
+	// drives the overwrite path so Build proceeds to the stubbed steps.
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	swapBuildSeams(t, fakeDownload, makeExtractStep(build, "18.4", ""))
+
+	var buf bytes.Buffer
+	res, err := Build(context.Background(), Options{
+		Version:  "18.4",
+		BinDir:   bin,
+		BuildDir: build,
+		Force:    true,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("Build with version-shaped BinDir: %v", err)
+	}
+	if res.InstallPrefix != bin {
+		t.Errorf("InstallPrefix = %q, want %q (bin-dir reused as-is)", res.InstallPrefix, bin)
+	}
+}
+
+func TestBuild_RelativeBinDir_IsAbsoluted(t *testing.T) {
+	// filepath.Abs resolves relative paths against the current working
+	// directory, so anchor the test in a TempDir to keep the absolute
+	// path predictable and isolated from whatever the test runner cwd is.
+	rootDir := t.TempDir()
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(rootDir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	relBin := "relative-bin"
+	build := t.TempDir()
+	swapBuildSeams(t, fakeDownload, makeExtractStep(build, "17.3", ""))
+
+	var buf bytes.Buffer
+	res, err := Build(context.Background(), Options{
+		Version:  "17.3",
+		BinDir:   relBin,
+		BuildDir: build,
+		Force:    true,
+	}, &buf)
+	if err != nil {
+		t.Fatalf("Build with relative BinDir: %v", err)
+	}
+	if !filepath.IsAbs(res.InstallPrefix) {
+		t.Errorf("InstallPrefix not absolute: %q", res.InstallPrefix)
+	}
+	if !strings.HasSuffix(res.InstallPrefix, filepath.Join(relBin, "17.3")) {
+		t.Errorf("InstallPrefix = %q, want suffix %q", res.InstallPrefix, filepath.Join(relBin, "17.3"))
+	}
 }
 
 // assertArgs compares two argv slices and fails the test with a
