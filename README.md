@@ -76,8 +76,7 @@ PGS_BIN_DIR=/opt/postgresql/18.4 go test -tags=integration ./...
 ├── .golangci.yml              optional lint configuration
 ├── cmd/pg_sandbox/main.go     CLI entry point and subcommand dispatcher
 ├── internal/                  implementation packages (see below)
-├── testdata/                  fixtures for unit + integration tests
-└── deprecated/                archival snapshot of the Python tool — see below
+└── testdata/                  fixtures for unit + integration tests
 ```
 
 The `internal/` packages are domain-scoped:
@@ -100,11 +99,3 @@ The `internal/` packages are domain-scoped:
 - [`docs/environment.md`](./docs/environment.md) — environment variables.
 - [`docs/exit-codes.md`](./docs/exit-codes.md) — exit code reference.
 - [`docs/examples.md`](./docs/examples.md) — end-to-end recipes.
-
-## Deprecated Python tool
-
-This project previously shipped as a Python script (`pg_sandbox`, `pg_sandbox_help.py`, `pg_sandbox_errors.py`) packaged via PyInstaller. That implementation has been superseded by the Go port and is no longer maintained.
-
-An archival snapshot of the Python sources and their docs is kept under [`deprecated/`](./deprecated/) for users mid-migration. The full Python commit history is reachable via the `python-final` git tag.
-
-The two implementations are **not drop-in compatible**: env var names and per-sandbox state file format differ. Sandboxes created by the Python tool need to be re-created with the Go binary — there is no automatic migration.
