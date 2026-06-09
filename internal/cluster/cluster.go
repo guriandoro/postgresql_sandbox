@@ -120,7 +120,7 @@ func memberDir(clusterDir string, i int) string {
 // name that includes both cluster prefix and member name reads
 // unambiguously in pg_replication_slots on the primary.
 func physicalSlotName(slotPrefix, member string) string {
-	return fmt.Sprintf("%s_%s_slot", slotPrefix, member)
+	return fmt.Sprintf("%s_%s_slot", config.NormalizeString(slotPrefix), config.NormalizeString(member))
 }
 
 // loadClusterOrFail returns the cluster manifest at clusterDir or a
