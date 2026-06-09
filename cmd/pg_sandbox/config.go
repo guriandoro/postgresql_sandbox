@@ -112,7 +112,7 @@ type scope struct {
 
 // parseScopeFlags wires the -s/--sandbox-dir and --global flags onto
 // fs (so the flag package emits its own --help with them) and
-// returns the parsed scope after fs.Parse has run. The required-
+// returns the parsed scope after parseSubcommandArgs has run. The required-
 // exactly-one check is the caller's job; this helper just collects.
 func parseScopeFlags(fs *flag.FlagSet, sc *scope) {
 	fs.StringVar(&sc.sandboxDir, "sandbox-dir", "", "Target sandbox directory")
@@ -151,7 +151,7 @@ func runConfigShow(args []string, stdout, stderr io.Writer) int {
 	var asJSON bool
 	parseScopeFlags(fs, &sc)
 	fs.BoolVar(&asJSON, "json", false, "Emit machine-readable JSON to stdout")
-	if err := fs.Parse(args); err != nil {
+	if err := parseSubcommandArgs(fs, args); err != nil {
 		return ui.ExitUsage.Int()
 	}
 	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
@@ -329,7 +329,7 @@ func runConfigGet(args []string, stdout, stderr io.Writer) int {
 	globals := registerGlobalFlags(fs)
 	var sc scope
 	parseScopeFlags(fs, &sc)
-	if err := fs.Parse(args); err != nil {
+	if err := parseSubcommandArgs(fs, args); err != nil {
 		return ui.ExitUsage.Int()
 	}
 	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
@@ -418,7 +418,7 @@ func runConfigSet(args []string, _ io.Writer, stderr io.Writer) int {
 	globals := registerGlobalFlags(fs)
 	var sc scope
 	parseScopeFlags(fs, &sc)
-	if err := fs.Parse(args); err != nil {
+	if err := parseSubcommandArgs(fs, args); err != nil {
 		return ui.ExitUsage.Int()
 	}
 	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
@@ -679,7 +679,7 @@ func runConfigValidate(args []string, stdout, stderr io.Writer) int {
 	globals := registerGlobalFlags(fs)
 	var sc scope
 	parseScopeFlags(fs, &sc)
-	if err := fs.Parse(args); err != nil {
+	if err := parseSubcommandArgs(fs, args); err != nil {
 		return ui.ExitUsage.Int()
 	}
 	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
@@ -747,7 +747,7 @@ func runConfigMigrate(args []string, _ io.Writer, stderr io.Writer) int {
 	fs.StringVar(&sandboxDir, "sandbox-dir", "", "Target directory containing pg_sandbox.env (required)")
 	fs.StringVar(&sandboxDir, "s", "", "Alias for --sandbox-dir")
 	fs.BoolVar(&replace, "replace", false, "Delete the legacy pg_sandbox.env after successful save")
-	if err := fs.Parse(args); err != nil {
+	if err := parseSubcommandArgs(fs, args); err != nil {
 		return ui.ExitUsage.Int()
 	}
 	if _, _, gErr := globals.Resolve(stderr); gErr != nil {
