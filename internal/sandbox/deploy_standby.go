@@ -70,6 +70,7 @@ func deployStandby(ctx context.Context, runner pgexec.Runner, opts DeployOptions
 		return nil, wrapExit(ExitUsage,
 			fmt.Errorf("sandbox.Deploy: --slot is required when --replicate-from is set"))
 	}
+	opts.SlotName = config.NormalizeString(opts.SlotName)
 
 	// Step 1: resolve the source sandbox.
 	srcDir, err := resolveSourceSandbox(opts.SandboxDir, opts.ReplicateFrom)

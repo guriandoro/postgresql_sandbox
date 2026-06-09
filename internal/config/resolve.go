@@ -41,7 +41,11 @@
 
 package config
 
-import "strconv"
+import (
+	"regexp"
+	"strconv"
+	"strings"
+)
 
 // Source identifies which layer of SPEC §3.1.2's precedence chain a
 // given resolved value came from. Stored verbatim in --json output,
@@ -539,4 +543,12 @@ func envKeyForSandbox(key string) string {
 		return "PGS_DBNAME"
 	}
 	return ""
+}
+
+func NormalizeString(s string) string {
+	re := regexp.MustCompile(`[A-Z]+`)
+
+	return strings.ReplaceAll(re.ReplaceAllStringFunc(s, func(match string) string {
+		return strings.ToLower(match)
+	}), "-", "_")
 }
