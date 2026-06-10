@@ -114,6 +114,11 @@ pg_sandbox config migrate -s legacy-sandbox
 # No --bin-dir needed: the latest install under /opt/postgresql is
 # used automatically (existing binaries only — nothing is built).
 # Pass --bin-dir / PGS_BIN_DIR to pin a specific version.
+#
+# No --pg-gather-dir needed either when the gather scripts
+# (gather_schema.sql + gather_report.sql) are in the current directory
+# or on $PATH: pg_sandbox auto-discovers them and logs which dir it
+# used. Pass --pg-gather-dir / PGS_PG_GATHER_DIR to point elsewhere.
 pg_sandbox report --input /path/to/out.txt --output ./gather.html
 
 # Clean up the throwaway sandbox even if report generation fails

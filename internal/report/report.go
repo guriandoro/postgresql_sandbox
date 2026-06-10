@@ -73,6 +73,20 @@ const (
 	gatherReportSQL = "gather_report.sql"
 )
 
+// GatherDirHasScripts reports whether dir contains both pg_gather
+// scripts (gather_schema.sql and gather_report.sql). Used by the CLI
+// layer to auto-discover a --pg-gather-dir when none was configured;
+// keeping it here means the canonical filenames stay defined in one
+// place.
+func GatherDirHasScripts(dir string) bool {
+	for _, f := range []string{gatherSchemaSQL, gatherReportSQL} {
+		if st, err := os.Stat(filepath.Join(dir, f)); err != nil || st.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
 // Options captures the inputs to Generate. The CLI layer populates
 // this from flag/env/global-config resolution and hands it off; this
 // package never touches flag.FlagSet or os.Getenv itself.

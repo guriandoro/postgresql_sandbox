@@ -72,6 +72,45 @@ func writeStubInput(t *testing.T) string {
 }
 
 // ----------------------------------------------------------------- //
+// GatherDirHasScripts
+// ----------------------------------------------------------------- //
+
+func TestGatherDirHasScripts(t *testing.T) {
+	// Both scripts present → true.
+	if !GatherDirHasScripts(writeStubGatherDir(t)) {
+		t.Fatal("expected true for a dir with both gather scripts")
+	}
+
+	// Only one script present → false.
+	onlySchema := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onlySchema, gatherSchemaSQL),
+		[]byte("-- stub\n"), 0o644); err != nil {
+		t.Fatalf("write schema stub: %v", err)
+	}
+	if GatherDirHasScripts(onlySchema) {
+		t.Fatal("expected false when only gather_schema.sql is present")
+	}
+
+	// Empty dir → false.
+	if GatherDirHasScripts(t.TempDir()) {
+		t.Fatal("expected false for an empty dir")
+	}
+
+	// A directory named like a script must not count as the file.
+	dirNamedScript := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dirNamedScript, gatherSchemaSQL), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirNamedScript, gatherReportSQL),
+		[]byte("-- stub\n"), 0o644); err != nil {
+		t.Fatalf("write report stub: %v", err)
+	}
+	if GatherDirHasScripts(dirNamedScript) {
+		t.Fatal("expected false when gather_schema.sql is a directory")
+	}
+}
+
+// ----------------------------------------------------------------- //
 // validateOptions
 // ----------------------------------------------------------------- //
 

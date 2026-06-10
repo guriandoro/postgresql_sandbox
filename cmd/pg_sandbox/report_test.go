@@ -7,11 +7,67 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/ui"
 )
+
+// writeGatherScripts drops stub gather_schema.sql + gather_report.sql
+// into dir so discoverPgGatherDir treats it as a valid pg-gather-dir.
+func writeGatherScripts(t *testing.T, dir string) {
+	t.Helper()
+	for _, f := range []string{"gather_schema.sql", "gather_report.sql"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("-- stub\n"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", f, err)
+		}
+	}
+}
+
+func TestDiscoverPgGatherDir(t *testing.T) {
+	// discoverPgGatherDir consults the process CWD; save/restore it.
+	origWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origWD) })
+
+	// CWD holds the scripts → discovered via the CWD branch, which is
+	// checked before $PATH.
+	cwdDir := t.TempDir()
+	writeGatherScripts(t, cwdDir)
+	if err := os.Chdir(cwdDir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	// Canonicalize: on macOS t.TempDir() is a /var symlink that Getwd
+	// resolves to /private/var, so compare against the resolved form.
+	wantCWD, _ := os.Getwd()
+	t.Setenv("PATH", "")
+	if got := discoverPgGatherDir(); got != wantCWD {
+		t.Errorf("CWD branch: got %q, want %q", got, wantCWD)
+	}
+
+	// CWD lacks the scripts but a later $PATH entry has them →
+	// discovered via $PATH (the literal entry, no Getwd canonicalize).
+	emptyCWD := t.TempDir()
+	if err := os.Chdir(emptyCWD); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	pathDir := t.TempDir()
+	writeGatherScripts(t, pathDir)
+	t.Setenv("PATH", strings.Join([]string{t.TempDir(), pathDir}, string(os.PathListSeparator)))
+	if got := discoverPgGatherDir(); got != pathDir {
+		t.Errorf("PATH branch: got %q, want %q", got, pathDir)
+	}
+
+	// Neither CWD nor any $PATH entry has the scripts → "".
+	t.Setenv("PATH", t.TempDir())
+	if got := discoverPgGatherDir(); got != "" {
+		t.Errorf("no-match: got %q, want empty", got)
+	}
+}
 
 func TestRunReport_missingInputIsUsage(t *testing.T) {
 	var stderr bytes.Buffer

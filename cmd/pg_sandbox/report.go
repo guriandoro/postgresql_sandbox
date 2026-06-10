@@ -11,6 +11,14 @@
 // missing-everywhere case is a hard error with a precise hint, not a
 // prompt, so there is no prompt to suppress and no --force flag.
 //
+// We DO auto-discover scripts already on disk: when --pg-gather-dir /
+// PGS_PG_GATHER_DIR / global pgGatherDir are all unset, we look in the
+// current working directory and each $PATH entry for a directory
+// holding both gather scripts and use the first match (logging it).
+// That's discovery of existing files, not a download, so it doesn't
+// contradict the SPEC's no-auto-download stance — it mirrors the
+// latest-install bin-dir discovery above it.
+//
 // There IS a --destroy-on-failure / -D flag, but it does NOT suppress a
 // prompt: it controls failure cleanup. On success the throwaway sandbox
 // is always destroyed; on failure it is left on disk for debugging
@@ -117,12 +125,20 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// pg-gather-dir resolution: flag → PGS_PG_GATHER_DIR env →
-	// global.PgGatherDir. Empty everywhere → ExitPgGatherDirMissing.
+	// global.PgGatherDir → auto-discovery (CWD + $PATH). Empty
+	// everywhere → ExitPgGatherDirMissing.
 	if pgGatherDir == "" {
 		pgGatherDir = os.Getenv("PGS_PG_GATHER_DIR")
 	}
 	if pgGatherDir == "" && globalCfg != nil {
 		pgGatherDir = globalCfg.PgGatherDir
+	}
+	if pgGatherDir == "" {
+		if found := discoverPgGatherDir(); found != "" {
+			pgGatherDir = found
+			fmt.Fprintf(stderr, "level=INFO msg=%q dir=%q\n",
+				"report: no --pg-gather-dir set; using auto-discovered pg_gather scripts", found)
+		}
 	}
 	if pgGatherDir == "" {
 		fmt.Fprintln(stderr, "pg_sandbox report: --pg-gather-dir is required (or set PGS_PG_GATHER_DIR or pgGatherDir in global config)")
@@ -196,6 +212,29 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	return ui.ExitOK.Int()
 }
 
+// discoverPgGatherDir looks for a directory containing both pg_gather
+// scripts when --pg-gather-dir / PGS_PG_GATHER_DIR / global pgGatherDir
+// were all unset. It checks the current working directory first, then
+// each entry in $PATH. Returns "" if no candidate qualifies. Env/CWD
+// access lives here in the CLI layer; the internal/report package only
+// exposes the filename-aware GatherDirHasScripts check.
+func discoverPgGatherDir() string {
+	var candidates []string
+	if cwd, err := os.Getwd(); err == nil {
+		candidates = append(candidates, cwd)
+	}
+	candidates = append(candidates, filepath.SplitList(os.Getenv("PATH"))...)
+	for _, dir := range candidates {
+		if dir == "" {
+			continue
+		}
+		if report.GatherDirHasScripts(dir) {
+			return dir
+		}
+	}
+	return ""
+}
+
 // reportHelp prints `pg_sandbox help report`. SPEC §6.13.
 func reportHelp(w io.Writer) {
 	fmt.Fprintln(w, "pg_sandbox report — generate a pg_gather HTML report")
@@ -209,13 +248,15 @@ func reportHelp(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "When no bin-dir is given, the latest PostgreSQL install under /opt/postgresql")
 	fmt.Fprintln(w, "is used automatically (existing binaries only — nothing is built).")
+	fmt.Fprintln(w, "When no pg-gather-dir is given, the current directory and each $PATH entry are")
+	fmt.Fprintln(w, "searched for one holding gather_schema.sql + gather_report.sql.")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Flags:")
 	writeHelpFlags(w, []helpFlag{
 		{"    --input <path>", "Captured pg_gather out.txt (required)"},
 		{"    --output <path>", "Rendered HTML output path (default report.html in CWD)"},
 		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (or set PGS_BIN_DIR / global defaultBinDir; defaults to the latest install under /opt/postgresql)"},
-		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir)"},
+		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir; auto-discovered from CWD and $PATH when unset)"},
 		{"    --root <dir>", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)"},
 		{"-D, --destroy-on-failure", "Destroy the throwaway sandbox even if report generation fails (default: keep it for debugging)"},
 	})
