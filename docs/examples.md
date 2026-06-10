@@ -112,6 +112,10 @@ pg_sandbox config migrate -s legacy-sandbox
 
 ```sh
 pg_sandbox report --input /path/to/out.txt --output ./gather.html
+
+# Clean up the throwaway sandbox even if report generation fails
+# (default: a failed run leaves it on disk for debugging).
+pg_sandbox report --input /path/to/out.txt --output ./gather.html --destroy-on-failure
 ```
 
 ## Cross-host overview

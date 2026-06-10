@@ -10,6 +10,11 @@
 // §6.13 says "refuses by default rather than auto-downloading" — the
 // missing-everywhere case is a hard error with a precise hint, not a
 // prompt, so there is no prompt to suppress and no --force flag.
+//
+// There IS a --destroy-on-failure / -D flag, but it does NOT suppress a
+// prompt: it controls failure cleanup. On success the throwaway sandbox
+// is always destroyed; on failure it is left on disk for debugging
+// unless --destroy-on-failure is set, in which case it is torn down too.
 
 package main
 
@@ -35,11 +40,12 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	globals := registerGlobalFlags(fs)
 
 	var (
-		inputPath   string
-		outputPath  string
-		binDir      string
-		pgGatherDir string
-		sandboxRoot string
+		inputPath        string
+		outputPath       string
+		binDir           string
+		pgGatherDir      string
+		sandboxRoot      string
+		destroyOnFailure bool
 	)
 	fs.StringVar(&inputPath, "input", "", "Captured pg_gather out.txt (required)")
 	fs.StringVar(&outputPath, "output", "", "Rendered HTML output path (default report.html in CWD)")
@@ -47,6 +53,8 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&pgGatherDir, "pg-gather-dir", "", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / pgGatherDir in global config)")
 	fs.StringVar(&sandboxRoot, "root", "", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)")
+	fs.BoolVar(&destroyOnFailure, "destroy-on-failure", false, "Destroy the throwaway sandbox even if report generation fails")
+	fs.BoolVar(&destroyOnFailure, "D", false, "Alias for --destroy-on-failure")
 
 	if err := fs.Parse(args); err != nil {
 		return ui.ExitUsage.Int()
@@ -141,12 +149,13 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 
 	res, err := report.Generate(ctx, report.Options{
-		InputPath:   inputPath,
-		OutputPath:  outputPath,
-		BinDir:      binDir,
-		PgGatherDir: pgGatherDir,
-		SandboxRoot: sandboxRoot,
-		SelfPath:    selfPath,
+		InputPath:        inputPath,
+		OutputPath:       outputPath,
+		BinDir:           binDir,
+		PgGatherDir:      pgGatherDir,
+		SandboxRoot:      sandboxRoot,
+		SelfPath:         selfPath,
+		DestroyOnFailure: destroyOnFailure,
 	}, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox report: %v\n", err)
@@ -190,6 +199,7 @@ func reportHelp(w io.Writer) {
 		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (or set PGS_BIN_DIR / global defaultBinDir)"},
 		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir)"},
 		{"    --root <dir>", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)"},
+		{"-D, --destroy-on-failure", "Destroy the throwaway sandbox even if report generation fails (default: keep it for debugging)"},
 	})
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "See SPEC.md §6.13.")

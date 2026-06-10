@@ -322,6 +322,51 @@ func TestGenerateSchemaLoadFailureLeavesSandbox(t *testing.T) {
 	}
 }
 
+// TestGenerateSchemaLoadFailureDestroyOnFailure mirrors the test above
+// but with DestroyOnFailure set: the same schema-load failure should
+// still return ExitReportFailed, but the throwaway sandbox must be torn
+// down (no LeftoverError, no _report_* dir left under the root).
+func TestGenerateSchemaLoadFailureDestroyOnFailure(t *testing.T) {
+	gatherDir := writeStubGatherDir(t)
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	_ = os.MkdirAll(binDir, 0o755)
+	in := writeStubInput(t)
+
+	runner := fakeRunnerCannedPsql(nil, []byte("ERROR: simulated\n"), 3)
+
+	_, err := Generate(context.Background(), Options{
+		InputPath:        in,
+		OutputPath:       filepath.Join(root, "report.html"),
+		BinDir:           binDir,
+		PgGatherDir:      gatherDir,
+		SandboxRoot:      root,
+		Runner:           runner,
+		DestroyOnFailure: true,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("expected schema-load failure")
+	}
+	if got := ExitCodeFor(err); got != ui.ExitReportFailed {
+		t.Errorf("exit code: got %d, want %d", got, ui.ExitReportFailed)
+	}
+	// Cleanup happened, so there must be NO LeftoverError in the chain.
+	var le *LeftoverError
+	if errors.As(err, &le) {
+		t.Errorf("did not expect LeftoverError after --destroy-on-failure cleanup; got dir %q", le.Dir)
+	}
+	// And no throwaway sandbox dir should survive under the root.
+	entries, rerr := os.ReadDir(root)
+	if rerr != nil {
+		t.Fatalf("read root: %v", rerr)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "_report_") {
+			t.Errorf("throwaway sandbox %q survived --destroy-on-failure", e.Name())
+		}
+	}
+}
+
 // TestLeftoverErrorUnwrap confirms errors.As digs out the
 // LeftoverError when one is buried in the chain. This guards the CLI
 // "throwaway sandbox at X" hint message.

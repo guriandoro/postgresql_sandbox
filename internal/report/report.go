@@ -22,7 +22,9 @@
 //      the output file path, return 0.
 //   6. On failure (anywhere after the deploy): leave the throwaway
 //      sandbox on disk, print its path for debugging, return
-//      ExitReportFailed.
+//      ExitReportFailed. With Options.DestroyOnFailure (CLI
+//      --destroy-on-failure / -D), the sandbox is destroyed here too
+//      instead of being left behind.
 //
 // Expected pg_gather script filenames (assumed; see SPEC §6.13):
 //
@@ -106,6 +108,12 @@ type Options struct {
 	// end of Generate, so this rarely matters; we forward it for
 	// consistency with deploy.
 	SelfPath string
+
+	// DestroyOnFailure, when true, destroys the throwaway sandbox even
+	// when the pipeline fails, instead of leaving it on disk for
+	// debugging (the default). Maps to the CLI --destroy-on-failure / -D
+	// flag. The success path always destroys the sandbox regardless.
+	DestroyOnFailure bool
 
 	// Runner, when non-nil, is used instead of pgexec.New(BinDir).
 	// Tests use this to inject a pgexec.Fake. Production callers
@@ -224,8 +232,28 @@ func Generate(ctx context.Context, opts Options, stderrW io.Writer) (*Result, er
 	cfg := deployRes.Sandbox
 
 	// From here on, any failure leaves the sandbox in place for
-	// debugging — wrap in LeftoverError.
+	// debugging — wrap in LeftoverError. With --destroy-on-failure, we
+	// instead tear the sandbox down here and return a plain error (no
+	// LeftoverError, since nothing is left behind).
 	leftover := func(inner error) error {
+		if opts.DestroyOnFailure {
+			fmt.Fprintf(stderrW, "level=INFO msg=%q dir=%q\n",
+				"report: --destroy-on-failure set; destroying throwaway sandbox after failure", throwawayDir)
+			// Detached context: the failure may itself be a ctx
+			// cancellation (SIGINT), but we still want the cleanup to
+			// run to completion.
+			cleanupCtx := context.WithoutCancel(ctx)
+			if derr := sandbox.Destroy(cleanupCtx, runner,
+				sandbox.DestroyOptions{SandboxDir: throwawayDir}, stderrW); derr != nil {
+				// Cleanup itself failed: fall back to leaving the
+				// sandbox behind so the user is told where it is.
+				fmt.Fprintf(stderrW, "level=WARN msg=%q dir=%q err=%q\n",
+					"report: --destroy-on-failure cleanup failed; sandbox left behind",
+					throwawayDir, derr.Error())
+				return &exitErr{Code: ExitReportFailed, Err: &LeftoverError{Dir: throwawayDir, Err: inner}}
+			}
+			return &exitErr{Code: ExitReportFailed, Err: inner}
+		}
 		return &exitErr{
 			Code: ExitReportFailed,
 			Err:  &LeftoverError{Dir: throwawayDir, Err: inner},

@@ -80,11 +80,12 @@ func TestRunReport_debugQuietMutex(t *testing.T) {
 }
 
 func TestRunReport_forceRejectedAsUnknown(t *testing.T) {
-	// --force used to be accepted-but-unused. It has been dropped: the
-	// report command errors fast on missing inputs with no prompt to
-	// suppress, so the flag was vestigial. Verify Parse now rejects
-	// both aliases with the standard "flag provided but not defined"
-	// shape — defending against re-introduction without a real need.
+	// --force was dropped and stays dropped: the report command errors
+	// fast on missing inputs with no prompt to suppress, so there's
+	// nothing for --force to do. Failure cleanup is controlled by the
+	// separate --destroy-on-failure flag instead (see below), NOT by
+	// overloading --force. Verify Parse still rejects both --force
+	// aliases with the standard "flag provided but not defined" shape.
 	for _, alias := range []string{"--force", "-f"} {
 		t.Run(alias, func(t *testing.T) {
 			var stderr bytes.Buffer
@@ -95,6 +96,28 @@ func TestRunReport_forceRejectedAsUnknown(t *testing.T) {
 			if !strings.Contains(stderr.String(), "flag provided but not defined") &&
 				!strings.Contains(stderr.String(), "not defined") {
 				t.Errorf("stderr does not look like an unknown-flag rejection: %q", stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunReport_destroyOnFailureAccepted(t *testing.T) {
+	// --destroy-on-failure / -D is a real flag (it forces cleanup of the
+	// throwaway sandbox when the report fails). Verify Parse ACCEPTS
+	// both forms: with no --input, the command must fail for the
+	// missing-input reason, NOT with an unknown-flag rejection.
+	for _, alias := range []string{"--destroy-on-failure", "-D"} {
+		t.Run(alias, func(t *testing.T) {
+			var stderr bytes.Buffer
+			rc := runReport([]string{alias}, nil, &stderr)
+			if rc != ui.ExitUsage.Int() {
+				t.Errorf("rc = %d, want %d", rc, ui.ExitUsage.Int())
+			}
+			if strings.Contains(stderr.String(), "not defined") {
+				t.Errorf("%s was rejected as unknown; it should be accepted: %q", alias, stderr.String())
+			}
+			if !strings.Contains(stderr.String(), "--input is required") {
+				t.Errorf("expected missing-input error, got: %q", stderr.String())
 			}
 		})
 	}

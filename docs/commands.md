@@ -29,6 +29,7 @@ These are *not* global — each command parses its own flag set — but they app
 | `--json` | `status`, `config show`, `global_status`, `cluster status`, `report` | Machine-readable output. |
 | `--global` | `config show` / `get` / `set` / `validate` | Operate on global config instead of the sandbox config. |
 | `--root <path>` | `global_status`, `report`, `cleanup-install-versions` | Override the sandbox-root scan path. |
+| `--destroy-on-failure` / `-D` | `report` | Destroy the throwaway sandbox even if report generation fails (default: keep it for debugging). Not a prompt-suppressor — distinct from `--force`. |
 | `--debug` | All commands | Lowers the log threshold to debug and prints a `# exec: …` line for every external process before invoking it. |
 | `--quiet` | All commands | Raises the log threshold to error: suppresses INFO/WARN diagnostic lines. Mutually exclusive with `--debug`. |
 | `--color <when>` | All commands | `auto` (default), `always`, or `never`. `auto` enables color only when stderr is a TTY and `NO_COLOR` is unset. Currently parsed and validated; no ANSI color is emitted yet. |
@@ -62,7 +63,7 @@ These are *not* global — each command parses its own flag set — but they app
 
 ### Cross-host & reporting
 - `global_status` — list every sandbox on the host
-- `report --input out.txt [--output report.html]` — `pg_gather` HTML report
+- `report --input out.txt [--output report.html] [--destroy-on-failure]` — `pg_gather` HTML report. The throwaway sandbox is always destroyed on success; on failure it is kept for debugging unless `--destroy-on-failure` / `-D` is given.
 
 ### Source build + maintenance
 - `build <version> [--with-icu] [--with-openssl] [--configure-opts=...]` — compile PostgreSQL from source
