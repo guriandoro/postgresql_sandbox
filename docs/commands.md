@@ -20,7 +20,7 @@ These are *not* global — each command parses its own flag set — but they app
 | Flag | Where it applies | Meaning |
 |---|---|---|
 | `--sandbox-dir <path>` / `-s` | All single-sandbox + cluster commands | Target sandbox (or cluster) directory. Accepts an absolute path, a `./`-prefixed relative path, or — for commands operating on an *existing* sandbox/cluster — a bare name that resolves to `<sandboxRoot>/<name>` (default `~/postgresql-sandboxes/<name>`). `deploy` and `cluster deploy` treat the value as the literal creation target. |
-| `--bin-dir <path>` / `-b` | `deploy`, `build`, `report`, `cleanup-install-versions` | PostgreSQL `bin/` directory. |
+| `--bin-dir <path>` / `-b` | `deploy`, `build`, `report`, `cleanup-install-versions` | PostgreSQL `bin/` directory. For `report`, when unset (and no `PGS_BIN_DIR` / global `defaultBinDir`) it auto-resolves to the latest install under `/opt/postgresql` — existing binaries only, nothing is built. |
 | `--host <addr>` | `deploy`, `cluster deploy` | Listen / connect host. |
 | `--port <n>` / `-p` | `deploy` | TCP port (auto-allocated when omitted). |
 | `--user <name>` / `-U` | `deploy`, `publish`, `subscribe` | PG superuser. |
@@ -63,7 +63,7 @@ These are *not* global — each command parses its own flag set — but they app
 
 ### Cross-host & reporting
 - `global_status` — list every sandbox on the host
-- `report --input out.txt [--output report.html] [--destroy-on-failure]` — `pg_gather` HTML report. The throwaway sandbox is always destroyed on success; on failure it is kept for debugging unless `--destroy-on-failure` / `-D` is given.
+- `report --input out.txt [--output report.html] [--destroy-on-failure]` — `pg_gather` HTML report. When no `--bin-dir` / `PGS_BIN_DIR` / global `defaultBinDir` is supplied, the latest install under `/opt/postgresql` is used automatically (existing binaries only — nothing is built). The throwaway sandbox is always destroyed on success; on failure it is kept for debugging unless `--destroy-on-failure` / `-D` is given.
 
 ### Source build + maintenance
 - `build <version> [--with-icu] [--with-openssl] [--configure-opts=...]` — compile PostgreSQL from source

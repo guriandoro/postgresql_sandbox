@@ -399,3 +399,112 @@ func TestResolveClusterArg_sandboxMarkerDoesNotPoseAsCluster(t *testing.T) {
 		t.Errorf("got %q, want %q (sandbox marker must not satisfy cluster gate)", got, "pg18")
 	}
 }
+
+// withDefaultInstallBase swaps the package-level defaultInstallBase for
+// the duration of a test (restored via t.Cleanup), so install
+// discovery can be pointed at a fabricated temp tree instead of the
+// real /opt/postgresql. NOT parallel-safe — callers must not t.Parallel.
+func withDefaultInstallBase(t *testing.T, base string) {
+	t.Helper()
+	prev := defaultInstallBase
+	defaultInstallBase = base
+	t.Cleanup(func() { defaultInstallBase = prev })
+}
+
+// fakeInstall fabricates <base>/<version>/bin/psql as an executable
+// stub so latestInstalledBinDir treats <version> as a usable install.
+func fakeInstall(t *testing.T, base, version string) {
+	t.Helper()
+	binDir := filepath.Join(base, version, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", binDir, err)
+	}
+	psql := filepath.Join(binDir, "psql")
+	if err := os.WriteFile(psql, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write %s: %v", psql, err)
+	}
+}
+
+func TestLatestInstalledBinDir_picksNumericLatest(t *testing.T) {
+	base := t.TempDir()
+	// 17.10 must beat 17.9 (numeric, not lexicographic) and 16.5.
+	fakeInstall(t, base, "16.5")
+	fakeInstall(t, base, "17.9")
+	fakeInstall(t, base, "17.10")
+	path, version, ok := latestInstalledBinDir(base)
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if version != "17.10" {
+		t.Errorf("version = %q, want 17.10", version)
+	}
+	if want := filepath.Join(base, "17.10"); path != want {
+		t.Errorf("path = %q, want %q", path, want)
+	}
+}
+
+func TestLatestInstalledBinDir_skipsNonVersionAndPartial(t *testing.T) {
+	base := t.TempDir()
+	fakeInstall(t, base, "16.5")
+	// A non-numeric dir (e.g. a build tree) must be ignored.
+	if err := os.MkdirAll(filepath.Join(base, "src", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(base, "src", "bin", "psql"), []byte("x"), 0o755)
+	// A version-shaped dir WITHOUT an executable psql must be skipped,
+	// even though "18.0" > "16.5" numerically.
+	if err := os.MkdirAll(filepath.Join(base, "18.0", "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, version, ok := latestInstalledBinDir(base)
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if version != "16.5" {
+		t.Errorf("version = %q, want 16.5 (18.0 has no psql, src is non-version)", version)
+	}
+}
+
+func TestLatestInstalledBinDir_missingBaseIsNotOK(t *testing.T) {
+	if _, _, ok := latestInstalledBinDir(filepath.Join(t.TempDir(), "nope")); ok {
+		t.Error("ok = true for a missing base, want false")
+	}
+}
+
+func TestLatestInstalledBinDir_emptyBaseIsNotOK(t *testing.T) {
+	if _, _, ok := latestInstalledBinDir(t.TempDir()); ok {
+		t.Error("ok = true for an empty base, want false")
+	}
+}
+
+func TestVersionKeyLess(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want bool
+	}{
+		{"17.9", "17.10", true},  // numeric, not lexicographic
+		{"17.10", "17.9", false},
+		{"16.5", "17.1", true},
+		{"17", "17.1", true},     // shorter treated as .0
+		{"17.0", "17", false},
+		{"18.3", "18.3", false},
+	}
+	for _, c := range cases {
+		ka, oka := parseVersionKey(c.a)
+		kb, okb := parseVersionKey(c.b)
+		if !oka || !okb {
+			t.Fatalf("parseVersionKey failed for %q/%q", c.a, c.b)
+		}
+		if got := versionKeyLess(ka, kb); got != c.want {
+			t.Errorf("versionKeyLess(%q, %q) = %v, want %v", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+func TestParseVersionKey_rejectsNonNumeric(t *testing.T) {
+	for _, name := range []string{"src", "18.x", "", "17-rc1", "v17"} {
+		if _, ok := parseVersionKey(name); ok {
+			t.Errorf("parseVersionKey(%q) ok = true, want false", name)
+		}
+	}
+}

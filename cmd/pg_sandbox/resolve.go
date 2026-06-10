@@ -40,10 +40,113 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/config"
 )
+
+// defaultInstallBase is the conventional parent dir holding one subdir
+// per installed PostgreSQL version (16.5, 17.4, 18.3, ...). It mirrors
+// the built-in default resolveBinDir falls back to, but is kept as a
+// package var (not a const) so tests can point discovery at a temp dir
+// instead of the real /opt/postgresql.
+var defaultInstallBase = "/opt/postgresql"
+
+// latestInstalledBinDir scans base for version-shaped subdirs that
+// contain a runnable bin/psql and returns the path + version of the
+// numerically-highest one. ok is false when base is missing/unreadable
+// or holds no usable install. This is discovery only — it never builds
+// anything.
+//
+// Used by `report`, which (unlike deploy/build) takes no <version>
+// argument: when no --bin-dir / PGS_BIN_DIR / global defaultBinDir is
+// supplied we pick the newest install under base rather than erroring,
+// so a bare `pg_sandbox report --input out.txt` works out of the box.
+//
+// "Usable" means bin/psql is executable: the report only ever runs
+// initdb / pg_ctl / psql, all in the same bin/, so psql's presence is
+// a sufficient marker and skips partial or broken installs. Version
+// comparison is numeric and element-wise (NOT the lexicographic sort
+// cleanup uses) so 17.10 correctly outranks 17.9.
+func latestInstalledBinDir(base string) (path, version string, ok bool) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return "", "", false
+	}
+	var bestName string
+	var bestKey []int
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		key, parsed := parseVersionKey(e.Name())
+		if !parsed {
+			continue
+		}
+		if !isExecutableFile(filepath.Join(base, e.Name(), "bin", "psql")) {
+			continue
+		}
+		if bestName == "" || versionKeyLess(bestKey, key) {
+			bestName, bestKey = e.Name(), key
+		}
+	}
+	if bestName == "" {
+		return "", "", false
+	}
+	return filepath.Join(base, bestName), bestName, true
+}
+
+// parseVersionKey splits a dir name like "17.4" (or "17", "9.6.24")
+// into its numeric components. Returns ok=false for anything that
+// isn't purely dot-separated non-negative integers, which excludes
+// stray dirs like "src" or "build" from version discovery.
+func parseVersionKey(name string) (key []int, ok bool) {
+	parts := strings.Split(name, ".")
+	key = make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nil, false
+		}
+		key[i] = n
+	}
+	return key, true
+}
+
+// versionKeyLess reports whether a sorts before b, comparing
+// element-wise and treating a missing component as 0 (so "17" < "17.1"
+// and "17.9" < "17.10").
+func versionKeyLess(a, b []int) bool {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av != bv {
+			return av < bv
+		}
+	}
+	return false
+}
+
+// isExecutableFile reports whether path is a regular, runnable file.
+// Mirrors pgexec.isExecutable (kept local to avoid widening that
+// package's API for a CLI-layer concern).
+func isExecutableFile(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		return false
+	}
+	return st.Mode()&0o111 != 0
+}
 
 // resolveBinDir picks the install root from the layered chain:
 //

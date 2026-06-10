@@ -49,7 +49,7 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	)
 	fs.StringVar(&inputPath, "input", "", "Captured pg_gather out.txt (required)")
 	fs.StringVar(&outputPath, "output", "", "Rendered HTML output path (default report.html in CWD)")
-	fs.StringVar(&binDir, "bin-dir", "", "PostgreSQL bin/ directory (or set PGS_BIN_DIR)")
+	fs.StringVar(&binDir, "bin-dir", "", "PostgreSQL bin/ directory (or set PGS_BIN_DIR; defaults to the latest install under /opt/postgresql)")
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&pgGatherDir, "pg-gather-dir", "", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / pgGatherDir in global config)")
 	fs.StringVar(&sandboxRoot, "root", "", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)")
@@ -78,11 +78,12 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// Layered global config + env for bin-dir, pg-gather-dir,
-	// sandbox-root. bin-dir is open-coded here (not via
-	// resolveBinDir) because report has no built-in default for it —
-	// missing-everywhere is an error, not a fallback to
-	// /opt/postgresql. pg-gather-dir follows the same shape with its
-	// own ExitPgGatherDirMissing exit code.
+	// sandbox-root. bin-dir is open-coded here (not via resolveBinDir)
+	// because report's last resort differs: rather than blindly
+	// defaulting to the /opt/postgresql parent (which holds no binaries
+	// directly), it discovers the newest versioned install underneath.
+	// pg-gather-dir follows the same layered shape with its own
+	// ExitPgGatherDirMissing exit code.
 	globalCfg := loadGlobalConfig()
 	// bin-dir resolution: flag → PGS_BIN_DIR env → global.DefaultBinDir.
 	if binDir == "" {
@@ -91,8 +92,22 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	if binDir == "" && globalCfg != nil {
 		binDir = globalCfg.DefaultBinDir
 	}
+	// Nothing supplied a bin-dir. Rather than erroring, discover the
+	// newest install under /opt/postgresql and use it — report takes no
+	// <version> argument, so "use the latest one available" is the
+	// sensible default. We only fall through to the usage error below
+	// when no usable install exists there.
 	if binDir == "" {
-		fmt.Fprintln(stderr, "pg_sandbox report: --bin-dir is required (or set PGS_BIN_DIR / global defaultBinDir)")
+		if p, v, ok := latestInstalledBinDir(defaultInstallBase); ok {
+			binDir = p
+			fmt.Fprintf(stderr, "level=INFO msg=%q version=%q dir=%q\n",
+				"report: no --bin-dir set; using latest install under "+defaultInstallBase, v, p)
+		}
+	}
+	if binDir == "" {
+		fmt.Fprintf(stderr,
+			"pg_sandbox report: --bin-dir is required (or set PGS_BIN_DIR / global defaultBinDir); "+
+				"no usable PostgreSQL install found under %s\n", defaultInstallBase)
 		return ui.ExitUsage.Int()
 	}
 	if !filepath.IsAbs(binDir) {
@@ -192,11 +207,14 @@ func reportHelp(w io.Writer) {
 	fmt.Fprintln(w, "report scripts against it, and writes the rendered HTML to --output (default")
 	fmt.Fprintln(w, "report.html in CWD). Prints the output path on stdout.")
 	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "When no bin-dir is given, the latest PostgreSQL install under /opt/postgresql")
+	fmt.Fprintln(w, "is used automatically (existing binaries only — nothing is built).")
+	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Flags:")
 	writeHelpFlags(w, []helpFlag{
 		{"    --input <path>", "Captured pg_gather out.txt (required)"},
 		{"    --output <path>", "Rendered HTML output path (default report.html in CWD)"},
-		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (or set PGS_BIN_DIR / global defaultBinDir)"},
+		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (or set PGS_BIN_DIR / global defaultBinDir; defaults to the latest install under /opt/postgresql)"},
 		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir)"},
 		{"    --root <dir>", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)"},
 		{"-D, --destroy-on-failure", "Destroy the throwaway sandbox even if report generation fails (default: keep it for debugging)"},

@@ -30,6 +30,10 @@ func TestRunReport_missingInputIsUsage(t *testing.T) {
 func TestRunReport_missingBinDirIsUsage(t *testing.T) {
 	t.Setenv("PGS_BIN_DIR", "")
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir()) // isolate from global config
+	// Point install discovery at an empty dir so the auto-latest
+	// fallback finds nothing and the usage error still fires — without
+	// this the real /opt/postgresql on the dev machine would resolve.
+	withDefaultInstallBase(t, t.TempDir())
 	var stderr bytes.Buffer
 	rc := runReport([]string{"--input", "/tmp/out.txt"}, nil, &stderr)
 	if rc != ui.ExitUsage.Int() {
@@ -37,6 +41,36 @@ func TestRunReport_missingBinDirIsUsage(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "--bin-dir is required") {
 		t.Errorf("stderr missing --bin-dir hint: %q", stderr.String())
+	}
+}
+
+func TestRunReport_autoResolvesLatestInstall(t *testing.T) {
+	// With no bin-dir anywhere, the dispatcher must discover the latest
+	// install under defaultInstallBase instead of erroring. We stop the
+	// pipeline at the next gate (pg-gather-dir) so this test stays
+	// lightweight: getting ExitPgGatherDirMissing (not the --bin-dir
+	// usage error) proves bin-dir resolution succeeded, and the INFO
+	// line proves which install was chosen.
+	t.Setenv("PGS_BIN_DIR", "")
+	t.Setenv("PGS_PG_GATHER_DIR", "")
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	base := t.TempDir()
+	fakeInstall(t, base, "16.5")
+	fakeInstall(t, base, "18.3")
+	withDefaultInstallBase(t, base)
+
+	var stderr bytes.Buffer
+	rc := runReport([]string{"--input", "/tmp/out.txt"}, nil, &stderr)
+	if rc != ui.ExitPgGatherDirMissing.Int() {
+		t.Errorf("rc = %d, want %d (ExitPgGatherDirMissing); stderr=%q",
+			rc, ui.ExitPgGatherDirMissing.Int(), stderr.String())
+	}
+	if strings.Contains(stderr.String(), "--bin-dir is required") {
+		t.Errorf("bin-dir should have auto-resolved, got usage error: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "using latest install") ||
+		!strings.Contains(stderr.String(), "18.3") {
+		t.Errorf("stderr missing latest-install INFO line for 18.3: %q", stderr.String())
 	}
 }
 
