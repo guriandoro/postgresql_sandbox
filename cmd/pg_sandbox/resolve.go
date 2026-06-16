@@ -44,6 +44,7 @@ import (
 	"strings"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/config"
+	"github.com/guriandoro/postgresql_sandbox/internal/fsutil"
 )
 
 // defaultInstallBase is the conventional parent dir holding one subdir
@@ -171,6 +172,7 @@ func resolveBinDir(flagValue string, globalCfg *config.Global) (string, error) {
 	if v == "" {
 		v = "/opt/postgresql"
 	}
+	v = fsutil.ExpandTilde(v)
 	if abs, err := filepath.Abs(v); err == nil {
 		v = abs
 	}
@@ -207,6 +209,7 @@ func resolveSandboxRoot(flagValue string, globalCfg *config.Global) (string, err
 		}
 		v = filepath.Join(home, "postgresql-sandboxes")
 	}
+	v = fsutil.ExpandTilde(v)
 	if abs, err := filepath.Abs(v); err == nil {
 		v = abs
 	}

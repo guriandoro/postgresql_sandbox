@@ -33,6 +33,7 @@ import (
 	"path/filepath"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/config"
+	"github.com/guriandoro/postgresql_sandbox/internal/fsutil"
 )
 
 // resolveSourceSandbox turns a user-supplied source-name reference
@@ -48,6 +49,12 @@ func resolveSourceSandbox(targetDir, name string) (string, error) {
 		return "", wrapExit(ExitUsage,
 			fmt.Errorf("sandbox: resolveSourceSandbox: empty source name"))
 	}
+
+	// Expand a leading "~"/"~/" before any shape check: otherwise
+	// "~/root/primary" fails the absolute-path branch below (Go's
+	// filepath.IsAbs treats "~" as a plain byte) and silently resolves
+	// cwd-relative or as a sibling.
+	name = fsutil.ExpandTilde(name)
 
 	var tried []string
 

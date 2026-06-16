@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/config"
+	"github.com/guriandoro/postgresql_sandbox/internal/fsutil"
 	"github.com/guriandoro/postgresql_sandbox/internal/pgexec"
 	"github.com/guriandoro/postgresql_sandbox/internal/sandbox"
 )
@@ -161,6 +162,7 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 	// the path we use (loadInitSQL) catches the same errors with
 	// caller-helpful context.
 	if opts.InitSQLFile != "" {
+		opts.InitSQLFile = fsutil.ExpandTilde(opts.InitSQLFile)
 		if _, err := os.Stat(opts.InitSQLFile); err != nil {
 			return nil, wrapExit(ExitUsage,
 				fmt.Errorf("cluster.Deploy: --init-sql file not readable: %w", err))

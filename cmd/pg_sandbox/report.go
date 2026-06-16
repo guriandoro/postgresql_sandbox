@@ -37,6 +37,7 @@ import (
 	"path/filepath"
 	"syscall"
 
+	"github.com/guriandoro/postgresql_sandbox/internal/fsutil"
 	"github.com/guriandoro/postgresql_sandbox/internal/report"
 	"github.com/guriandoro/postgresql_sandbox/internal/ui"
 )
@@ -118,6 +119,7 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 				"no usable PostgreSQL install found under %s\n", defaultInstallBase)
 		return ui.ExitUsage.Int()
 	}
+	binDir = fsutil.ExpandTilde(binDir)
 	if !filepath.IsAbs(binDir) {
 		if abs, err := filepath.Abs(binDir); err == nil {
 			binDir = abs
@@ -144,6 +146,7 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pg_sandbox report: --pg-gather-dir is required (or set PGS_PG_GATHER_DIR or pgGatherDir in global config)")
 		return ui.ExitPgGatherDirMissing.Int()
 	}
+	pgGatherDir = fsutil.ExpandTilde(pgGatherDir)
 	if !filepath.IsAbs(pgGatherDir) {
 		if abs, err := filepath.Abs(pgGatherDir); err == nil {
 			pgGatherDir = abs
@@ -163,11 +166,13 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 
 	// Normalise --input / --output to absolute paths so error messages
 	// and the report writer agree on what they point at.
+	inputPath = fsutil.ExpandTilde(inputPath)
 	if !filepath.IsAbs(inputPath) {
 		if abs, err := filepath.Abs(inputPath); err == nil {
 			inputPath = abs
 		}
 	}
+	outputPath = fsutil.ExpandTilde(outputPath)
 	if !filepath.IsAbs(outputPath) {
 		if abs, err := filepath.Abs(outputPath); err == nil {
 			outputPath = abs

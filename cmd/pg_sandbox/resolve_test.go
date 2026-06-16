@@ -508,3 +508,68 @@ func TestParseVersionKey_rejectsNonNumeric(t *testing.T) {
 		}
 	}
 }
+
+// setHome points HOME (and USERPROFILE for Windows) at a fresh
+// tempdir and returns it, so tilde-expansion tests can assert the
+// resolved path lands under a known home directory.
+func setHome(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	return home
+}
+
+func TestResolveBinDir_expandsTildeFlag(t *testing.T) {
+	resetEnv(t)
+	home := setHome(t)
+	got, err := resolveBinDir("~/pg/18", nil)
+	if err != nil {
+		t.Fatalf("resolveBinDir: %v", err)
+	}
+	want := filepath.Join(home, "pg", "18")
+	if got != want {
+		t.Errorf("got %q, want %q (must expand ~ to HOME, not cwd-relative)", got, want)
+	}
+}
+
+func TestResolveBinDir_expandsTildeEnv(t *testing.T) {
+	resetEnv(t)
+	home := setHome(t)
+	t.Setenv("PGS_BIN_DIR", "~/from/env")
+	got, err := resolveBinDir("", nil)
+	if err != nil {
+		t.Fatalf("resolveBinDir: %v", err)
+	}
+	want := filepath.Join(home, "from", "env")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveSandboxRoot_expandsTildeFlag(t *testing.T) {
+	resetEnv(t)
+	home := setHome(t)
+	got, err := resolveSandboxRoot("~/sb", nil)
+	if err != nil {
+		t.Fatalf("resolveSandboxRoot: %v", err)
+	}
+	want := filepath.Join(home, "sb")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveSandboxRoot_expandsTildeEnv(t *testing.T) {
+	resetEnv(t)
+	home := setHome(t)
+	t.Setenv("PGS_SANDBOX_ROOT", "~/my-sandboxes")
+	got, err := resolveSandboxRoot("", nil)
+	if err != nil {
+		t.Fatalf("resolveSandboxRoot: %v", err)
+	}
+	want := filepath.Join(home, "my-sandboxes")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
