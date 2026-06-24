@@ -144,6 +144,173 @@ func TestReorderBoolFlags_doesNotPromoteValueTakingFlag(t *testing.T) {
 	}
 }
 
+func TestReorderValueFlags_promotesTrailingValueFlag(t *testing.T) {
+	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	var binDir string
+	fs.StringVar(&binDir, "bin-dir", "", "")
+	fs.StringVar(&binDir, "b", "", "")
+	known := valueFlagNames(fs)
+
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{
+			name: "version then -b",
+			in:   []string{"17.9", "-b", "/opt/postgresql"},
+			want: []string{"-b", "/opt/postgresql", "17.9"},
+		},
+		{
+			name: "version then inline bin-dir",
+			in:   []string{"17.9", "--bin-dir=/opt/postgresql"},
+			want: []string{"--bin-dir=/opt/postgresql", "17.9"},
+		},
+		{
+			name: "noop when already ordered",
+			in:   []string{"-b", "/opt/postgresql", "17.9"},
+			want: []string{"-b", "/opt/postgresql", "17.9"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := reorderValueFlags(tc.in, known)
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("reorderValueFlags(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func newBuildTestFlagSet() (*flag.FlagSet, *bool, *bool, *string, *int, *bool, *string, *string) {
+	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	var (
+		withICU       bool
+		withOpenSSL   bool
+		configureOpts string
+		jobs          int
+		force         bool
+		binDir        string
+		buildDir      string
+	)
+	fs.BoolVar(&withICU, "with-icu", false, "")
+	fs.BoolVar(&withOpenSSL, "with-openssl", false, "")
+	fs.StringVar(&configureOpts, "configure-opts", "", "")
+	fs.IntVar(&jobs, "jobs", 0, "")
+	fs.IntVar(&jobs, "j", 0, "")
+	fs.BoolVar(&force, "force", false, "")
+	fs.BoolVar(&force, "f", false, "")
+	fs.StringVar(&binDir, "bin-dir", "", "")
+	fs.StringVar(&binDir, "b", "", "")
+	fs.StringVar(&buildDir, "build-dir", "", "")
+	return fs, &withICU, &withOpenSSL, &configureOpts, &jobs, &force, &binDir, &buildDir
+}
+
+func TestParseSubcommandArgs_buildValueFlagAfterVersion(t *testing.T) {
+	fs, _, _, _, _, forcePtr, binDirPtr, _ := newBuildTestFlagSet()
+	fs.SetOutput(&bytes.Buffer{})
+
+	if err := parseSubcommandArgs(fs, []string{"17.9", "-b", "/opt/postgresql"}); err != nil {
+		t.Fatalf("parseSubcommandArgs: %v", err)
+	}
+	if *binDirPtr != "/opt/postgresql" {
+		t.Errorf("binDir = %q, want %q", *binDirPtr, "/opt/postgresql")
+	}
+	rest := fs.Args()
+	if len(rest) != 1 || rest[0] != "17.9" {
+		t.Errorf("fs.Args() = %v, want [17.9]", rest)
+	}
+	if *forcePtr {
+		t.Error("force should be false")
+	}
+
+	fs2, _, _, _, jobsPtr, force2Ptr, binDir2Ptr, _ := newBuildTestFlagSet()
+	fs2.SetOutput(&bytes.Buffer{})
+	if err := parseSubcommandArgs(fs2, []string{"17.3", "--jobs", "4", "--force"}); err != nil {
+		t.Fatalf("parseSubcommandArgs: %v", err)
+	}
+	if *jobsPtr != 4 {
+		t.Errorf("jobs = %d, want 4", *jobsPtr)
+	}
+	if !*force2Ptr {
+		t.Error("force = false, want true")
+	}
+	if *binDir2Ptr != "" {
+		t.Errorf("binDir = %q, want empty", *binDir2Ptr)
+	}
+	rest2 := fs2.Args()
+	if len(rest2) != 1 || rest2[0] != "17.3" {
+		t.Errorf("fs.Args() = %v, want [17.3]", rest2)
+	}
+
+	fs3, _, _, _, _, force3Ptr, binDir3Ptr, _ := newBuildTestFlagSet()
+	fs3.SetOutput(&bytes.Buffer{})
+	if err := parseSubcommandArgs(fs3, []string{"17.3", "-b", "/opt", "--force"}); err != nil {
+		t.Fatalf("parseSubcommandArgs: %v", err)
+	}
+	if *binDir3Ptr != "/opt" {
+		t.Errorf("binDir = %q, want %q", *binDir3Ptr, "/opt")
+	}
+	if !*force3Ptr {
+		t.Error("force = false, want true")
+	}
+	rest3 := fs3.Args()
+	if len(rest3) != 1 || rest3[0] != "17.3" {
+		t.Errorf("fs.Args() = %v, want [17.3]", rest3)
+	}
+}
+
+func TestParseSubcommandArgs_cleanupValueAndBoolAfterVersion(t *testing.T) {
+	fs := flag.NewFlagSet("cleanup-install-versions", flag.ContinueOnError)
+	fs.SetOutput(&bytes.Buffer{})
+	var (
+		force       bool
+		binDir      string
+		sandboxRoot string
+	)
+	fs.BoolVar(&force, "force", false, "")
+	fs.BoolVar(&force, "f", false, "")
+	fs.StringVar(&binDir, "bin-dir", "", "")
+	fs.StringVar(&binDir, "b", "", "")
+	fs.StringVar(&sandboxRoot, "root", "", "")
+
+	if err := parseSubcommandArgs(fs, []string{"18.4", "-b", "/opt/pg", "--force"}); err != nil {
+		t.Fatalf("parseSubcommandArgs: %v", err)
+	}
+	if binDir != "/opt/pg" {
+		t.Errorf("binDir = %q, want %q", binDir, "/opt/pg")
+	}
+	if !force {
+		t.Error("force = false, want true")
+	}
+	rest := fs.Args()
+	if len(rest) != 1 || rest[0] != "18.4" {
+		t.Errorf("fs.Args() = %v, want [18.4]", rest)
+	}
+}
+
+func TestValueFlagNames(t *testing.T) {
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	var (
+		force   bool
+		f       bool
+		root    string
+		binDir  string
+		retries int
+	)
+	fs.BoolVar(&force, "force", false, "")
+	fs.BoolVar(&f, "f", false, "")
+	fs.StringVar(&root, "root", "", "")
+	fs.StringVar(&binDir, "bin-dir", "", "")
+	fs.IntVar(&retries, "retries", 0, "")
+
+	got := valueFlagNames(fs)
+	want := []string{"bin-dir", "retries", "root"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+}
+
 func TestRunCleanupInstallVersions_relativeSandboxRootIsAbsoluted(t *testing.T) {
 	// Pins the 2026-06-04 defense-in-depth banner contract: a
 	// relative PGS_SANDBOX_ROOT (or globalCfg.SandboxRoot) must be
@@ -444,6 +611,26 @@ func TestParseSubcommandArgs_promotesTrailingBoolFlag(t *testing.T) {
 	rest := fs.Args()
 	if len(rest) != 1 || rest[0] != "18.3" {
 		t.Errorf("fs.Args() = %v, want [18.3]", rest)
+	}
+}
+
+func TestParseSubcommandArgs_configSetFlagSet(t *testing.T) {
+	fs := flag.NewFlagSet("config set", flag.ContinueOnError)
+	fs.SetOutput(&bytes.Buffer{})
+	registerGlobalFlags(fs)
+	var sc scope
+	parseScopeFlags(fs, &sc)
+
+	if err := parseSubcommandArgs(fs, []string{"host=0.0.0.0", "port=5433", "-s", "pg18"}); err != nil {
+		t.Fatalf("parseSubcommandArgs: %v", err)
+	}
+	if sc.sandboxDir != "pg18" {
+		t.Errorf("sandboxDir = %q, want pg18", sc.sandboxDir)
+	}
+	rest := fs.Args()
+	want := []string{"host=0.0.0.0", "port=5433"}
+	if !reflect.DeepEqual(rest, want) {
+		t.Errorf("fs.Args() = %v, want %v", rest, want)
 	}
 }
 
