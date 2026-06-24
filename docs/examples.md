@@ -10,9 +10,9 @@ Each recipe below assumes you've exported the install root:
 export PGS_BIN_DIR=/opt/postgresql/18.4
 ```
 
-Commands that operate on an *existing* sandbox or cluster (`status`, `start`, `stop`, `restart`, `use`, `run`, `destroy`, `promote`, `publish`, `subscribe`, `config show`/`get`/`set`/`validate`, `cluster status`, `cluster destroy`) accept `-s <name>` from any working directory — the name resolves to `<sandboxRoot>/<name>` (default `~/postgresql-sandboxes/<name>`). Absolute paths and `./`-prefixed relative paths are still honored verbatim.
+A bare name or relative `-s <name>` resolves under `<sandboxRoot>` (default `~/postgresql-sandboxes/`), so the same `-s <name>` refers to the same sandbox from any working directory. Absolute paths and explicit `./`/`../`-prefixed relative paths are honored verbatim. This applies uniformly to commands that operate on an *existing* sandbox or cluster (`status`, `start`, `stop`, `restart`, `use`, `run`, `destroy`, `promote`, `publish`, `subscribe`, `config show`/`get`/`set`/`validate`, `cluster status`, `cluster destroy`).
 
-`deploy` and `cluster deploy` use `-s` as the *creation target*: a bare name lands under the current directory. To create new sandboxes under the default root, `cd ~/postgresql-sandboxes/` first.
+`deploy` and `cluster deploy` use the same resolution for the *creation target*: `-s pub` creates `<sandboxRoot>/pub`, while `-s ./pub` creates `pub` under the current directory.
 
 ## Build the version from source
 

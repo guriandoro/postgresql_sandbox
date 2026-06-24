@@ -19,7 +19,7 @@ These are *not* global — each command parses its own flag set — but they app
 
 | Flag | Where it applies | Meaning |
 |---|---|---|
-| `--sandbox-dir <path>` / `-s` | All single-sandbox + cluster commands | Target sandbox (or cluster) directory. Accepts an absolute path, a `./`-prefixed relative path, or — for commands operating on an *existing* sandbox/cluster — a bare name that resolves to `<sandboxRoot>/<name>` (default `~/postgresql-sandboxes/<name>`). `deploy` and `cluster deploy` treat the value as the literal creation target. |
+| `--sandbox-dir <path>` / `-s` | All single-sandbox + cluster commands | Target sandbox (or cluster) directory. A bare name or relative path resolves under `<sandboxRoot>` (default `~/postgresql-sandboxes/`), so `-s <name>` refers to the same sandbox from any cwd; an absolute path or an explicit `./`/`../` prefix is honored verbatim. `deploy` and `cluster deploy` apply the same resolution to the *creation target* (`-s pub` → `<sandboxRoot>/pub`, `-s ./pub` → `<cwd>/pub`). See SPEC §5.1. |
 | `--bin-dir <path>` / `-b` | `deploy`, `build`, `report`, `cleanup-install-versions` | PostgreSQL `bin/` directory. For `report`, when unset (and no `PGS_BIN_DIR` / global `defaultBinDir`) it auto-resolves to the latest install under `/opt/postgresql` — existing binaries only, nothing is built. |
 | `--host <addr>` | `deploy`, `cluster deploy` | Listen / connect host. |
 | `--port <n>` / `-p` | `deploy` | TCP port (auto-allocated when omitted). |

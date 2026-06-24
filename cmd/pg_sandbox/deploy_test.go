@@ -9,6 +9,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -123,6 +125,41 @@ func TestRunDeploy_allFlagsAcceptedAtParse(t *testing.T) {
 		if strings.Contains(stderr.String(), "flag provided but not defined") {
 			t.Errorf("case %d: a flag was rejected by Parse — surface drift?\nargs=%v\nstderr=%q", i, args, stderr.String())
 		}
+	}
+}
+
+func TestRunDeploy_bareNameResolvesUnderSandboxRoot(t *testing.T) {
+	// Wiring test: `deploy -s pub` must resolve the creation target to
+	// <sandboxRoot>/pub (SPEC §5.1), NOT <cwd>/pub. We don't run a real
+	// initdb — instead we pre-create <sandboxRoot>/pub as a non-empty
+	// dir so deploy fails at the "sandbox dir … is not empty" guard,
+	// which echoes the resolved path. A stub initdb in --bin-dir lets
+	// the bin-dir preflight pass so we reach that guard.
+	resetEnv(t)
+	sandboxRoot := t.TempDir()
+	t.Setenv("PGS_SANDBOX_ROOT", sandboxRoot)
+
+	binDir := t.TempDir()
+	stub := filepath.Join(binDir, "initdb")
+	if err := os.WriteFile(stub, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatalf("write stub initdb: %v", err)
+	}
+
+	target := filepath.Join(sandboxRoot, "pub")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("mkdir target: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "preexisting"), []byte("x"), 0o644); err != nil {
+		t.Fatalf("write preexisting file: %v", err)
+	}
+
+	var stderr bytes.Buffer
+	rc := runDeploy([]string{"-s", "pub", "-b", binDir}, nil, &stderr)
+	if rc == ui.ExitOK.Int() {
+		t.Fatalf("expected non-OK exit, got OK; stderr=%q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), target) {
+		t.Errorf("deploy resolved -s pub elsewhere: stderr %q does not mention %q", stderr.String(), target)
 	}
 }
 

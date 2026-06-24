@@ -149,6 +149,9 @@ func runClusterDeploy(args []string, _ io.Writer, stderr io.Writer) int {
 		usageHint(stderr, "cluster")
 		return ui.ExitUsage.Int()
 	}
+	// SPEC §5.1: a relative -s value is the creation target under
+	// sandboxRoot; an explicit ./ or ../ keeps cwd-relative semantics.
+	clusterDir = resolveClusterArg(clusterDir, loadGlobalConfig())
 	if nodes < 1 {
 		fmt.Fprintln(stderr, "pg_sandbox cluster deploy: -N/--nodes must be >= 1")
 		return ui.ExitUsage.Int()

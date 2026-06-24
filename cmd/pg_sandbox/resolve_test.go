@@ -263,10 +263,10 @@ func TestResolveSandboxRoot_nilGlobalIsSafe(t *testing.T) {
 	}
 }
 
-// resolveSandboxArg lets per-sandbox commands accept `-s name` from
-// any working directory. The contract is local-first (existing
-// invocations never change behavior) with a bare-name fallback into
-// the configured sandboxRoot. Tests below pin each branch.
+// resolveSandboxArg maps `-s` to a directory: a bare name or relative
+// path resolves under sandboxRoot, while absolute paths and explicit
+// ./ ../ are honored verbatim. Resolution is existence-independent.
+// Tests below pin each branch.
 
 func TestResolveSandboxArg_emptyPassesThrough(t *testing.T) {
 	// Empty input is the caller's "--sandbox-dir is required" path;
@@ -277,44 +277,39 @@ func TestResolveSandboxArg_emptyPassesThrough(t *testing.T) {
 	}
 }
 
-func TestResolveSandboxArg_localMatchWins(t *testing.T) {
-	// A literal value that already points at a sandbox dir must be
-	// returned untouched, regardless of what sandboxRoot says — this
-	// is the "preserve historical cd-into-the-root then -s name"
-	// workflow.
+func TestResolveSandboxArg_absolutePathReturnedAsIs(t *testing.T) {
+	// An absolute value is honored verbatim, regardless of what
+	// sandboxRoot says.
 	resetEnv(t)
 	tmp := t.TempDir()
-	local := markSandbox(t, filepath.Join(tmp, "local"))
+	abs := filepath.Join(tmp, "local")
 	rootElsewhere := t.TempDir()
-	markSandbox(t, filepath.Join(rootElsewhere, "local")) // same name, but under sandboxRoot
 	t.Setenv("PGS_SANDBOX_ROOT", rootElsewhere)
-	got := resolveSandboxArg(local, nil)
-	if got != local {
-		t.Errorf("got %q, want %q (local match must win over sandboxRoot)", got, local)
+	got := resolveSandboxArg(abs, nil)
+	if got != abs {
+		t.Errorf("got %q, want %q (absolute path must be honored as-is)", got, abs)
 	}
 }
 
-func TestResolveSandboxArg_pathWithSeparatorPassesThrough(t *testing.T) {
-	// A value containing a path separator was an explicit path
-	// statement by the user — even if it doesn't resolve to a
-	// sandbox, we don't silently rewrite it to <root>/basename. That
-	// would mask typos like `-s ./missign` → `<root>/missign`.
+func TestResolveSandboxArg_explicitLocalPathPassesThrough(t *testing.T) {
+	// A leading ./ (or ../) is explicit cwd-relative intent — even if
+	// it doesn't resolve to a sandbox, we don't rewrite it to
+	// <root>/basename. That would mask typos like `-s ./missign`.
 	resetEnv(t)
-	tmp := t.TempDir()
-	markSandbox(t, filepath.Join(tmp, "pg18"))
-	t.Setenv("PGS_SANDBOX_ROOT", tmp)
-	got := resolveSandboxArg("./missing/pg18", nil)
-	if got != "./missing/pg18" {
-		t.Errorf("got %q, want %q (paths with separators must not be rewritten)", got, "./missing/pg18")
+	t.Setenv("PGS_SANDBOX_ROOT", t.TempDir())
+	for _, in := range []string{"./missing/pg18", "../pg18", ".", ".."} {
+		if got := resolveSandboxArg(in, nil); got != in {
+			t.Errorf("resolveSandboxArg(%q) = %q, want %q (explicit ./../ must not be rewritten)", in, got, in)
+		}
 	}
 }
 
 func TestResolveSandboxArg_bareNameResolvesUnderSandboxRoot(t *testing.T) {
-	// The headline case: from any cwd, `-s pg18` must find
+	// The headline case: from any cwd, `-s pg18` must resolve to
 	// <sandboxRoot>/pg18.
 	resetEnv(t)
 	tmp := t.TempDir()
-	want := markSandbox(t, filepath.Join(tmp, "pg18"))
+	want := filepath.Join(tmp, "pg18")
 	t.Setenv("PGS_SANDBOX_ROOT", tmp)
 	got := resolveSandboxArg("pg18", nil)
 	if got != want {
@@ -322,16 +317,31 @@ func TestResolveSandboxArg_bareNameResolvesUnderSandboxRoot(t *testing.T) {
 	}
 }
 
-func TestResolveSandboxArg_bareNameNoMatchReturnsOriginal(t *testing.T) {
-	// When the joined path is not a sandbox either, the helper
-	// returns the user-typed token so the caller's "not a sandbox:
-	// <name>" error reads naturally instead of leaking an opaque
-	// joined path.
+func TestResolveSandboxArg_relativePathResolvesUnderSandboxRoot(t *testing.T) {
+	// A relative path WITHOUT a leading ./ or ../ (e.g. `sub/pg18`)
+	// is still interpreted as living under sandboxRoot.
 	resetEnv(t)
-	t.Setenv("PGS_SANDBOX_ROOT", t.TempDir())
+	tmp := t.TempDir()
+	want := filepath.Join(tmp, "sub", "pg18")
+	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	got := resolveSandboxArg("sub/pg18", nil)
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestResolveSandboxArg_bareNameJoinsEvenWhenMissing(t *testing.T) {
+	// Resolution is existence-independent: a bare name that isn't a
+	// sandbox still resolves to <root>/<name> (so `deploy -s pub`
+	// creates it there). The caller's IsSandboxDir check then fires
+	// against the resolved path.
+	resetEnv(t)
+	tmp := t.TempDir()
+	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	want := filepath.Join(tmp, "nope")
 	got := resolveSandboxArg("nope", nil)
-	if got != "nope" {
-		t.Errorf("got %q, want %q", got, "nope")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
@@ -349,15 +359,15 @@ func TestResolveSandboxArg_usesGlobalConfigWhenEnvUnset(t *testing.T) {
 	}
 }
 
-// resolveClusterArg mirrors resolveSandboxArg but gates on
-// IsClusterDir. We pin the same four branches plus one cross-marker
-// check (a sandbox-marked dir under sandboxRoot must NOT pose as a
-// cluster, even though they share a parent root).
+// resolveClusterArg is a thin alias of resolveSandboxArg — the
+// sandbox/cluster marker check happens at the call site, not in the
+// resolver. These pin that the cluster surface resolves `-s`
+// identically.
 
 func TestResolveClusterArg_bareNameResolvesUnderSandboxRoot(t *testing.T) {
 	resetEnv(t)
 	tmp := t.TempDir()
-	want := markCluster(t, filepath.Join(tmp, "mycluster"))
+	want := filepath.Join(tmp, "mycluster")
 	t.Setenv("PGS_SANDBOX_ROOT", tmp)
 	got := resolveClusterArg("mycluster", nil)
 	if got != want {
@@ -365,38 +375,40 @@ func TestResolveClusterArg_bareNameResolvesUnderSandboxRoot(t *testing.T) {
 	}
 }
 
-func TestResolveClusterArg_bareNameNoMatchReturnsOriginal(t *testing.T) {
+func TestResolveClusterArg_bareNameJoinsEvenWhenMissing(t *testing.T) {
 	resetEnv(t)
-	t.Setenv("PGS_SANDBOX_ROOT", t.TempDir())
+	tmp := t.TempDir()
+	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	want := filepath.Join(tmp, "nope")
 	got := resolveClusterArg("nope", nil)
-	if got != "nope" {
-		t.Errorf("got %q, want %q", got, "nope")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 
-func TestResolveClusterArg_pathWithSeparatorPassesThrough(t *testing.T) {
+func TestResolveClusterArg_explicitLocalPathPassesThrough(t *testing.T) {
 	resetEnv(t)
-	tmp := t.TempDir()
-	markCluster(t, filepath.Join(tmp, "mycluster"))
-	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	t.Setenv("PGS_SANDBOX_ROOT", t.TempDir())
 	got := resolveClusterArg("./missing/mycluster", nil)
 	if got != "./missing/mycluster" {
 		t.Errorf("got %q, want %q", got, "./missing/mycluster")
 	}
 }
 
-func TestResolveClusterArg_sandboxMarkerDoesNotPoseAsCluster(t *testing.T) {
-	// Cross-marker isolation: a `-s pg18` at the cluster surface must
-	// fall through to the "not a cluster" error path, NOT silently
-	// succeed because pg_sandbox.json exists. The two markers gate
-	// distinct surfaces and the SPEC treats them as non-substitutable.
+func TestResolveClusterArg_resolvesPathRegardlessOfMarker(t *testing.T) {
+	// The resolver no longer inspects markers: `-s pg18` resolves to
+	// <root>/pg18 even when that dir carries a sandbox (not cluster)
+	// marker. Cross-marker isolation now lives at the call site, which
+	// runs IsClusterDir against this resolved path and emits "not a
+	// cluster" — see TestRunClusterStatus_* for that surface.
 	resetEnv(t)
 	tmp := t.TempDir()
 	markSandbox(t, filepath.Join(tmp, "pg18"))
 	t.Setenv("PGS_SANDBOX_ROOT", tmp)
+	want := filepath.Join(tmp, "pg18")
 	got := resolveClusterArg("pg18", nil)
-	if got != "pg18" {
-		t.Errorf("got %q, want %q (sandbox marker must not satisfy cluster gate)", got, "pg18")
+	if got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }
 

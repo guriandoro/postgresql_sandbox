@@ -231,14 +231,17 @@ These MAY be supplied to any command (subcommand parser MUST accept them either 
 
 ### 5.1 `--sandbox-dir` value resolution
 
-The `--sandbox-dir` / `-s` value is resolved as follows:
+A relative `--sandbox-dir` / `-s` value is interpreted as living inside the resolved `sandboxRoot` (§3.3), so the same `-s <name>` refers to the same sandbox regardless of the current working directory — UNLESS the user is explicit with a leading `./` or `../`, in which case their cwd-relative intent is honored. The value is resolved as follows:
 
 1. **Empty** — the command fails with `ExitUsage` ("--sandbox-dir is required").
-2. **The literal value already points at a sandbox** (contains `pg_sandbox.json`) **or cluster** (contains `pg_sandbox-cluster.json`) — used verbatim. Covers absolute paths, `./`-prefixed relative paths, and the historical "cd into the sandbox-root, then `-s name`" workflow.
-3. **The value contains a path separator** (`/`) but does not point at a sandbox/cluster — used verbatim and the command fails with the usual "not a sandbox / not a cluster" error. A path was an explicit user intent; the tool MUST NOT silently rewrite `./missign` to `<sandboxRoot>/missign`.
-4. **Bare name** (no separator, literal does not exist as a sandbox/cluster) — joined onto the resolved `sandboxRoot` (§3.3). If `<sandboxRoot>/<name>` is a sandbox (or cluster, for cluster commands), THAT path is used. Otherwise the bare token is used verbatim and the usual "not a sandbox / not a cluster" error fires.
+2. **Leading `~`** — expanded to the user's home directory before any other check.
+3. **Absolute path** — used verbatim.
+4. **Explicitly local** — exactly `.` or `..`, or anything starting with `./` or `../` — used verbatim (cwd-relative). The tool MUST NOT rewrite `./missing` to `<sandboxRoot>/missing`; the `./` was explicit user intent.
+5. **Bare name or other relative path** (e.g. `pub`, `sub/pub`) — joined onto the resolved `sandboxRoot` and that path is used.
 
-`deploy` and `cluster deploy` are the exception: they treat `--sandbox-dir` as the *creation target* (the path where the new sandbox/cluster will be initialized), so no bare-name lookup is performed — the value lands at `<cwd>/<value>` if relative.
+Resolution is existence-independent: the resolved path is computed the same way whether or not the target already exists. Commands that operate on an existing sandbox/cluster then run their own marker check (`pg_sandbox.json` / `pg_sandbox-cluster.json`) and fail with "not a sandbox / not a cluster: `<resolved path>`" when it is missing.
+
+`deploy` and `cluster deploy` apply the SAME resolution to `--sandbox-dir`, treating the result as the *creation target* (the path where the new sandbox/cluster will be initialized). So a bare/relative name like `-s pub` creates `<sandboxRoot>/pub`, while `-s ./pub` creates `<cwd>/pub`.
 
 ---
 

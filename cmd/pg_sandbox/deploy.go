@@ -4,9 +4,11 @@
 // main.go and the sandbox package. Its responsibilities:
 //
 //   - Parse the deploy flag set.
-//   - Resolve defaults (built-in → env → flag) per SPEC §3.1 — this
-//     slice does not consult the global config file; that lands
-//     with the `config` command.
+//   - Resolve defaults (built-in → env → flag) per SPEC §3.1. The
+//     only global-config touch point is sandboxRoot, consulted by
+//     resolveSandboxArg to place a relative -s creation target (SPEC
+//     §5.1); the rest of the config file lands with the `config`
+//     command.
 //   - Detect whether --port was supplied explicitly (needed for the
 //     "explicit busy → ExitPortInUse" branch of SPEC §4.3).
 //   - Call sandbox.Deploy and map any returned error to the right
@@ -101,6 +103,12 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 		usageHint(stderr, "deploy")
 		return ui.ExitUsage.Int()
 	}
+	// SPEC §5.1: a relative -s value is the creation target under
+	// sandboxRoot (so `deploy -s pub` and `use -s pub` agree from any
+	// cwd); an explicit ./ or ../ keeps cwd-relative semantics. This is
+	// the one place deploy consults the global config — for sandboxRoot
+	// only — matching how the read commands resolve -s.
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 
 	// Detect whether --port was supplied explicitly. flag.FlagSet
 	// has no built-in "was this flag set" predicate, so we walk
@@ -218,7 +226,8 @@ func deployHelp(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Environment:")
 	fmt.Fprintln(w, "  PGS_BIN_DIR fills in --bin-dir; PGS_* also supplies defaults for host/port/user/dbname.")
-	fmt.Fprintln(w, "  -s accepts a bare name (resolved under sandboxRoot) or an absolute path.")
+	fmt.Fprintln(w, "  -s: a bare name or relative path is created under sandboxRoot; an explicit")
+	fmt.Fprintln(w, "  ./ or ../ prefix (or an absolute path) is honored as-is.")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "See SPEC.md §6.1 for the full behavior; docs/examples.md for end-to-end recipes.")
 }
