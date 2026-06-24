@@ -19,8 +19,8 @@ These are *not* global — each command parses its own flag set — but they app
 
 | Flag | Where it applies | Meaning |
 |---|---|---|
-| `--sandbox-dir <path>` / `-s` | All single-sandbox + cluster commands | Target sandbox (or cluster) directory. Accepts an absolute path, a `./`-prefixed relative path, or — for commands operating on an *existing* sandbox/cluster — a bare name that resolves to `<sandboxRoot>/<name>` (default `~/postgresql-sandboxes/<name>`). `deploy` and `cluster deploy` treat the value as the literal creation target. |
-| `--bin-dir <path>` / `-b` | `deploy`, `build`, `report`, `cleanup-install-versions` | PostgreSQL `bin/` directory. |
+| `--sandbox-dir <path>` / `-s` | All single-sandbox + cluster commands | Target sandbox (or cluster) directory. A bare name or relative path resolves under `<sandboxRoot>` (default `~/postgresql-sandboxes/`), so `-s <name>` refers to the same sandbox from any cwd; an absolute path or an explicit `./`/`../` prefix is honored verbatim. `deploy` and `cluster deploy` apply the same resolution to the *creation target* (`-s pub` → `<sandboxRoot>/pub`, `-s ./pub` → `<cwd>/pub`). See SPEC §5.1. |
+| `--bin-dir <path>` / `-b` | `deploy`, `build`, `report`, `cleanup-install-versions` | PostgreSQL `bin/` directory. For `report`, when unset (and no `PGS_BIN_DIR` / global `defaultBinDir`) it auto-resolves to the latest install under `/opt/postgresql` — existing binaries only, nothing is built. |
 | `--host <addr>` | `deploy`, `cluster deploy` | Listen / connect host. |
 | `--port <n>` / `-p` | `deploy` | TCP port (auto-allocated when omitted). |
 | `--user <name>` / `-U` | `deploy`, `publish`, `subscribe` | PG superuser. |
@@ -29,6 +29,7 @@ These are *not* global — each command parses its own flag set — but they app
 | `--json` | `status`, `config show`, `global_status`, `cluster status`, `report` | Machine-readable output. |
 | `--global` | `config show` / `get` / `set` / `validate` | Operate on global config instead of the sandbox config. |
 | `--root <path>` | `global_status`, `report`, `cleanup-install-versions` | Override the sandbox-root scan path. |
+| `--destroy-on-failure` / `-D` | `report` | Destroy the throwaway sandbox even if report generation fails (default: keep it for debugging). Not a prompt-suppressor — distinct from `--force`. |
 | `--debug` | All commands | Lowers the log threshold to debug and prints a `# exec: …` line for every external process before invoking it. |
 | `--quiet` | All commands | Raises the log threshold to error: suppresses INFO/WARN diagnostic lines. Mutually exclusive with `--debug`. |
 | `--color <when>` | All commands | `auto` (default), `always`, or `never`. `auto` enables color only when stderr is a TTY and `NO_COLOR` is unset. Currently parsed and validated; no ANSI color is emitted yet. |
@@ -55,6 +56,8 @@ These are *not* global — each command parses its own flag set — but they app
 - `publish --pub-name <name> [--all-tables | --tables T1,T2,...]`
 - `subscribe --from <publisher> --pub-name <name> [--copy-schema] [--no-copy-data]`
 
+> **Source references.** Unlike `-s` (resolved under `sandboxRoot`), a source-sandbox reference — `deploy --replicate-from` / `--subscribe-to` and `subscribe --from` — resolves a bare name as a **sibling of the target sandbox** (joined onto the target's parent dir), so a primary/standby (or publisher/subscriber) pair stays together wherever it lives. Absolute paths are used as-is; any relative path containing a separator is cwd-relative (no `./` special case here). The source must already exist. See SPEC §5.2.
+
 ### Cluster orchestration
 - `cluster deploy -N <n> [--sync-count <k>] [--logical] [--init-sql <file>]` — `--sync-count` is accepted but currently treated as async in this slice; the first K members will be reported async until sync wiring lands.
 - `cluster status` (`--json` supported)
@@ -62,7 +65,7 @@ These are *not* global — each command parses its own flag set — but they app
 
 ### Cross-host & reporting
 - `global_status` — list every sandbox on the host
-- `report --input out.txt [--output report.html]` — `pg_gather` HTML report
+- `report --input out.txt [--output report.html] [--destroy-on-failure]` — `pg_gather` HTML report. When `--output` is omitted the HTML is written alongside `--input`, reusing its base name with a `_report.html` suffix (e.g. `.../out.txt` → `.../out_report.html`). When no `--bin-dir` / `PGS_BIN_DIR` / global `defaultBinDir` is supplied, the latest install under `/opt/postgresql` is used automatically (existing binaries only — nothing is built). When no `--pg-gather-dir` / `PGS_PG_GATHER_DIR` / global `pgGatherDir` is supplied, the current directory and each `$PATH` entry are searched for one holding both `gather_schema.sql` and `gather_report.sql`; the first match is used and logged (existing scripts only — nothing is downloaded). The throwaway sandbox is always destroyed on success; on failure it is kept for debugging unless `--destroy-on-failure` / `-D` is given.
 
 ### Source build + maintenance
 - `build <version> [--with-icu] [--with-openssl] [--configure-opts=...]` — compile PostgreSQL from source

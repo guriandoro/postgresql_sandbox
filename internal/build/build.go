@@ -31,6 +31,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/guriandoro/postgresql_sandbox/internal/fsutil"
 	"github.com/guriandoro/postgresql_sandbox/internal/ui"
 )
 
@@ -122,6 +123,7 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 	if opts.BinDir == "" {
 		return nil, &BuildError{ExitCode: ui.ExitUsage, Err: fmt.Errorf("build: BinDir is required (set PGS_BIN_DIR or pass --bin-dir)")}
 	}
+	opts.BinDir = fsutil.ExpandTilde(opts.BinDir)
 	if !filepath.IsAbs(opts.BinDir) {
 		abs, err := filepath.Abs(opts.BinDir)
 		if err != nil {
@@ -148,6 +150,7 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 		tmp := os.TempDir()
 		buildDir = filepath.Join(tmp, "pg_sandbox-build")
 	}
+	buildDir = fsutil.ExpandTilde(buildDir)
 	if !filepath.IsAbs(buildDir) {
 		abs, err := filepath.Abs(buildDir)
 		if err != nil {

@@ -22,7 +22,9 @@
 //      the output file path, return 0.
 //   6. On failure (anywhere after the deploy): leave the throwaway
 //      sandbox on disk, print its path for debugging, return
-//      ExitReportFailed.
+//      ExitReportFailed. With Options.DestroyOnFailure (CLI
+//      --destroy-on-failure / -D), the sandbox is destroyed here too
+//      instead of being left behind.
 //
 // Expected pg_gather script filenames (assumed; see SPEC §6.13):
 //
@@ -71,6 +73,20 @@ const (
 	gatherReportSQL = "gather_report.sql"
 )
 
+// GatherDirHasScripts reports whether dir contains both pg_gather
+// scripts (gather_schema.sql and gather_report.sql). Used by the CLI
+// layer to auto-discover a --pg-gather-dir when none was configured;
+// keeping it here means the canonical filenames stay defined in one
+// place.
+func GatherDirHasScripts(dir string) bool {
+	for _, f := range []string{gatherSchemaSQL, gatherReportSQL} {
+		if st, err := os.Stat(filepath.Join(dir, f)); err != nil || st.IsDir() {
+			return false
+		}
+	}
+	return true
+}
+
 // Options captures the inputs to Generate. The CLI layer populates
 // this from flag/env/global-config resolution and hands it off; this
 // package never touches flag.FlagSet or os.Getenv itself.
@@ -80,9 +96,9 @@ type Options struct {
 	InputPath string
 
 	// OutputPath is where the rendered HTML report is written.
-	// Defaults to "report.html" in the CWD; the CLI layer fills in
-	// the default before calling Generate so this field is always
-	// populated when we get it.
+	// When empty, it defaults to "<input-base>_report.html" alongside
+	// InputPath (see validateOptions); the CLI layer normally leaves
+	// this empty and lets validateOptions derive it.
 	OutputPath string
 
 	// BinDir is the PostgreSQL bin/ directory for the throwaway
@@ -106,6 +122,12 @@ type Options struct {
 	// end of Generate, so this rarely matters; we forward it for
 	// consistency with deploy.
 	SelfPath string
+
+	// DestroyOnFailure, when true, destroys the throwaway sandbox even
+	// when the pipeline fails, instead of leaving it on disk for
+	// debugging (the default). Maps to the CLI --destroy-on-failure / -D
+	// flag. The success path always destroys the sandbox regardless.
+	DestroyOnFailure bool
 
 	// Runner, when non-nil, is used instead of pgexec.New(BinDir).
 	// Tests use this to inject a pgexec.Fake. Production callers
@@ -224,8 +246,28 @@ func Generate(ctx context.Context, opts Options, stderrW io.Writer) (*Result, er
 	cfg := deployRes.Sandbox
 
 	// From here on, any failure leaves the sandbox in place for
-	// debugging — wrap in LeftoverError.
+	// debugging — wrap in LeftoverError. With --destroy-on-failure, we
+	// instead tear the sandbox down here and return a plain error (no
+	// LeftoverError, since nothing is left behind).
 	leftover := func(inner error) error {
+		if opts.DestroyOnFailure {
+			fmt.Fprintf(stderrW, "level=INFO msg=%q dir=%q\n",
+				"report: --destroy-on-failure set; destroying throwaway sandbox after failure", throwawayDir)
+			// Detached context: the failure may itself be a ctx
+			// cancellation (SIGINT), but we still want the cleanup to
+			// run to completion.
+			cleanupCtx := context.WithoutCancel(ctx)
+			if derr := sandbox.Destroy(cleanupCtx, runner,
+				sandbox.DestroyOptions{SandboxDir: throwawayDir}, stderrW); derr != nil {
+				// Cleanup itself failed: fall back to leaving the
+				// sandbox behind so the user is told where it is.
+				fmt.Fprintf(stderrW, "level=WARN msg=%q dir=%q err=%q\n",
+					"report: --destroy-on-failure cleanup failed; sandbox left behind",
+					throwawayDir, derr.Error())
+				return &exitErr{Code: ExitReportFailed, Err: &LeftoverError{Dir: throwawayDir, Err: inner}}
+			}
+			return &exitErr{Code: ExitReportFailed, Err: inner}
+		}
 		return &exitErr{
 			Code: ExitReportFailed,
 			Err:  &LeftoverError{Dir: throwawayDir, Err: inner},
@@ -329,10 +371,15 @@ func validateOptions(opts *Options) error {
 		return &exitErr{Code: ExitUsage, Err: errors.New("report.Generate: --input is required")}
 	}
 	if opts.OutputPath == "" {
-		// Default per SPEC §6.13: report.html in CWD. The CLI layer
-		// usually fills this in; we re-apply the default here so
-		// programmatic callers get the same behavior.
-		opts.OutputPath = "report.html"
+		// Default per SPEC §6.13: alongside --input, reusing its base
+		// name with a "_report.html" suffix (e.g. .../out.txt ->
+		// .../out_report.html). InputPath is guaranteed non-empty by
+		// the check above. The CLI layer usually leaves OutputPath empty
+		// so this derivation is the single source of truth for both CLI
+		// and programmatic callers.
+		base := filepath.Base(opts.InputPath)
+		base = base[:len(base)-len(filepath.Ext(base))]
+		opts.OutputPath = filepath.Join(filepath.Dir(opts.InputPath), base+"_report.html")
 	}
 	if !filepath.IsAbs(opts.OutputPath) {
 		abs, err := filepath.Abs(opts.OutputPath)

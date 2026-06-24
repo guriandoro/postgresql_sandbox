@@ -114,5 +114,8 @@ func subscribeHelp(w io.Writer) {
 		{"-d, --dbname <name>", "Database name on both ends (default: sandbox default)"},
 	})
 	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "  --from: a bare publisher name resolves as a SIBLING of this sandbox (its")
+	fmt.Fprintln(w, "  parent dir), not under sandboxRoot; absolute paths are used as-is. See §5.2.")
+	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "See SPEC.md §6.10.")
 }

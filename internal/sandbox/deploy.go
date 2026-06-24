@@ -39,6 +39,7 @@ import (
 	"time"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/config"
+	"github.com/guriandoro/postgresql_sandbox/internal/fsutil"
 	"github.com/guriandoro/postgresql_sandbox/internal/pgexec"
 	"github.com/guriandoro/postgresql_sandbox/internal/portalloc"
 )
@@ -337,6 +338,7 @@ func normalizeDeployOptions(opts *DeployOptions) error {
 	if opts.SandboxDir == "" {
 		return wrapExit(ExitUsage, errors.New("sandbox.Deploy: SandboxDir is required"))
 	}
+	opts.SandboxDir = fsutil.ExpandTilde(opts.SandboxDir)
 	if !filepath.IsAbs(opts.SandboxDir) {
 		// Resolve to absolute up front so the config file (which
 		// requires absolute paths) doesn't error later with a
@@ -350,6 +352,7 @@ func normalizeDeployOptions(opts *DeployOptions) error {
 	if opts.BinDir == "" {
 		return wrapExit(ExitUsage, errors.New("sandbox.Deploy: BinDir is required"))
 	}
+	opts.BinDir = fsutil.ExpandTilde(opts.BinDir)
 	if !filepath.IsAbs(opts.BinDir) {
 		abs, err := filepath.Abs(opts.BinDir)
 		if err != nil {

@@ -231,14 +231,31 @@ These MAY be supplied to any command (subcommand parser MUST accept them either 
 
 ### 5.1 `--sandbox-dir` value resolution
 
-The `--sandbox-dir` / `-s` value is resolved as follows:
+A relative `--sandbox-dir` / `-s` value is interpreted as living inside the resolved `sandboxRoot` (§3.3), so the same `-s <name>` refers to the same sandbox regardless of the current working directory — UNLESS the user is explicit with a leading `./` or `../`, in which case their cwd-relative intent is honored. The value is resolved as follows:
 
 1. **Empty** — the command fails with `ExitUsage` ("--sandbox-dir is required").
-2. **The literal value already points at a sandbox** (contains `pg_sandbox.json`) **or cluster** (contains `pg_sandbox-cluster.json`) — used verbatim. Covers absolute paths, `./`-prefixed relative paths, and the historical "cd into the sandbox-root, then `-s name`" workflow.
-3. **The value contains a path separator** (`/`) but does not point at a sandbox/cluster — used verbatim and the command fails with the usual "not a sandbox / not a cluster" error. A path was an explicit user intent; the tool MUST NOT silently rewrite `./missign` to `<sandboxRoot>/missign`.
-4. **Bare name** (no separator, literal does not exist as a sandbox/cluster) — joined onto the resolved `sandboxRoot` (§3.3). If `<sandboxRoot>/<name>` is a sandbox (or cluster, for cluster commands), THAT path is used. Otherwise the bare token is used verbatim and the usual "not a sandbox / not a cluster" error fires.
+2. **Leading `~`** — expanded to the user's home directory before any other check.
+3. **Absolute path** — used verbatim.
+4. **Explicitly local** — exactly `.` or `..`, or anything starting with `./` or `../` — used verbatim (cwd-relative). The tool MUST NOT rewrite `./missing` to `<sandboxRoot>/missing`; the `./` was explicit user intent.
+5. **Bare name or other relative path** (e.g. `pub`, `sub/pub`) — joined onto the resolved `sandboxRoot` and that path is used.
 
-`deploy` and `cluster deploy` are the exception: they treat `--sandbox-dir` as the *creation target* (the path where the new sandbox/cluster will be initialized), so no bare-name lookup is performed — the value lands at `<cwd>/<value>` if relative.
+Resolution is existence-independent: the resolved path is computed the same way whether or not the target already exists. Commands that operate on an existing sandbox/cluster then run their own marker check (`pg_sandbox.json` / `pg_sandbox-cluster.json`) and fail with "not a sandbox / not a cluster: `<resolved path>`" when it is missing.
+
+`deploy` and `cluster deploy` apply the SAME resolution to `--sandbox-dir`, treating the result as the *creation target* (the path where the new sandbox/cluster will be initialized). So a bare/relative name like `-s pub` creates `<sandboxRoot>/pub`, while `-s ./pub` creates `<cwd>/pub`.
+
+### 5.2 Source-sandbox reference resolution
+
+`--replicate-from` and `--subscribe-to` (on `deploy`) and `--from` (on `subscribe`) name an **existing** source sandbox to attach to. Unlike `--sandbox-dir` (§5.1), a bare source name is resolved as a **sibling of the target sandbox being deployed**, NOT under `sandboxRoot` — because a primary and its standby (or a publisher and its subscriber) are meant to live together in whatever directory holds them, which may be outside `sandboxRoot`.
+
+The reference is resolved as follows (a leading `~` is expanded first; the resolved path must contain `pg_sandbox.json`):
+
+1. **Absolute path** — trusted as-is and checked directly. For sources in a different tree.
+2. **Relative path containing a separator** (e.g. `../other/primary`) — made absolute **relative to the cwd**, then checked. Note: any separator marks an explicit path, so there is no `./`/`../` special case here (this differs from §5.1).
+3. **Bare name** (no separator, the common case) — joined onto the **parent directory of the target sandbox** and checked. Deploying `<dir>/standby1 --replicate-from primary` looks for `<dir>/primary`.
+
+Resolution never falls through across shapes: each candidate path tried is included in the error message, and a source that can't be found / isn't a sandbox fails with `EXIT_SOURCE_UNREACHABLE`.
+
+Because `deploy -s <name>` resolves the target under `sandboxRoot` (§5.1), the bare-name sibling rule lands on `<sandboxRoot>/<source>` in the common case — i.e. `-s standby1 --replicate-from primary` finds `<sandboxRoot>/primary`, the same place `-s primary` would have created it. The two rules only diverge when the target is deployed with an explicit `./`/absolute path, where the source is sought beside that path instead.
 
 ---
 
@@ -254,8 +271,8 @@ For each command this section defines: **purpose · inputs · behavior · output
 
 - Required: `--sandbox-dir`, `--bin-dir`.
 - Optional flags: `--port`, `--host`, `--user`, `--dbname`, `--data-dir <subpath>` [`data`], `--log <subpath>` [`server.log`].
-- Physical-replication: `--replicate-from <source-sandbox>`; with `--slot <name>` (REQUIRED when `--replicate-from` is set); `--sync` (registers this standby as synchronous on the source).
-- Logical-replication: `--subscribe-to <source-sandbox>`; with `--pub-name <name>` (REQUIRED); `--sub-name <name>` (default `<this-sandbox-basename>_sub`); `--copy-schema` (`pg_dump --schema-only` from source before subscribing); `--no-copy-data` (`WITH (copy_data = false)`).
+- Physical-replication: `--replicate-from <source-sandbox>` (resolved per §5.2); with `--slot <name>` (REQUIRED when `--replicate-from` is set); `--sync` (registers this standby as synchronous on the source).
+- Logical-replication: `--subscribe-to <source-sandbox>` (resolved per §5.2); with `--pub-name <name>` (REQUIRED); `--sub-name <name>` (default `<this-sandbox-basename>_sub`); `--copy-schema` (`pg_dump --schema-only` from source before subscribing); `--no-copy-data` (`WITH (copy_data = false)`).
 
 **Behavior.**
 
@@ -392,7 +409,7 @@ This replaces the Python `setenv` and is the implementation of §3.
 
 **Purpose.** Create a logical subscription on an existing sandbox attached to a publisher.
 
-**Inputs.** `--sandbox-dir` (required); `--from <publisher-sandbox>` (required); `--pub-name <name>` (required); `--sub-name <name>` (default `<this-sandbox-basename>_sub`); `--copy-schema`; `--no-copy-data`; `--dbname <name>`.
+**Inputs.** `--sandbox-dir` (required); `--from <publisher-sandbox>` (required; resolved per §5.2); `--pub-name <name>` (required); `--sub-name <name>` (default `<this-sandbox-basename>_sub`); `--copy-schema`; `--no-copy-data`; `--dbname <name>`.
 
 **Behavior.** Optionally `pg_dump --schema-only` from publisher's chosen db into this sandbox's chosen db. Then `CREATE SUBSCRIPTION <sub-name> CONNECTION '…' PUBLICATION <pub-name> WITH (…copy_data=...)`. Update sandbox config to record the subscription.
 
@@ -440,9 +457,9 @@ Behavior:
 
 **Purpose.** Run a pg_gather analysis: spin up a throwaway sandbox, load the gather schema, ingest a captured `out.txt`, generate the HTML report, then destroy the sandbox.
 
-**Inputs.** `--input <out.txt>` (required); `--output <report.html>` (default: `report.html` in cwd); `--bin-dir <path>` (required, or resolved from global config); `--pg-gather-dir <path>` (required, or resolved from env / global config). The command refuses by default rather than auto-downloading the gather scripts: missing inputs are errors, not prompts, so there is no `--force` flag.
+**Inputs.** `--input <out.txt>` (required); `--output <path>` (optional; default: `<input-base>_report.html` written alongside `--input`, e.g. `.../out.txt` → `.../out_report.html`); `--bin-dir <path>` (required, or resolved from env / global config, or auto-resolved to the latest install under `/opt/postgresql` when unset — existing binaries only, nothing is built); `--pg-gather-dir <path>` (required, or resolved from env / global config, or auto-discovered when unset — the current working directory and each `$PATH` entry are searched for one holding both `gather_schema.sql` and `gather_report.sql`, the first match is used and logged); `--destroy-on-failure` / `-D` (optional). The command refuses by default rather than auto-downloading the gather scripts: missing inputs are errors, not prompts, so there is no `--force` flag. Auto-discovery only *finds scripts already on disk* — it never downloads them — so a fully-missing gather dir still errors with `EXIT_PG_GATHER_DIR_MISSING`. `--destroy-on-failure` is **not** a prompt-suppressor (there is no prompt): it controls failure cleanup, so it is a separate, explicitly-named flag rather than an overload of `--force`.
 
-**Behavior.** Internally calls §6.1, §6.5 (psql piping `gather_schema.sql`, then `\copy out.txt`, then `gather_report.sql > report.html`), §6.3. The throwaway sandbox uses a temp directory inside the sandbox root; on success, it is destroyed; on failure, it is left in place for debugging and the temp path is printed.
+**Behavior.** Internally calls §6.1, §6.5 (psql piping `gather_schema.sql`, then `\copy out.txt`, then `gather_report.sql > report.html`), §6.3. The throwaway sandbox uses a temp directory inside the sandbox root; on success, it is destroyed; on failure, it is left in place for debugging and the temp path is printed — unless `--destroy-on-failure` / `-D` is set, in which case it is destroyed on failure too (falling back to leaving it in place, with a warning, if that cleanup itself fails).
 
 **Failure modes.** `EXIT_REPORT_FAILED`, `EXIT_PG_GATHER_DIR_MISSING`.
 

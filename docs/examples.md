@@ -10,9 +10,9 @@ Each recipe below assumes you've exported the install root:
 export PGS_BIN_DIR=/opt/postgresql/18.4
 ```
 
-Commands that operate on an *existing* sandbox or cluster (`status`, `start`, `stop`, `restart`, `use`, `run`, `destroy`, `promote`, `publish`, `subscribe`, `config show`/`get`/`set`/`validate`, `cluster status`, `cluster destroy`) accept `-s <name>` from any working directory — the name resolves to `<sandboxRoot>/<name>` (default `~/postgresql-sandboxes/<name>`). Absolute paths and `./`-prefixed relative paths are still honored verbatim.
+A bare name or relative `-s <name>` resolves under `<sandboxRoot>` (default `~/postgresql-sandboxes/`), so the same `-s <name>` refers to the same sandbox from any working directory. Absolute paths and explicit `./`/`../`-prefixed relative paths are honored verbatim. This applies uniformly to commands that operate on an *existing* sandbox or cluster (`status`, `start`, `stop`, `restart`, `use`, `run`, `destroy`, `promote`, `publish`, `subscribe`, `config show`/`get`/`set`/`validate`, `cluster status`, `cluster destroy`).
 
-`deploy` and `cluster deploy` use `-s` as the *creation target*: a bare name lands under the current directory. To create new sandboxes under the default root, `cd ~/postgresql-sandboxes/` first.
+`deploy` and `cluster deploy` use the same resolution for the *creation target*: `-s pub` creates `<sandboxRoot>/pub`, while `-s ./pub` creates `pub` under the current directory.
 
 ## Build the version from source
 
@@ -65,6 +65,8 @@ pg_sandbox status -s primary
 pg_sandbox promote -s standby1
 ```
 
+The `--replicate-from primary` reference resolves as a **sibling of the standby being created** (the standby's parent dir), not under `sandboxRoot` directly — so a primary/standby pair stays together wherever you put it. In the common case above both land under `sandboxRoot`, so the bare name `primary` resolves to `<sandboxRoot>/primary` exactly as `-s primary` created it. Absolute paths and separator-bearing relative paths (cwd-relative) are also accepted. See SPEC §5.2.
+
 ## Logical pub/sub
 
 ```sh
@@ -111,7 +113,19 @@ pg_sandbox config migrate -s legacy-sandbox
 ## `pg_gather` report
 
 ```sh
+# No --bin-dir needed: the latest install under /opt/postgresql is
+# used automatically (existing binaries only — nothing is built).
+# Pass --bin-dir / PGS_BIN_DIR to pin a specific version.
+#
+# No --pg-gather-dir needed either when the gather scripts
+# (gather_schema.sql + gather_report.sql) are in the current directory
+# or on $PATH: pg_sandbox auto-discovers them and logs which dir it
+# used. Pass --pg-gather-dir / PGS_PG_GATHER_DIR to point elsewhere.
 pg_sandbox report --input /path/to/out.txt --output ./gather.html
+
+# Clean up the throwaway sandbox even if report generation fails
+# (default: a failed run leaves it on disk for debugging).
+pg_sandbox report --input /path/to/out.txt --output ./gather.html --destroy-on-failure
 ```
 
 ## Cross-host overview

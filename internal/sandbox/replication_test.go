@@ -59,6 +59,27 @@ func TestResolveSourceSandboxAbsolute(t *testing.T) {
 	}
 }
 
+func TestResolveSourceSandboxTilde(t *testing.T) {
+	// A "~/..." source must expand to HOME before the absolute-path
+	// branch runs; otherwise filepath.IsAbs("~/...") is false and the
+	// path silently resolves cwd-relative or as a sibling.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+
+	src := filepath.Join(home, "sandboxes", "primary")
+	mustWriteEmptySandbox(t, src, "primary")
+
+	tgt := filepath.Join(t.TempDir(), "standby1") // unrelated parent
+	got, err := resolveSourceSandbox(tgt, "~/sandboxes/primary")
+	if err != nil {
+		t.Fatalf("resolveSourceSandbox: %v", err)
+	}
+	if got != filepath.Clean(src) {
+		t.Errorf("resolved path: got %q, want %q", got, src)
+	}
+}
+
 func TestResolveSourceSandboxMissing(t *testing.T) {
 	root := t.TempDir()
 	tgt := filepath.Join(root, "standby1")

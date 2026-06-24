@@ -18,7 +18,7 @@ The flag always wins. Setting an env var lets you avoid repeating the same flag 
 | `PGS_PORT` | Default port for new sandboxes | `65432` |
 | `PGS_USER` | Default PG superuser | `postgres` |
 | `PGS_DBNAME` | Default database name | `postgres` |
-| `PGS_PG_GATHER_DIR` | `pg_gather` scripts location (used by `report`) | (none) |
+| `PGS_PG_GATHER_DIR` | `pg_gather` scripts location (used by `report`) | (none; falls back to discovering the scripts in the current dir or on `$PATH`) |
 | `PGS_BUILD_DIR` | Build scratch directory (used by `build`) | `$TMPDIR/pg_sandbox-build/` |
 | `PGS_BUILD_DEBUG` | Set to `1` to retain the build scratch tree and surface raw `./configure` / `make` output. Narrow scope — only `build` reads it. | unset |
 | `PGS_DEBUG` | Set non-empty to behave as if `--debug` was passed (debug-level logging plus `# exec:` traces for every external command). The flag wins when both are present; `--quiet` always wins over both. | unset |

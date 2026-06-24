@@ -40,10 +40,114 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/config"
+	"github.com/guriandoro/postgresql_sandbox/internal/fsutil"
 )
+
+// defaultInstallBase is the conventional parent dir holding one subdir
+// per installed PostgreSQL version (16.5, 17.4, 18.3, ...). It mirrors
+// the built-in default resolveBinDir falls back to, but is kept as a
+// package var (not a const) so tests can point discovery at a temp dir
+// instead of the real /opt/postgresql.
+var defaultInstallBase = "/opt/postgresql"
+
+// latestInstalledBinDir scans base for version-shaped subdirs that
+// contain a runnable bin/psql and returns the path + version of the
+// numerically-highest one. ok is false when base is missing/unreadable
+// or holds no usable install. This is discovery only — it never builds
+// anything.
+//
+// Used by `report`, which (unlike deploy/build) takes no <version>
+// argument: when no --bin-dir / PGS_BIN_DIR / global defaultBinDir is
+// supplied we pick the newest install under base rather than erroring,
+// so a bare `pg_sandbox report --input out.txt` works out of the box.
+//
+// "Usable" means bin/psql is executable: the report only ever runs
+// initdb / pg_ctl / psql, all in the same bin/, so psql's presence is
+// a sufficient marker and skips partial or broken installs. Version
+// comparison is numeric and element-wise (NOT the lexicographic sort
+// cleanup uses) so 17.10 correctly outranks 17.9.
+func latestInstalledBinDir(base string) (path, version string, ok bool) {
+	entries, err := os.ReadDir(base)
+	if err != nil {
+		return "", "", false
+	}
+	var bestName string
+	var bestKey []int
+	for _, e := range entries {
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
+			continue
+		}
+		key, parsed := parseVersionKey(e.Name())
+		if !parsed {
+			continue
+		}
+		if !isExecutableFile(filepath.Join(base, e.Name(), "bin", "psql")) {
+			continue
+		}
+		if bestName == "" || versionKeyLess(bestKey, key) {
+			bestName, bestKey = e.Name(), key
+		}
+	}
+	if bestName == "" {
+		return "", "", false
+	}
+	return filepath.Join(base, bestName), bestName, true
+}
+
+// parseVersionKey splits a dir name like "17.4" (or "17", "9.6.24")
+// into its numeric components. Returns ok=false for anything that
+// isn't purely dot-separated non-negative integers, which excludes
+// stray dirs like "src" or "build" from version discovery.
+func parseVersionKey(name string) (key []int, ok bool) {
+	parts := strings.Split(name, ".")
+	key = make([]int, len(parts))
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return nil, false
+		}
+		key[i] = n
+	}
+	return key, true
+}
+
+// versionKeyLess reports whether a sorts before b, comparing
+// element-wise and treating a missing component as 0 (so "17" < "17.1"
+// and "17.9" < "17.10").
+func versionKeyLess(a, b []int) bool {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		var av, bv int
+		if i < len(a) {
+			av = a[i]
+		}
+		if i < len(b) {
+			bv = b[i]
+		}
+		if av != bv {
+			return av < bv
+		}
+	}
+	return false
+}
+
+// isExecutableFile reports whether path is a regular, runnable file.
+// Mirrors pgexec.isExecutable (kept local to avoid widening that
+// package's API for a CLI-layer concern).
+func isExecutableFile(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil || st.IsDir() {
+		return false
+	}
+	return st.Mode()&0o111 != 0
+}
 
 // resolveBinDir picks the install root from the layered chain:
 //
@@ -68,6 +172,7 @@ func resolveBinDir(flagValue string, globalCfg *config.Global) (string, error) {
 	if v == "" {
 		v = "/opt/postgresql"
 	}
+	v = fsutil.ExpandTilde(v)
 	if abs, err := filepath.Abs(v); err == nil {
 		v = abs
 	}
@@ -104,6 +209,7 @@ func resolveSandboxRoot(flagValue string, globalCfg *config.Global) (string, err
 		}
 		v = filepath.Join(home, "postgresql-sandboxes")
 	}
+	v = fsutil.ExpandTilde(v)
 	if abs, err := filepath.Abs(v); err == nil {
 		v = abs
 	}
@@ -129,83 +235,73 @@ func loadGlobalConfig() *config.Global {
 	return g
 }
 
-// resolveSandboxArg lets per-sandbox commands accept a bare sandbox
-// name in addition to a path. The original surface (`-s ./pg18`,
-// `-s /abs/path/pg18`) is preserved; the new surface (`-s pg18` from
-// any working directory) is additive.
+// resolveSandboxArg maps a raw -s value to the directory the command
+// should operate on. A relative value is interpreted as living inside
+// the configured sandboxRoot (§3.3) — UNLESS the user was explicit
+// with a leading "./" / "../" (or "." / ".."), in which case their
+// cwd-relative intent is honored. This is what makes `deploy -s pub`
+// (create at <sandboxRoot>/pub) and `use -s pub` (find it there) agree
+// regardless of the current working directory.
 //
-// Resolution order — strictly local-first, so no existing invocation
-// changes behavior:
+// Resolution order:
 //
 //  1. Empty → return "" so the caller's "--sandbox-dir is required"
 //     check fires unchanged.
-//  2. The literal value already resolves to a sandbox dir → return
-//     it untouched. This covers `-s .`, `-s ./pg18`, `-s /abs/path`,
-//     and the historical "cd into the sandbox-root, then -s name"
-//     workflow.
-//  3. The value contains a path separator → return untouched. The
-//     user wrote a path; let the existing IsSandboxDir + error path
-//     speak for themselves (this avoids `-s ./missing` silently
-//     resolving to a same-named sandbox under sandboxRoot).
-//  4. Bare name → join onto the resolved sandboxRoot and return THAT
-//     if it's a sandbox dir; otherwise return the original (so the
-//     caller's existing "not a sandbox: <name>" error fires with
-//     the user-typed token, not the joined path).
+//  2. Expand a leading "~" (Go's path libs treat "~" as an ordinary
+//     byte, so this must happen before the IsAbs check below).
+//  3. Absolute path → return as-is.
+//  4. Explicitly local (".", "..", "./…", "../…") → return as-is. The
+//     user opted into cwd-relative resolution; e.g. `-s ./pub` lands
+//     at <cwd>/pub and `-s ./missing` is NOT rewritten to a same-named
+//     sandbox under sandboxRoot.
+//  5. Otherwise (bare name like "pub", or a relative path without a
+//     leading-dot segment like "sub/pub") → join onto the resolved
+//     sandboxRoot and return THAT.
+//
+// Resolution is existence-independent: the returned path is not gated
+// on the target already being a sandbox. That lets the same helper
+// serve `deploy` (creating a new dir) and the read commands, which run
+// their own IsSandboxDir check afterward and emit "not a sandbox:
+// <resolved path>" if it's missing.
 //
 // Best-effort: any failure to determine sandboxRoot (e.g. HOME unset
-// AND no flag/env/global value) is swallowed by returning the input
-// untouched. The point of this helper is convenience, not a new
-// failure surface.
+// AND no flag/env/global value) is swallowed by returning the
+// tilde-expanded input untouched. The point of this helper is
+// convenience, not a new failure surface.
 func resolveSandboxArg(raw string, globalCfg *config.Global) string {
 	if raw == "" {
 		return raw
 	}
-	if config.IsSandboxDir(raw) {
+	raw = fsutil.ExpandTilde(raw)
+	if filepath.IsAbs(raw) {
 		return raw
 	}
-	if strings.ContainsRune(raw, filepath.Separator) {
+	if isExplicitlyLocal(raw) {
 		return raw
 	}
 	root, err := resolveSandboxRoot("", globalCfg)
 	if err != nil {
 		return raw
 	}
-	candidate := filepath.Join(root, raw)
-	if config.IsSandboxDir(candidate) {
-		return candidate
-	}
-	return raw
+	return filepath.Join(root, raw)
 }
 
-// resolveClusterArg is the cluster sibling of resolveSandboxArg —
-// same local-first / has-separator-passes-through / bare-name-under-
-// sandboxRoot rules, gated on config.IsClusterDir instead of
-// IsSandboxDir. Used by `cluster status` and `cluster destroy` so
-// `pg_sandbox cluster status -s mycluster` works from any cwd.
-//
-// We keep this as a separate helper rather than parametrising
-// resolveSandboxArg on a predicate: the two markers live in
-// different schema files (pg_sandbox.json vs pg_sandbox-cluster.json)
-// and the SPEC treats sandboxes and clusters as distinct surfaces,
-// so a typed helper per surface reads better at the call sites than
-// a generic one would.
+// resolveClusterArg is the cluster-surface name for resolveSandboxArg.
+// The two surfaces resolve `-s` identically (the sandbox/cluster
+// marker check happens at the call site, not here), so this is a thin
+// alias kept for readability at the `cluster …` call sites.
 func resolveClusterArg(raw string, globalCfg *config.Global) string {
-	if raw == "" {
-		return raw
+	return resolveSandboxArg(raw, globalCfg)
+}
+
+// isExplicitlyLocal reports whether p is a cwd-relative path the user
+// wrote explicitly: exactly "." or "..", or anything beginning with a
+// "./" or "../" segment. These bypass the sandboxRoot join so the
+// user's stated intent is honored verbatim.
+func isExplicitlyLocal(p string) bool {
+	if p == "." || p == ".." {
+		return true
 	}
-	if config.IsClusterDir(raw) {
-		return raw
-	}
-	if strings.ContainsRune(raw, filepath.Separator) {
-		return raw
-	}
-	root, err := resolveSandboxRoot("", globalCfg)
-	if err != nil {
-		return raw
-	}
-	candidate := filepath.Join(root, raw)
-	if config.IsClusterDir(candidate) {
-		return candidate
-	}
-	return raw
+	sep := string(filepath.Separator)
+	return strings.HasPrefix(p, "."+sep) || strings.HasPrefix(p, ".."+sep)
 }

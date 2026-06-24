@@ -72,6 +72,45 @@ func writeStubInput(t *testing.T) string {
 }
 
 // ----------------------------------------------------------------- //
+// GatherDirHasScripts
+// ----------------------------------------------------------------- //
+
+func TestGatherDirHasScripts(t *testing.T) {
+	// Both scripts present → true.
+	if !GatherDirHasScripts(writeStubGatherDir(t)) {
+		t.Fatal("expected true for a dir with both gather scripts")
+	}
+
+	// Only one script present → false.
+	onlySchema := t.TempDir()
+	if err := os.WriteFile(filepath.Join(onlySchema, gatherSchemaSQL),
+		[]byte("-- stub\n"), 0o644); err != nil {
+		t.Fatalf("write schema stub: %v", err)
+	}
+	if GatherDirHasScripts(onlySchema) {
+		t.Fatal("expected false when only gather_schema.sql is present")
+	}
+
+	// Empty dir → false.
+	if GatherDirHasScripts(t.TempDir()) {
+		t.Fatal("expected false for an empty dir")
+	}
+
+	// A directory named like a script must not count as the file.
+	dirNamedScript := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dirNamedScript, gatherSchemaSQL), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dirNamedScript, gatherReportSQL),
+		[]byte("-- stub\n"), 0o644); err != nil {
+		t.Fatalf("write report stub: %v", err)
+	}
+	if GatherDirHasScripts(dirNamedScript) {
+		t.Fatal("expected false when gather_schema.sql is a directory")
+	}
+}
+
+// ----------------------------------------------------------------- //
 // validateOptions
 // ----------------------------------------------------------------- //
 
@@ -133,8 +172,8 @@ func TestValidateOptionsDefaultsOutput(t *testing.T) {
 	if err := validateOptions(&opts); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	if !strings.HasSuffix(opts.OutputPath, "report.html") {
-		t.Errorf("default output should end with report.html, got %q", opts.OutputPath)
+	if want := "/tmp/in_report.html"; opts.OutputPath != want {
+		t.Errorf("default output: got %q, want %q", opts.OutputPath, want)
 	}
 }
 
@@ -319,6 +358,51 @@ func TestGenerateSchemaLoadFailureLeavesSandbox(t *testing.T) {
 	}
 	if le != nil && !strings.Contains(le.Dir, "_report_") {
 		t.Errorf("throwaway dir doesn't look like _report_*: %q", le.Dir)
+	}
+}
+
+// TestGenerateSchemaLoadFailureDestroyOnFailure mirrors the test above
+// but with DestroyOnFailure set: the same schema-load failure should
+// still return ExitReportFailed, but the throwaway sandbox must be torn
+// down (no LeftoverError, no _report_* dir left under the root).
+func TestGenerateSchemaLoadFailureDestroyOnFailure(t *testing.T) {
+	gatherDir := writeStubGatherDir(t)
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	_ = os.MkdirAll(binDir, 0o755)
+	in := writeStubInput(t)
+
+	runner := fakeRunnerCannedPsql(nil, []byte("ERROR: simulated\n"), 3)
+
+	_, err := Generate(context.Background(), Options{
+		InputPath:        in,
+		OutputPath:       filepath.Join(root, "report.html"),
+		BinDir:           binDir,
+		PgGatherDir:      gatherDir,
+		SandboxRoot:      root,
+		Runner:           runner,
+		DestroyOnFailure: true,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("expected schema-load failure")
+	}
+	if got := ExitCodeFor(err); got != ui.ExitReportFailed {
+		t.Errorf("exit code: got %d, want %d", got, ui.ExitReportFailed)
+	}
+	// Cleanup happened, so there must be NO LeftoverError in the chain.
+	var le *LeftoverError
+	if errors.As(err, &le) {
+		t.Errorf("did not expect LeftoverError after --destroy-on-failure cleanup; got dir %q", le.Dir)
+	}
+	// And no throwaway sandbox dir should survive under the root.
+	entries, rerr := os.ReadDir(root)
+	if rerr != nil {
+		t.Fatalf("read root: %v", rerr)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "_report_") {
+			t.Errorf("throwaway sandbox %q survived --destroy-on-failure", e.Name())
+		}
 	}
 }
 
