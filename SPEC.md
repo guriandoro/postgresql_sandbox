@@ -243,6 +243,20 @@ Resolution is existence-independent: the resolved path is computed the same way 
 
 `deploy` and `cluster deploy` apply the SAME resolution to `--sandbox-dir`, treating the result as the *creation target* (the path where the new sandbox/cluster will be initialized). So a bare/relative name like `-s pub` creates `<sandboxRoot>/pub`, while `-s ./pub` creates `<cwd>/pub`.
 
+### 5.2 Source-sandbox reference resolution
+
+`--replicate-from` and `--subscribe-to` (on `deploy`) and `--from` (on `subscribe`) name an **existing** source sandbox to attach to. Unlike `--sandbox-dir` (§5.1), a bare source name is resolved as a **sibling of the target sandbox being deployed**, NOT under `sandboxRoot` — because a primary and its standby (or a publisher and its subscriber) are meant to live together in whatever directory holds them, which may be outside `sandboxRoot`.
+
+The reference is resolved as follows (a leading `~` is expanded first; the resolved path must contain `pg_sandbox.json`):
+
+1. **Absolute path** — trusted as-is and checked directly. For sources in a different tree.
+2. **Relative path containing a separator** (e.g. `../other/primary`) — made absolute **relative to the cwd**, then checked. Note: any separator marks an explicit path, so there is no `./`/`../` special case here (this differs from §5.1).
+3. **Bare name** (no separator, the common case) — joined onto the **parent directory of the target sandbox** and checked. Deploying `<dir>/standby1 --replicate-from primary` looks for `<dir>/primary`.
+
+Resolution never falls through across shapes: each candidate path tried is included in the error message, and a source that can't be found / isn't a sandbox fails with `EXIT_SOURCE_UNREACHABLE`.
+
+Because `deploy -s <name>` resolves the target under `sandboxRoot` (§5.1), the bare-name sibling rule lands on `<sandboxRoot>/<source>` in the common case — i.e. `-s standby1 --replicate-from primary` finds `<sandboxRoot>/primary`, the same place `-s primary` would have created it. The two rules only diverge when the target is deployed with an explicit `./`/absolute path, where the source is sought beside that path instead.
+
 ---
 
 ## 6. Commands (Phase 1)
@@ -257,8 +271,8 @@ For each command this section defines: **purpose · inputs · behavior · output
 
 - Required: `--sandbox-dir`, `--bin-dir`.
 - Optional flags: `--port`, `--host`, `--user`, `--dbname`, `--data-dir <subpath>` [`data`], `--log <subpath>` [`server.log`].
-- Physical-replication: `--replicate-from <source-sandbox>`; with `--slot <name>` (REQUIRED when `--replicate-from` is set); `--sync` (registers this standby as synchronous on the source).
-- Logical-replication: `--subscribe-to <source-sandbox>`; with `--pub-name <name>` (REQUIRED); `--sub-name <name>` (default `<this-sandbox-basename>_sub`); `--copy-schema` (`pg_dump --schema-only` from source before subscribing); `--no-copy-data` (`WITH (copy_data = false)`).
+- Physical-replication: `--replicate-from <source-sandbox>` (resolved per §5.2); with `--slot <name>` (REQUIRED when `--replicate-from` is set); `--sync` (registers this standby as synchronous on the source).
+- Logical-replication: `--subscribe-to <source-sandbox>` (resolved per §5.2); with `--pub-name <name>` (REQUIRED); `--sub-name <name>` (default `<this-sandbox-basename>_sub`); `--copy-schema` (`pg_dump --schema-only` from source before subscribing); `--no-copy-data` (`WITH (copy_data = false)`).
 
 **Behavior.**
 
@@ -395,7 +409,7 @@ This replaces the Python `setenv` and is the implementation of §3.
 
 **Purpose.** Create a logical subscription on an existing sandbox attached to a publisher.
 
-**Inputs.** `--sandbox-dir` (required); `--from <publisher-sandbox>` (required); `--pub-name <name>` (required); `--sub-name <name>` (default `<this-sandbox-basename>_sub`); `--copy-schema`; `--no-copy-data`; `--dbname <name>`.
+**Inputs.** `--sandbox-dir` (required); `--from <publisher-sandbox>` (required; resolved per §5.2); `--pub-name <name>` (required); `--sub-name <name>` (default `<this-sandbox-basename>_sub`); `--copy-schema`; `--no-copy-data`; `--dbname <name>`.
 
 **Behavior.** Optionally `pg_dump --schema-only` from publisher's chosen db into this sandbox's chosen db. Then `CREATE SUBSCRIPTION <sub-name> CONNECTION '…' PUBLICATION <pub-name> WITH (…copy_data=...)`. Update sandbox config to record the subscription.
 

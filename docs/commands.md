@@ -56,6 +56,8 @@ These are *not* global — each command parses its own flag set — but they app
 - `publish --pub-name <name> [--all-tables | --tables T1,T2,...]`
 - `subscribe --from <publisher> --pub-name <name> [--copy-schema] [--no-copy-data]`
 
+> **Source references.** Unlike `-s` (resolved under `sandboxRoot`), a source-sandbox reference — `deploy --replicate-from` / `--subscribe-to` and `subscribe --from` — resolves a bare name as a **sibling of the target sandbox** (joined onto the target's parent dir), so a primary/standby (or publisher/subscriber) pair stays together wherever it lives. Absolute paths are used as-is; any relative path containing a separator is cwd-relative (no `./` special case here). The source must already exist. See SPEC §5.2.
+
 ### Cluster orchestration
 - `cluster deploy -N <n> [--sync-count <k>] [--logical] [--init-sql <file>]` — `--sync-count` is accepted but currently treated as async in this slice; the first K members will be reported async until sync wiring lands.
 - `cluster status` (`--json` supported)

@@ -65,6 +65,8 @@ pg_sandbox status -s primary
 pg_sandbox promote -s standby1
 ```
 
+The `--replicate-from primary` reference resolves as a **sibling of the standby being created** (the standby's parent dir), not under `sandboxRoot` directly — so a primary/standby pair stays together wherever you put it. In the common case above both land under `sandboxRoot`, so the bare name `primary` resolves to `<sandboxRoot>/primary` exactly as `-s primary` created it. Absolute paths and separator-bearing relative paths (cwd-relative) are also accepted. See SPEC §5.2.
+
 ## Logical pub/sub
 
 ```sh

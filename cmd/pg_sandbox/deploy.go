@@ -228,6 +228,9 @@ func deployHelp(w io.Writer) {
 	fmt.Fprintln(w, "  PGS_BIN_DIR fills in --bin-dir; PGS_* also supplies defaults for host/port/user/dbname.")
 	fmt.Fprintln(w, "  -s: a bare name or relative path is created under sandboxRoot; an explicit")
 	fmt.Fprintln(w, "  ./ or ../ prefix (or an absolute path) is honored as-is.")
+	fmt.Fprintln(w, "  --replicate-from / --subscribe-to: a bare source name resolves as a SIBLING")
+	fmt.Fprintln(w, "  of the new sandbox (its parent dir), not under sandboxRoot. The source must")
+	fmt.Fprintln(w, "  already exist. See SPEC.md §5.2.")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "See SPEC.md §6.1 for the full behavior; docs/examples.md for end-to-end recipes.")
 }
