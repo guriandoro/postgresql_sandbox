@@ -96,9 +96,9 @@ type Options struct {
 	InputPath string
 
 	// OutputPath is where the rendered HTML report is written.
-	// Defaults to "report.html" in the CWD; the CLI layer fills in
-	// the default before calling Generate so this field is always
-	// populated when we get it.
+	// When empty, it defaults to "<input-base>_report.html" alongside
+	// InputPath (see validateOptions); the CLI layer normally leaves
+	// this empty and lets validateOptions derive it.
 	OutputPath string
 
 	// BinDir is the PostgreSQL bin/ directory for the throwaway
@@ -371,10 +371,15 @@ func validateOptions(opts *Options) error {
 		return &exitErr{Code: ExitUsage, Err: errors.New("report.Generate: --input is required")}
 	}
 	if opts.OutputPath == "" {
-		// Default per SPEC §6.13: report.html in CWD. The CLI layer
-		// usually fills this in; we re-apply the default here so
-		// programmatic callers get the same behavior.
-		opts.OutputPath = "report.html"
+		// Default per SPEC §6.13: alongside --input, reusing its base
+		// name with a "_report.html" suffix (e.g. .../out.txt ->
+		// .../out_report.html). InputPath is guaranteed non-empty by
+		// the check above. The CLI layer usually leaves OutputPath empty
+		// so this derivation is the single source of truth for both CLI
+		// and programmatic callers.
+		base := filepath.Base(opts.InputPath)
+		base = base[:len(base)-len(filepath.Ext(base))]
+		opts.OutputPath = filepath.Join(filepath.Dir(opts.InputPath), base+"_report.html")
 	}
 	if !filepath.IsAbs(opts.OutputPath) {
 		abs, err := filepath.Abs(opts.OutputPath)

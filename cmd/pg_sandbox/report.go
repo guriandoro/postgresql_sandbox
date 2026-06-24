@@ -57,7 +57,7 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		destroyOnFailure bool
 	)
 	fs.StringVar(&inputPath, "input", "", "Captured pg_gather out.txt (required)")
-	fs.StringVar(&outputPath, "output", "", "Rendered HTML output path (default report.html in CWD)")
+	fs.StringVar(&outputPath, "output", "", "Rendered HTML output path (default <input>_report.html next to --input)")
 	fs.StringVar(&binDir, "bin-dir", "", "PostgreSQL bin/ directory (or set PGS_BIN_DIR; defaults to the latest install under /opt/postgresql)")
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
 	fs.StringVar(&pgGatherDir, "pg-gather-dir", "", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / pgGatherDir in global config)")
@@ -81,10 +81,9 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 		return ui.ExitUsage.Int()
 	}
 
-	// Resolve --output. Default report.html in CWD per SPEC §6.13.
-	if outputPath == "" {
-		outputPath = "report.html"
-	}
+	// --output is optional. When unset it's left empty here and the
+	// report layer derives the default ("<input-base>_report.html"
+	// alongside --input) in validateOptions. See SPEC §6.13.
 
 	// Layered global config + env for bin-dir, pg-gather-dir,
 	// sandbox-root. bin-dir is open-coded here (not via resolveBinDir)
@@ -172,10 +171,16 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 			inputPath = abs
 		}
 	}
-	outputPath = fsutil.ExpandTilde(outputPath)
-	if !filepath.IsAbs(outputPath) {
-		if abs, err := filepath.Abs(outputPath); err == nil {
-			outputPath = abs
+	// Only normalise --output when the user supplied one. An empty value
+	// is passed through so report.validateOptions can derive the default
+	// from --input — and filepath.Abs("") would otherwise resolve to the
+	// CWD, turning the empty default into a directory path.
+	if outputPath != "" {
+		outputPath = fsutil.ExpandTilde(outputPath)
+		if !filepath.IsAbs(outputPath) {
+			if abs, err := filepath.Abs(outputPath); err == nil {
+				outputPath = abs
+			}
 		}
 	}
 
@@ -249,7 +254,7 @@ func reportHelp(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Loads a captured pg_gather out.txt into a throwaway sandbox, runs the gather")
 	fmt.Fprintln(w, "report scripts against it, and writes the rendered HTML to --output (default")
-	fmt.Fprintln(w, "report.html in CWD). Prints the output path on stdout.")
+	fmt.Fprintln(w, "<input>_report.html next to --input). Prints the output path on stdout.")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "When no bin-dir is given, the latest PostgreSQL install under /opt/postgresql")
 	fmt.Fprintln(w, "is used automatically (existing binaries only — nothing is built).")
@@ -259,7 +264,7 @@ func reportHelp(w io.Writer) {
 	fmt.Fprintln(w, "Flags:")
 	writeHelpFlags(w, []helpFlag{
 		{"    --input <path>", "Captured pg_gather out.txt (required)"},
-		{"    --output <path>", "Rendered HTML output path (default report.html in CWD)"},
+		{"    --output <path>", "Rendered HTML output path (default <input>_report.html next to --input)"},
 		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (or set PGS_BIN_DIR / global defaultBinDir; defaults to the latest install under /opt/postgresql)"},
 		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir; auto-discovered from CWD and $PATH when unset)"},
 		{"    --root <dir>", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)"},

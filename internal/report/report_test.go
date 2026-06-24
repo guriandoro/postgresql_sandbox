@@ -172,8 +172,8 @@ func TestValidateOptionsDefaultsOutput(t *testing.T) {
 	if err := validateOptions(&opts); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
-	if !strings.HasSuffix(opts.OutputPath, "report.html") {
-		t.Errorf("default output should end with report.html, got %q", opts.OutputPath)
+	if want := "/tmp/in_report.html"; opts.OutputPath != want {
+		t.Errorf("default output: got %q, want %q", opts.OutputPath, want)
 	}
 }
 
