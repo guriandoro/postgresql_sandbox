@@ -33,7 +33,7 @@ re-verified — re-confirm the failure mode before fixing.
 |--------|--------|----------------------------------------------------------------|-----------|
 | HIGH-1 | high   | Stale postmaster.pid wedges start/stop/restart                 | fixed     |
 | HIGH-2 | high   | PG* env shadowed by user's shell in `run`/`use` (syscall.Exec) | fixed     |
-| HIGH-3 | high   | Shared predictable /tmp build dir + unverified tarball cache   | not-fixed |
+| HIGH-3 | high   | Shared predictable /tmp build dir + unverified tarball cache   | fixed |
 | HIGH-4 | high   | `report` executes untrusted input via psql meta-commands       | not-fixed |
 | MED-1  | medium | Report render step treats psql failure as success              | not-fixed |
 | MED-2  | medium | NormalizeString lets invalid chars into replication slot names | not-fixed |
@@ -207,9 +207,9 @@ preserved, no duplicate keys in output. Integration-ish: set a fake
 
 ```yaml
 id: HIGH-3
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: 4860738
+fixed-date: 2026-07-25
 severity: high
 type: security (supply chain, multi-user hosts)
 files:
