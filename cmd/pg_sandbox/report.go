@@ -12,12 +12,16 @@
 // prompt, so there is no prompt to suppress and no --force flag.
 //
 // We DO auto-discover scripts already on disk: when --pg-gather-dir /
-// PGS_PG_GATHER_DIR / global pgGatherDir are all unset, we look in the
-// current working directory and each $PATH entry for a directory
-// holding both gather scripts and use the first match (logging it).
-// That's discovery of existing files, not a download, so it doesn't
-// contradict the SPEC's no-auto-download stance — it mirrors the
-// latest-install bin-dir discovery above it.
+// PGS_PG_GATHER_DIR / global pgGatherDir are all unset, we look in
+// each $PATH entry for a directory holding both gather scripts and
+// use the first match (logging it). That's discovery of existing
+// files, not a download, so it doesn't contradict the SPEC's
+// no-auto-download stance — it mirrors the latest-install bin-dir
+// discovery above it. The current working directory is deliberately
+// NOT searched: `report` is typically run from inside an extracted
+// (untrusted) support bundle, and a bundle shipping planted gather
+// scripts must never get them silently executed (see the trust-model
+// notes in internal/report).
 //
 // There IS a --destroy-on-failure / -D flag, but it does NOT suppress a
 // prompt: it controls failure cleanup. On success the throwaway sandbox
@@ -126,8 +130,8 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 	}
 
 	// pg-gather-dir resolution: flag → PGS_PG_GATHER_DIR env →
-	// global.PgGatherDir → auto-discovery (CWD + $PATH). Empty
-	// everywhere → ExitPgGatherDirMissing.
+	// global.PgGatherDir → auto-discovery ($PATH only; never the
+	// CWD). Empty everywhere → ExitPgGatherDirMissing.
 	if pgGatherDir == "" {
 		pgGatherDir = os.Getenv("PGS_PG_GATHER_DIR")
 	}
@@ -224,17 +228,16 @@ func runReport(args []string, stdout, stderr io.Writer) int {
 
 // discoverPgGatherDir looks for a directory containing both pg_gather
 // scripts when --pg-gather-dir / PGS_PG_GATHER_DIR / global pgGatherDir
-// were all unset. It checks the current working directory first, then
-// each entry in $PATH. Returns "" if no candidate qualifies. Env/CWD
-// access lives here in the CLI layer; the internal/report package only
-// exposes the filename-aware GatherDirHasScripts check.
+// were all unset. It checks each entry in $PATH. The current working
+// directory is deliberately NOT consulted: analysts typically run
+// `report` from inside an extracted (untrusted) support bundle, and a
+// bundle that ships planted gather_schema.sql / gather_report.sql
+// files must not get them silently executed (see the trust-model
+// notes in internal/report). Returns "" if no candidate qualifies.
+// Env access lives here in the CLI layer; the internal/report package
+// only exposes the filename-aware GatherDirHasScripts check.
 func discoverPgGatherDir() string {
-	var candidates []string
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, cwd)
-	}
-	candidates = append(candidates, filepath.SplitList(os.Getenv("PATH"))...)
-	for _, dir := range candidates {
+	for _, dir := range filepath.SplitList(os.Getenv("PATH")) {
 		if dir == "" {
 			continue
 		}
@@ -258,15 +261,20 @@ func reportHelp(w io.Writer) {
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "When no bin-dir is given, the latest PostgreSQL install under /opt/postgresql")
 	fmt.Fprintln(w, "is used automatically (existing binaries only — nothing is built).")
-	fmt.Fprintln(w, "When no pg-gather-dir is given, the current directory and each $PATH entry are")
-	fmt.Fprintln(w, "searched for one holding gather_schema.sql + gather_report.sql.")
+	fmt.Fprintln(w, "When no pg-gather-dir is given, each $PATH entry is searched for one holding")
+	fmt.Fprintln(w, "gather_schema.sql + gather_report.sql (never the current directory — support")
+	fmt.Fprintln(w, "bundles are untrusted).")
+	fmt.Fprintln(w, "")
+	fmt.Fprintln(w, "The out.txt is treated as untrusted input: it is pre-scanned and refused if it")
+	fmt.Fprintln(w, "contains psql meta-commands or COPY ... PROGRAM constructs a genuine pg_gather")
+	fmt.Fprintln(w, "capture never produces.")
 	fmt.Fprintln(w, "")
 	fmt.Fprintln(w, "Flags:")
 	writeHelpFlags(w, []helpFlag{
 		{"    --input <path>", "Captured pg_gather out.txt (required)"},
 		{"    --output <path>", "Rendered HTML output path (default <input>_report.html next to --input)"},
 		{"-b, --bin-dir <dir>", "PostgreSQL bin/ directory (or set PGS_BIN_DIR / global defaultBinDir; defaults to the latest install under /opt/postgresql)"},
-		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir; auto-discovered from CWD and $PATH when unset)"},
+		{"    --pg-gather-dir <dir>", "Directory with pg_gather scripts (or set PGS_PG_GATHER_DIR / global pgGatherDir; auto-discovered from $PATH when unset)"},
 		{"    --root <dir>", "Sandbox root for the throwaway sandbox (default $PGS_SANDBOX_ROOT or ~/postgresql-sandboxes/)"},
 		{"-D, --destroy-on-failure", "Destroy the throwaway sandbox even if report generation fails (default: keep it for debugging)"},
 	})

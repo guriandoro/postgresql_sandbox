@@ -27,34 +27,30 @@ func writeGatherScripts(t *testing.T, dir string) {
 }
 
 func TestDiscoverPgGatherDir(t *testing.T) {
-	// discoverPgGatherDir consults the process CWD; save/restore it.
+	// The CWD must NEVER be consulted — analysts run `report` from
+	// inside extracted (untrusted) support bundles, and a bundle
+	// shipping planted gather scripts must not be auto-executed. Run
+	// the whole test from a CWD that HOLDS the scripts and verify it
+	// is never returned. Save/restore the process CWD.
 	origWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("getwd: %v", err)
 	}
 	t.Cleanup(func() { _ = os.Chdir(origWD) })
-
-	// CWD holds the scripts → discovered via the CWD branch, which is
-	// checked before $PATH.
 	cwdDir := t.TempDir()
 	writeGatherScripts(t, cwdDir)
 	if err := os.Chdir(cwdDir); err != nil {
 		t.Fatalf("chdir: %v", err)
 	}
-	// Canonicalize: on macOS t.TempDir() is a /var symlink that Getwd
-	// resolves to /private/var, so compare against the resolved form.
-	wantCWD, _ := os.Getwd()
+
+	// CWD holds the scripts but $PATH is empty → NOT discovered.
 	t.Setenv("PATH", "")
-	if got := discoverPgGatherDir(); got != wantCWD {
-		t.Errorf("CWD branch: got %q, want %q", got, wantCWD)
+	if got := discoverPgGatherDir(); got != "" {
+		t.Errorf("CWD must not be consulted: got %q, want empty", got)
 	}
 
-	// CWD lacks the scripts but a later $PATH entry has them →
-	// discovered via $PATH (the literal entry, no Getwd canonicalize).
-	emptyCWD := t.TempDir()
-	if err := os.Chdir(emptyCWD); err != nil {
-		t.Fatalf("chdir: %v", err)
-	}
+	// A later $PATH entry has the scripts → discovered via $PATH (the
+	// literal entry, no Getwd canonicalize).
 	pathDir := t.TempDir()
 	writeGatherScripts(t, pathDir)
 	t.Setenv("PATH", strings.Join([]string{t.TempDir(), pathDir}, string(os.PathListSeparator)))
@@ -62,7 +58,8 @@ func TestDiscoverPgGatherDir(t *testing.T) {
 		t.Errorf("PATH branch: got %q, want %q", got, pathDir)
 	}
 
-	// Neither CWD nor any $PATH entry has the scripts → "".
+	// No $PATH entry has the scripts → "" (even though the CWD still
+	// does).
 	t.Setenv("PATH", t.TempDir())
 	if got := discoverPgGatherDir(); got != "" {
 		t.Errorf("no-match: got %q, want empty", got)

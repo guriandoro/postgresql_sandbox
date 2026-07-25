@@ -4,7 +4,10 @@
 // primitives into a single end-to-end command:
 //
 //   1. Validate inputs (--input file exists, --pg-gather-dir set and
-//      contains the gather scripts).
+//      contains the gather scripts) and pre-scan the untrusted
+//      --input file for psql meta-commands / COPY PROGRAM constructs
+//      a genuine pg_gather out.txt never contains (see
+//      scanGatherInput for the trust model).
 //   2. Deploy a throwaway sandbox UNDER the configured sandbox root
 //      so it's visible to `global_status` while the report is being
 //      generated. We use a tempdir name like "_report_<random>" so
@@ -41,6 +44,7 @@
 package report
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -49,7 +53,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/pgexec"
 	"github.com/guriandoro/postgresql_sandbox/internal/sandbox"
@@ -201,6 +207,12 @@ func Generate(ctx context.Context, opts Options, stderrW io.Writer) (*Result, er
 					p, err),
 			}
 		}
+	}
+	// Step 1c: pre-scan the untrusted input BEFORE deploying anything
+	// (and, more importantly, before any byte of it reaches psql).
+	// See scanGatherInput for the trust model and the rejection rules.
+	if err := scanGatherInput(opts.InputPath); err != nil {
+		return nil, err
 	}
 
 	// Step 2: deploy a throwaway sandbox under the sandbox root. We
@@ -427,6 +439,194 @@ func concatReader(paths ...string) (io.Reader, func(), error) {
 		readers = append(readers, f)
 	}
 	return io.MultiReader(readers...), cleanup, nil
+}
+
+// ----------------------------------------------------------------- //
+// Untrusted-input pre-scan
+// ----------------------------------------------------------------- //
+//
+// Trust model: the --input out.txt comes from SOMEONE ELSE'S system —
+// a customer support bundle — and is executed as a psql script
+// against a throwaway superuser sandbox that runs as the invoking
+// user. That makes it untrusted by definition, and psql gives scripts
+// several ways to run arbitrary shell commands as the analyst:
+//
+//   - `\! cmd` and `\g |cmd` / `\o |cmd` / `\copy ... program 'cmd'`
+//     meta-commands;
+//   - backquote substitution (`cmd`) inside any meta-command argument;
+//   - `COPY ... TO|FROM PROGRAM 'cmd'`, which runs server-side — the
+//     throwaway server is the same user, superuser, --auth=trust.
+//
+// A genuine pg_gather out.txt needs none of that. Its shape (gather.sql
+// v33 and the older gather_old.sql) is exactly:
+//
+//   - a `--****` header comment line;
+//   - a handful of benign display/guard meta-commands: `\r`, `\t`,
+//     `\set ver N`, and a `\if :conlines` / `\echo` / `\q` / `\endif`
+//     guard block, plus one `SELECT ... \gset` guard query;
+//   - `COPY <table> [(cols)] FROM stdin;` lines, each followed by TSV
+//     data rows terminated by `\.`.
+//
+// So instead of trying to enumerate every attack, scanGatherInput
+// hard-rejects anything OUTSIDE that shape before a single byte is
+// piped to psql. COPY data rows are exempt from all checks — column
+// values legitimately contain backslash escapes, quotes, and words
+// like "program" (e.g. captured query texts) — which is why the
+// scanner tracks COPY-data mode line by line, exactly like psql does.
+
+// allowedMetaCommands is the allowlist of psql meta-command verbs a
+// genuine pg_gather out.txt contains (see the trust-model block
+// above). `\elif`, `\else`, `\a`, and `\x` are included for symmetry
+// with the verbs pg_gather already emits; none of these can reach a
+// shell on their own, and backquote substitution in their arguments
+// is rejected separately.
+var allowedMetaCommands = map[string]bool{
+	".":     true, // COPY terminator — MUST stay allowed
+	"set":   true,
+	"echo":  true,
+	"if":    true,
+	"elif":  true,
+	"else":  true,
+	"endif": true,
+	"q":     true,
+	"r":     true,
+	"t":     true,
+	"a":     true,
+	"x":     true,
+	"gset":  true, // trails the guard SELECT line
+}
+
+var (
+	// copyFromStdinRe matches the single-line `COPY ... FROM stdin;`
+	// statements that open a COPY data block in out.txt. The trailing
+	// `\s*$` tolerates CRLF captures.
+	copyFromStdinRe = regexp.MustCompile(`(?i)^copy\s+.*\bfrom\s+stdin\s*;\s*$`)
+	// programWordRe matches the bare word PROGRAM. We reject it on any
+	// non-data line — not just in a same-line `COPY ... TO PROGRAM`
+	// shape — because SQL keywords can be split across lines
+	// (`COPY x TO\nPROGRAM 'cmd'`) and no genuine out.txt contains the
+	// word outside COPY data.
+	programWordRe = regexp.MustCompile(`(?i)\bprogram\b`)
+	// dollarQuoteRe matches a dollar-quote opener ($$ or $tag$), which
+	// could start a multi-line string and desynchronize our COPY-data
+	// tracking from psql's. Never present in genuine out.txt.
+	dollarQuoteRe = regexp.MustCompile(`\$[A-Za-z_0-9]*\$`)
+)
+
+// scanGatherInput reads the --input file line by line and returns an
+// ExitUsage-tagged error naming the first offending line, or nil if
+// the whole file matches the pg_gather shape described above.
+func scanGatherInput(path string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("report: open --input %s: %w", path, err)
+	}
+	defer f.Close()
+
+	// bufio.Reader (not Scanner): COPY data lines carry entire query
+	// texts with escaped newlines and can exceed any fixed token size.
+	r := bufio.NewReaderSize(f, 256*1024)
+	inCopyData := false
+	lineNum := 0
+	for {
+		line, rerr := r.ReadString('\n')
+		if len(line) > 0 {
+			lineNum++
+			if serr := scanGatherLine(line, lineNum, &inCopyData); serr != nil {
+				return serr
+			}
+		}
+		if rerr == io.EOF {
+			return nil
+		}
+		if rerr != nil {
+			return fmt.Errorf("report: read --input %s: %w", path, rerr)
+		}
+	}
+}
+
+// scanGatherLine applies the pre-scan rules to a single line,
+// flipping *inCopyData as COPY blocks open and close. Split from
+// scanGatherInput so tests can drive it without temp files.
+func scanGatherLine(line string, num int, inCopyData *bool) error {
+	if *inCopyData {
+		// COPY data: any byte sequence is legal and psql treats none
+		// of it as a command, so the ONLY thing we look for is the
+		// terminator. A data row can never masquerade as one: COPY TO
+		// escapes literal backslashes as `\\`, so a bare `\.` line is
+		// always a real terminator.
+		if strings.TrimSpace(line) == `\.` {
+			*inCopyData = false
+		}
+		return nil
+	}
+	trimmed := strings.TrimSpace(line)
+	if trimmed == "" {
+		return nil
+	}
+	reject := func(what string) error {
+		return &exitErr{
+			Code: ExitUsage,
+			Err: fmt.Errorf("report: refusing --input: line %d contains %s; a genuine pg_gather out.txt never does, so this file will not be executed",
+				num, what),
+		}
+	}
+	// Backquotes make psql shell out inside meta-command arguments.
+	if strings.ContainsRune(trimmed, '`') {
+		return reject("a backquote (`...` runs a shell command in psql meta-command arguments)")
+	}
+	// Quotes, block comments, and dollar-quotes could open a
+	// multi-line construct that hides a fake `COPY ... FROM stdin;`
+	// line inside it, desynchronizing our COPY-data tracking from
+	// psql's and smuggling meta-commands through as "data". Genuine
+	// out.txt has none of these outside COPY data.
+	if strings.ContainsAny(trimmed, `'"`) || strings.Contains(trimmed, "/*") || dollarQuoteRe.MatchString(trimmed) {
+		return reject("a quote or multi-line SQL construct")
+	}
+	// COPY ... TO|FROM PROGRAM runs a server-side shell command; the
+	// keyword may be line-split, so the bare word is enough to reject.
+	if programWordRe.MatchString(trimmed) {
+		return reject("the word PROGRAM (COPY ... TO|FROM PROGRAM runs a shell command)")
+	}
+	// Every backslash on the line — leading or mid-line (psql accepts
+	// meta-commands after SQL on the same line, e.g. `SELECT 1; \! x`)
+	// — must introduce an allowlisted verb.
+	for i := 0; i < len(trimmed); i++ {
+		if trimmed[i] != '\\' {
+			continue
+		}
+		verb := metaCommandVerb(trimmed[i+1:])
+		if !allowedMetaCommands[verb] {
+			return reject(fmt.Sprintf(`the psql meta-command \%s`, verb))
+		}
+		i += len(verb)
+	}
+	if copyFromStdinRe.MatchString(trimmed) {
+		*inCopyData = true
+	}
+	return nil
+}
+
+// metaCommandVerb extracts the psql meta-command verb from the text
+// following a backslash: a run of word characters (`set`, `gset`), or
+// a single punctuation character (`.`, `!`, `?`). Empty when the
+// backslash ends the line.
+func metaCommandVerb(rest string) string {
+	if rest == "" {
+		return ""
+	}
+	isWord := func(c byte) bool {
+		return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' ||
+			c >= '0' && c <= '9' || c == '_'
+	}
+	if !isWord(rest[0]) {
+		return rest[:1]
+	}
+	i := 1
+	for i < len(rest) && isWord(rest[i]) {
+		i++
+	}
+	return rest[:i]
 }
 
 // randomTag returns 8 hex characters of cryptographically-random

