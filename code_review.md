@@ -40,7 +40,7 @@ re-verified — re-confirm the failure mode before fixing.
 | MED-3  | medium | `--quiet` makes y/N confirmation prompts invisible             | fixed     |
 | MED-4  | medium | `config migrate -s` bypasses resolveSandboxArg; relative path corrupts Name | fixed |
 | MED-5  | medium | cleanup-install-versions can delete an in-use install (3 ways) | fixed     |
-| MED-6  | medium | `build --force` deletes a live mismatched-version install      | not-fixed |
+| MED-6  | medium | `build --force` deletes a live mismatched-version install      | fixed     |
 | MED-7  | medium | Cluster destroy trusts manifest member names (path escape)     | not-fixed |
 | MED-8  | medium | Cluster partial deploy orphans a running member                | not-fixed |
 | MED-9  | medium | `deploy --subscribe-to` forces dbname=postgres                 | not-fixed |
@@ -609,9 +609,9 @@ re-scan hook, or test at the Plan level).
 
 ```yaml
 id: MED-6
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: 35df707
+fixed-date: 2026-07-25
 severity: medium
 type: bug (destructive)
 files:
