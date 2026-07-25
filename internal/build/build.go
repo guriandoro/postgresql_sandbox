@@ -146,7 +146,8 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 	}
 
 	installPrefix, binDirVersion := installPrefixFor(opts.BinDir, opts.Version)
-	if binDirVersion != "" && binDirVersion != opts.Version {
+	binDirVersionMismatch := binDirVersion != "" && binDirVersion != opts.Version
+	if binDirVersionMismatch {
 		// User pointed --bin-dir / PGS_BIN_DIR at a directory whose
 		// basename already looks like a major.minor version, but it
 		// disagrees with the version they're building. We honor the
@@ -183,6 +184,20 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 	// dir under PGS_BIN_DIR is the user's previous install and the
 	// only safe semantics is "ask before clobbering".
 	if st, err := os.Stat(installPrefix); err == nil && st.IsDir() {
+		// MED-6: when the install prefix IS a version-shaped bin-dir whose
+		// version disagrees with the build version, the existing directory
+		// is a live install of a DIFFERENT PostgreSQL version (e.g. bin-dir
+		// /opt/postgresql/16.4 while building 18.4). Wiping it — even with
+		// --force — would destroy an unrelated install and drop the new
+		// version into a directory misleadingly named after the old one.
+		// Refuse outright, and do NOT steer the user toward --force.
+		if binDirVersionMismatch {
+			return nil, &BuildError{
+				ExitCode: ui.ExitBuildFailed,
+				Err: fmt.Errorf("build: refusing to overwrite existing install %s: its directory name is version %s but you are building %s — this looks like a live install of a different version. Point --bin-dir / PGS_BIN_DIR at a matching or neutral (non-version) path, or delete %s manually if you really mean to replace it",
+					installPrefix, binDirVersion, opts.Version, installPrefix),
+			}
+		}
 		if !opts.Force {
 			return nil, &BuildError{
 				ExitCode: ui.ExitBuildFailed,

@@ -785,7 +785,65 @@ func TestBuild_VersionShapedBinDir(t *testing.T) {
 		if !strings.Contains(out, "build_version=18.3") {
 			t.Errorf("warn should include build_version=18.3; stderr=\n%s", out)
 		}
+		// MED-6: the existing dir is a live install of a different
+		// version, so the non-force error must NOT steer the user toward
+		// --force (that path would destroy the other install).
+		if strings.Contains(err.Error(), "--force") {
+			t.Errorf("mismatch error must not suggest --force; got: %v", err)
+		}
 	})
+}
+
+// TestBuild_VersionShapedBinDir_MismatchRefusesForce covers MED-6: when a
+// version-shaped bin-dir's basename disagrees with the build version, the
+// existing directory is a live install of that OTHER version. Building a
+// different version into it — even with --force — must be refused with
+// nothing removed, and the error must not steer the user toward --force.
+// The guard fires before any download/extract, so no seams are swapped
+// (as in TestBuild_RejectsExistingInstall).
+func TestBuild_VersionShapedBinDir_MismatchRefusesForce(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "16.4")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A sentinel standing in for the live 16.4 install that must survive.
+	sentinel := filepath.Join(bin, "sentinel-live.txt")
+	const live = "live 16.4 install"
+	if err := os.WriteFile(sentinel, []byte(live), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	_, err := Build(context.Background(), Options{
+		Version:  "18.4",
+		BinDir:   bin,
+		BuildDir: t.TempDir(),
+		Force:    true,
+	}, &buf)
+	if err == nil {
+		t.Fatal("expected error building a mismatched version into a version-shaped bin-dir with --force")
+	}
+	var be *BuildError
+	if !errors.As(err, &be) {
+		t.Fatalf("want *BuildError, got %T (%v)", err, err)
+	}
+	if be.ExitCode.Int() != 29 {
+		t.Errorf("ExitCode = %d, want 29 (ExitBuildFailed)", be.ExitCode.Int())
+	}
+	if strings.Contains(err.Error(), "--force") {
+		t.Errorf("error must not steer the user toward --force; got: %v", err)
+	}
+	if !strings.Contains(err.Error(), bin) {
+		t.Errorf("error should name the install prefix %q; got: %v", bin, err)
+	}
+	// The live install must be untouched: nothing removed.
+	data, readErr := os.ReadFile(sentinel)
+	if readErr != nil {
+		t.Fatalf("live-install sentinel was removed with --force: %v", readErr)
+	}
+	if string(data) != live {
+		t.Errorf("live-install sentinel was modified: got %q want %q", string(data), live)
+	}
 }
 
 // swapBuildSeams replaces the package-level downloadTarballFn / runStepFn
