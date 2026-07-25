@@ -45,6 +45,7 @@ package report
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -342,13 +343,39 @@ func Generate(ctx context.Context, opts Options, stderrW io.Writer) (*Result, er
 	// version). Tolerating per-query errors matches what upstream's
 	// generate_report.sh does: it just redirects stdout and trusts
 	// the user to scroll past any error lines in the HTML.
-	if res.Err != nil {
-		// A process-level error (couldn't start psql, signal) is
-		// fatal; a non-zero exit alone is not.
+	//
+	// A non-zero exit, however, is NOT a tolerable per-query error.
+	// Without ON_ERROR_STOP psql still exits 0 when individual queries
+	// fail, so any non-zero code here means a connection/startup/
+	// signal-level failure: exit 1 is psql's own fatal error, exit 2
+	// is a lost connection (the throwaway server died between steps),
+	// and exitCodeOf reports -1 with a nil res.Err for a signal-killed
+	// child (OOM/SIGKILL). Checking res.Err alone lets all of those
+	// through and then persists the truncated stdout, clobbering any
+	// previous good report at OutputPath with an empty/partial file.
+	// So we treat res.ExitCode != 0 as fatal too.
+	if res.Err != nil || res.ExitCode != 0 {
 		writeStderr(stderrW, "psql render report", res.Stderr)
-		return nil, leftover(fmt.Errorf("psql (render report) failed: %w", res.Err))
+		if res.Err != nil {
+			return nil, leftover(fmt.Errorf("psql (render report) exit=%d: %w", res.ExitCode, res.Err))
+		}
+		return nil, leftover(fmt.Errorf("psql (render report) exit=%d", res.ExitCode))
 	}
-	if err := os.WriteFile(opts.OutputPath, res.Stdout, 0o644); err != nil {
+	// Even on a clean exit 0, sanity-check the captured HTML before it
+	// touches disk: a render truncated before its final `\echo </html>`
+	// (or one that produced nothing at all) must never overwrite a
+	// prior good report. See looksLikeCompleteReport.
+	if !looksLikeCompleteReport(res.Stdout) {
+		writeStderr(stderrW, "psql render report", res.Stderr)
+		return nil, leftover(fmt.Errorf(
+			"psql (render report) produced %d bytes with no closing </html> tag; refusing to overwrite %s",
+			len(res.Stdout), opts.OutputPath))
+	}
+	// Write atomically via a sibling temp file + rename so a failed or
+	// crashed write can't truncate a previously-good report at the
+	// target path (the default OutputPath, <input>_report.html, may
+	// already hold a good report from a prior run).
+	if err := writeReportAtomic(opts.OutputPath, res.Stdout, 0o644); err != nil {
 		return nil, leftover(fmt.Errorf("write report %s: %w", opts.OutputPath, err))
 	}
 
@@ -439,6 +466,71 @@ func concatReader(paths ...string) (io.Reader, func(), error) {
 		readers = append(readers, f)
 	}
 	return io.MultiReader(readers...), cleanup, nil
+}
+
+// looksLikeCompleteReport reports whether b is a plausibly-complete
+// rendered report: non-empty and containing a closing </html> tag.
+// gather_report.sql's final directive is `\echo </html>`, so a render
+// cut short by a lost connection or a signal — including one psql
+// happened to report as a clean exit — is missing it. We test the
+// exact lowercase tag the script emits first (no allocation on the
+// common path) and fall back to a case-insensitive scan so an upstream
+// casing change wouldn't silently weaken the guard.
+func looksLikeCompleteReport(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	if bytes.Contains(b, []byte("</html>")) {
+		return true
+	}
+	return bytes.Contains(bytes.ToLower(b), []byte("</html>"))
+}
+
+// writeReportAtomic writes data to path via a temp file in the SAME
+// directory followed by fsync + atomic rename. Modelled on
+// config.saveJSONAtomic: because the temp file is a sibling of path,
+// the rename never crosses filesystems and either fully replaces path
+// or leaves it untouched. That matters here specifically because the
+// default OutputPath (<input>_report.html) can already hold a good
+// report from a prior run — a partial write must never clobber it.
+func writeReportAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp.*")
+	if err != nil {
+		return fmt.Errorf("tempfile in %s: %w", dir, err)
+	}
+	tmpName := tmp.Name()
+	cleanup := func() { _ = os.Remove(tmpName) }
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("write %s: %w", tmpName, err)
+	}
+	// os.CreateTemp makes the file 0600; set the intended report mode
+	// explicitly (Chmod ignores umask, unlike the old os.WriteFile).
+	if err := tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("chmod %s: %w", tmpName, err)
+	}
+	// fsync before rename — without it a crash between the rename
+	// landing and the data reaching disk could leave a zero-length
+	// file at the canonical path (see config.saveJSONAtomic).
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		cleanup()
+		return fmt.Errorf("sync %s: %w", tmpName, err)
+	}
+	if err := tmp.Close(); err != nil {
+		cleanup()
+		return fmt.Errorf("close %s: %w", tmpName, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		cleanup()
+		return fmt.Errorf("rename %s -> %s: %w", tmpName, path, err)
+	}
+	return nil
 }
 
 // ----------------------------------------------------------------- //

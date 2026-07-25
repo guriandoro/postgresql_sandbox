@@ -45,6 +45,49 @@ func fakeRunnerCannedPsql(stdout, stderr []byte, exit int) *pgexec.Fake {
 	return f
 }
 
+// fakeSeqPsqlRunner wraps pgexec.Fake to return a DIFFERENT Result for
+// each successive psql RunWithStdin call. The plain Fake keys results
+// only by binary name, so it can't make the schema+ingest psql call
+// (the 1st) succeed while the render psql call (the 2nd) fails — which
+// is exactly the MED-1 scenario. Non-psql invocations (initdb, pg_ctl
+// during deploy/destroy) and any calls past the supplied list fall
+// through to the embedded Fake unchanged.
+type fakeSeqPsqlRunner struct {
+	*pgexec.Fake
+	psqlResults []pgexec.Result
+	psqlSeen    int
+}
+
+func (f *fakeSeqPsqlRunner) RunWithStdin(ctx context.Context, stdin io.Reader, name string, args ...string) pgexec.Result {
+	// Let the embedded Fake record the call and drain stdin first.
+	base := f.Fake.RunWithStdin(ctx, stdin, name, args...)
+	if name != "psql" {
+		return base
+	}
+	i := f.psqlSeen
+	f.psqlSeen++
+	if i < len(f.psqlResults) {
+		return f.psqlResults[i]
+	}
+	return base
+}
+
+// fakeSeqRunner builds a fakeSeqPsqlRunner whose psql RunWithStdin
+// calls return results in order (1st → schema+ingest, 2nd → render).
+func fakeSeqRunner(results ...pgexec.Result) *fakeSeqPsqlRunner {
+	return &fakeSeqPsqlRunner{Fake: &pgexec.Fake{}, psqlResults: results}
+}
+
+// assertNoReportTemps fails if writeReportAtomic left a sibling temp
+// file behind next to outPath.
+func assertNoReportTemps(t *testing.T, dir, outPath string) {
+	t.Helper()
+	matches, _ := filepath.Glob(filepath.Join(dir, filepath.Base(outPath)+".tmp.*"))
+	if len(matches) != 0 {
+		t.Errorf("stray temp report files left behind: %v", matches)
+	}
+}
+
 // writeStubGatherDir creates a pg-gather-dir fixture with both
 // expected SQL files present but harmless content. Returns the dir.
 func writeStubGatherDir(t *testing.T) string {
@@ -666,6 +709,114 @@ func TestGenerateSchemaLoadFailureDestroyOnFailure(t *testing.T) {
 			t.Errorf("throwaway sandbox %q survived --destroy-on-failure", e.Name())
 		}
 	}
+}
+
+// TestGenerateRenderFailurePreservesReport is the MED-1 regression:
+// the schema+ingest step succeeds but the render step comes back with a
+// non-zero psql exit and a nil res.Err — the shape exitCodeOf produces
+// for a lost connection (exit 2) or a signal-killed child (exit -1).
+// The old code checked only res.Err != nil, so those slipped through
+// and the truncated/empty stdout was written over the output path with
+// a 0 exit. Generate must instead fail AND leave any pre-existing good
+// report byte-for-byte intact. The exit-0-but-incomplete cases cover
+// the stdout sanity check (a report missing its closing </html>).
+func TestGenerateRenderFailurePreservesReport(t *testing.T) {
+	cases := map[string]pgexec.Result{
+		"lost connection (exit 2)": {Stdout: []byte("<html>partial, truncated"), ExitCode: 2},
+		"signal-killed (exit -1)":  {Stdout: nil, ExitCode: -1},
+		"exit 0 but no </html>":    {Stdout: []byte("<html>oops, cut short"), ExitCode: 0},
+		"exit 0 but empty stdout":  {Stdout: nil, ExitCode: 0},
+	}
+	for name, renderRes := range cases {
+		t.Run(name, func(t *testing.T) {
+			gatherDir := writeStubGatherDir(t)
+			root := t.TempDir()
+			binDir := filepath.Join(root, "bin")
+			_ = os.MkdirAll(binDir, 0o755)
+			in := writeStubInput(t)
+			outPath := filepath.Join(root, "report.html")
+
+			// Seed a GOOD report from a hypothetical prior run.
+			const priorGood = "<html>PRIOR GOOD REPORT</html>\n"
+			if err := os.WriteFile(outPath, []byte(priorGood), 0o644); err != nil {
+				t.Fatalf("seed prior report: %v", err)
+			}
+
+			// Schema+ingest succeeds; render returns the failing result.
+			runner := fakeSeqRunner(
+				pgexec.Result{ExitCode: 0}, // schema+ingest OK
+				renderRes,                  // render fails / incomplete
+			)
+
+			_, err := Generate(context.Background(), Options{
+				InputPath:   in,
+				OutputPath:  outPath,
+				BinDir:      binDir,
+				PgGatherDir: gatherDir,
+				SandboxRoot: root,
+				Runner:      runner,
+			}, io.Discard)
+			if err == nil {
+				t.Fatal("expected render failure to error")
+			}
+			if got := ExitCodeFor(err); got != ui.ExitReportFailed {
+				t.Errorf("exit code: got %d, want %d (ExitReportFailed)", got, ui.ExitReportFailed)
+			}
+			var le *LeftoverError
+			if !errors.As(err, &le) {
+				t.Errorf("expected LeftoverError in chain; got %v", err)
+			}
+			// The prior good report must be byte-for-byte intact.
+			data, rerr := os.ReadFile(outPath)
+			if rerr != nil {
+				t.Fatalf("read output: %v", rerr)
+			}
+			if string(data) != priorGood {
+				t.Errorf("prior report was clobbered: got %q, want %q", string(data), priorGood)
+			}
+			assertNoReportTemps(t, root, outPath)
+		})
+	}
+}
+
+// TestGenerateRenderSuccessReplacesPriorReport proves the atomic-write
+// path replaces an existing report on success (and leaves no temp file
+// behind) — the counterpart to the preservation tests above.
+func TestGenerateRenderSuccessReplacesPriorReport(t *testing.T) {
+	gatherDir := writeStubGatherDir(t)
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	_ = os.MkdirAll(binDir, 0o755)
+	in := writeStubInput(t)
+	outPath := filepath.Join(root, "report.html")
+
+	if err := os.WriteFile(outPath, []byte("<html>STALE OLD REPORT</html>\n"), 0o644); err != nil {
+		t.Fatalf("seed old report: %v", err)
+	}
+
+	runner := fakeSeqRunner(
+		pgexec.Result{ExitCode: 0}, // schema+ingest OK
+		pgexec.Result{Stdout: []byte("<html>FRESH</html>\n"), ExitCode: 0}, // render OK
+	)
+
+	if _, err := Generate(context.Background(), Options{
+		InputPath:   in,
+		OutputPath:  outPath,
+		BinDir:      binDir,
+		PgGatherDir: gatherDir,
+		SandboxRoot: root,
+		Runner:      runner,
+	}, io.Discard); err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	data, err := os.ReadFile(outPath)
+	if err != nil {
+		t.Fatalf("read output: %v", err)
+	}
+	if string(data) != "<html>FRESH</html>\n" {
+		t.Errorf("output not replaced with fresh report: got %q", string(data))
+	}
+	assertNoReportTemps(t, root, outPath)
 }
 
 // TestLeftoverErrorUnwrap confirms errors.As digs out the
