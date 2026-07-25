@@ -98,6 +98,19 @@ func Promote(ctx context.Context, runner pgexec.Runner, opts PromoteOptions, std
 		return err
 	}
 
+	// SPEC §6.8: before we forget where we came from, best-effort drop
+	// the now-inactive replication slot on the old source. The promoted
+	// standby has stopped streaming, so the slot would otherwise sit
+	// idle and pin WAL on the source until its disk fills. We reuse
+	// destroy.go's bestEffortDropSlot so both paths build the same drop
+	// statement (see that helper's doc comment). A down/unreachable
+	// source is a WARN naming source+slot, never a failure — promotion
+	// already succeeded, and clearing cfg.Physical just below would
+	// otherwise lose the slot name (and the source pointer) forever.
+	if cfg.Physical != nil && cfg.Physical.SlotName != "" {
+		bestEffortDropSlot(ctx, runner, opts.SandboxDir, cfg.Physical, stderrW)
+	}
+
 	// Update on-disk config. We Validate first so a malformed
 	// resulting struct (shouldn't happen — we only flip two fields)
 	// errors cleanly rather than corrupting the file.

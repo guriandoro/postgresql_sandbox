@@ -460,6 +460,110 @@ func TestPromotePgctlFails(t *testing.T) {
 	}
 }
 
+func TestPromoteDropsSlotAtSource(t *testing.T) {
+	// MED-10: promote must drop the now-inactive slot on the old source
+	// before it wipes cfg.Physical, or the slot pins WAL there forever.
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// A running, listening source so bestEffortDropSlot reaches psql.
+	src := filepath.Join(root, "primary")
+	makeRunningSourceFixture(t, src, "primary", binDir, freeProbePort(t))
+
+	// The standby to promote, pointing at that source.
+	stb := filepath.Join(root, "standby1")
+	mustWriteStandbySandbox(t, stb, "standby1", binDir, freeProbePort(t),
+		"primary", "primary_standby1_slot")
+	cfg, _ := config.LoadSandbox(stb)
+	mustCreatePid(t, cfg.DataDir)
+
+	f := &pgexec.Fake{}
+	// One canned psql result serves both callers by binary name:
+	// pg_is_in_recovery → 'f' (out of recovery) AND the slot-drop query
+	// → exit 0 (dropped).
+	f.SetResult("psql", pgexec.Result{Stdout: []byte("f\n"), ExitCode: 0})
+
+	var stderr bytes.Buffer
+	if err := Promote(context.Background(), f, PromoteOptions{SandboxDir: stb}, &stderr); err != nil {
+		t.Fatalf("Promote: %v", err)
+	}
+
+	// A pg_drop_replication_slot naming the slot must have been issued.
+	found := false
+	for _, c := range f.Calls {
+		if c.Name != "psql" {
+			continue
+		}
+		for _, a := range c.Args {
+			if strings.Contains(a, "pg_drop_replication_slot") &&
+				strings.Contains(a, "primary_standby1_slot") {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected psql pg_drop_replication_slot at source; calls=%v", f.Calls)
+	}
+
+	// Promotion still completed: role flipped, Physical cleared.
+	cfg2, err := config.LoadSandbox(stb)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg2.Role != config.RolePrimary {
+		t.Errorf("role: got %q, want %q", cfg2.Role, config.RolePrimary)
+	}
+	if cfg2.Physical != nil {
+		t.Errorf("Physical should be cleared; got %+v", cfg2.Physical)
+	}
+}
+
+func TestPromoteSlotCleanupWarnsWhenSourceDown(t *testing.T) {
+	// MED-10: if the slot cleanup can't happen (source down/unreachable)
+	// the promotion still completes, but the user is WARNed and the slot
+	// name is named so they can clean it up by hand.
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Source exists on disk but is NOT running (no pid, no listener).
+	src := filepath.Join(root, "primary")
+	mustWriteSandboxFile(t, src, "primary", binDir, freeProbePort(t))
+
+	stb := filepath.Join(root, "standby1")
+	mustWriteStandbySandbox(t, stb, "standby1", binDir, freeProbePort(t),
+		"primary", "primary_standby1_slot")
+	cfg, _ := config.LoadSandbox(stb)
+	mustCreatePid(t, cfg.DataDir)
+
+	f := &pgexec.Fake{}
+	f.SetResult("psql", pgexec.Result{Stdout: []byte("f\n"), ExitCode: 0})
+
+	var stderr bytes.Buffer
+	if err := Promote(context.Background(), f, PromoteOptions{SandboxDir: stb}, &stderr); err != nil {
+		t.Fatalf("Promote should succeed despite slot cleanup failure: %v", err)
+	}
+
+	// Cleanup could not run → WARN naming the slot.
+	if !strings.Contains(stderr.String(), "slot cleanup") {
+		t.Errorf("expected slot cleanup warning; stderr: %s", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "primary_standby1_slot") {
+		t.Errorf("warning should name the slot; stderr: %s", stderr.String())
+	}
+	// Promotion still completed.
+	cfg2, err := config.LoadSandbox(stb)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	if cfg2.Role != config.RolePrimary {
+		t.Errorf("role: got %q, want %q", cfg2.Role, config.RolePrimary)
+	}
+}
+
 // ---------------------------------------------------------------
 // Destroy best-effort slot cleanup
 // ---------------------------------------------------------------
