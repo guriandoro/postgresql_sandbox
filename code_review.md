@@ -41,7 +41,7 @@ re-verified — re-confirm the failure mode before fixing.
 | MED-4  | medium | `config migrate -s` bypasses resolveSandboxArg; relative path corrupts Name | fixed |
 | MED-5  | medium | cleanup-install-versions can delete an in-use install (3 ways) | fixed     |
 | MED-6  | medium | `build --force` deletes a live mismatched-version install      | fixed     |
-| MED-7  | medium | Cluster destroy trusts manifest member names (path escape)     | not-fixed |
+| MED-7  | medium | Cluster destroy trusts manifest member names (path escape)     | fixed |
 | MED-8  | medium | Cluster partial deploy orphans a running member                | not-fixed |
 | MED-9  | medium | `deploy --subscribe-to` forces dbname=postgres                 | not-fixed |
 | MED-10 | medium | `promote` leaks the replication slot on the old source         | not-fixed |
@@ -650,9 +650,9 @@ behavior). Neutral bin-dir unchanged.
 
 ```yaml
 id: MED-7
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: b0cb02e
+fixed-date: 2026-07-25
 severity: medium
 type: security (destructive path escape via crafted manifest)
 files:
