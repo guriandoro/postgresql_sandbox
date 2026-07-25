@@ -67,7 +67,7 @@ re-verified — re-confirm the failure mode before fixing.
 | LOW-18 | low    | `report --debug` discards the logger (no `# exec:` lines)      | not-fixed |
 | LOW-19 | low    | Failed report deploys accumulate unnamed `_report_*` dirs      | not-fixed |
 | LOW-20 | low    | cleanup sandbox walk depth-bounded at 4, silently excluding    | not-fixed |
-| MED-1b | medium | `%w` wraps nil error → `%!w(<nil>)` in user-facing message     | not-fixed |
+| MED-1b | medium | `%w` wraps nil error → `%!w(<nil>)` in user-facing message     | fixed |
 
 ---
 
@@ -388,9 +388,9 @@ errors, output file untouched. Fake returning `(-1, nil)` (signal shape)
 
 ```yaml
 id: MED-1b
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: 5632191
+fixed-date: 2026-07-25
 severity: medium
 type: bug (cosmetic but on the most common failure path)
 files:
