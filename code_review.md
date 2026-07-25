@@ -34,7 +34,7 @@ re-verified — re-confirm the failure mode before fixing.
 | HIGH-1 | high   | Stale postmaster.pid wedges start/stop/restart                 | fixed     |
 | HIGH-2 | high   | PG* env shadowed by user's shell in `run`/`use` (syscall.Exec) | fixed     |
 | HIGH-3 | high   | Shared predictable /tmp build dir + unverified tarball cache   | fixed |
-| HIGH-4 | high   | `report` executes untrusted input via psql meta-commands       | not-fixed |
+| HIGH-4 | high   | `report` executes untrusted input via psql meta-commands       | fixed |
 | MED-1  | medium | Report render step treats psql failure as success              | not-fixed |
 | MED-2  | medium | NormalizeString lets invalid chars into replication slot names | not-fixed |
 | MED-3  | medium | `--quiet` makes y/N confirmation prompts invisible             | not-fixed |
@@ -274,9 +274,9 @@ resolution prefers UserCacheDir.
 
 ```yaml
 id: HIGH-4
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: e112a7c
+fixed-date: 2026-07-25
 severity: high
 type: security (arbitrary command execution)
 files:
