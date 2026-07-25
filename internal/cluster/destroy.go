@@ -7,6 +7,9 @@
 //  1. LoadCluster to discover members.
 //  2. Iterate members in REVERSE order (member N down to member 0).
 //  3. For each member: call sandbox.Destroy. Record successes.
+//     Members recorded as state=failed in the manifest may have a
+//     half-deployed dir without a sandbox config; those get a
+//     best-effort stop + rm instead (destroyFailedMemberStub).
 //  4. If all succeeded: remove the manifest, then os.Remove the
 //     cluster dir (now empty).
 //  5. If any failed: leave the manifest in place. Return
@@ -89,6 +92,29 @@ func Destroy(ctx context.Context, runner pgexec.Runner, opts DestroyOptions, std
 		// the user may have torn one down by hand. We log it so the
 		// state isn't silent.
 		if !config.IsSandboxDir(dir) {
+			// A member recorded as state=failed may have a
+			// half-deployed dir: it exists but deploy died before
+			// writing pg_sandbox.json. Tear it down best-effort so
+			// a partial cluster can still be destroyed cleanly.
+			// Members NOT marked failed keep the conservative skip —
+			// a manifest-ok member without a config file is
+			// surprising and we won't rm it blindly.
+			if member.State == config.MemberStateFailed {
+				if _, statErr := os.Stat(dir); statErr == nil {
+					fmt.Fprintf(stderrW,
+						"level=INFO msg=%q member=%q dir=%q\n",
+						"cluster destroy: removing half-deployed failed member",
+						member.Name, dir)
+					if rmErr := destroyFailedMemberStub(ctx, runner, dir, stderrW); rmErr != nil {
+						fmt.Fprintf(stderrW,
+							"level=ERROR msg=%q member=%q err=%q\n",
+							"cluster destroy: failed-member cleanup failed; will report as partial",
+							member.Name, rmErr.Error())
+						survivors = append(survivors, member.Name)
+					}
+					continue
+				}
+			}
 			fmt.Fprintf(stderrW,
 				"level=INFO msg=%q member=%q dir=%q\n",
 				"cluster destroy: member dir missing or not a sandbox; skipping",
@@ -147,4 +173,33 @@ func Destroy(ctx context.Context, runner pgexec.Runner, opts DestroyOptions, std
 	fmt.Fprintf(stderrW, "level=INFO msg=%q name=%q dir=%q\n",
 		"cluster destroyed", m.Name, opts.ClusterDir)
 	return nil
+}
+
+// destroyFailedMemberStub best-effort-removes a failed member's dir
+// that never became a full sandbox (no pg_sandbox.json). Deploy
+// writes the config only AFTER pg_ctl start succeeded, so even a
+// config-less dir can hold a running postmaster — if the
+// conventional data dir carries a pidfile we attempt an
+// immediate-mode stop first (failure is a warning, matching
+// sandbox.Destroy's stop policy; the dir is being removed
+// regardless), then rm -rf the member dir.
+func destroyFailedMemberStub(ctx context.Context, runner pgexec.Runner, dir string, stderrW io.Writer) error {
+	// "data" is the fixed data-dir basename for cluster members:
+	// cluster deploy never overrides sandbox.DeployOptions.DataDirName,
+	// so its default applies.
+	dataDir := filepath.Join(dir, "data")
+	if _, err := os.Stat(filepath.Join(dataDir, "postmaster.pid")); err == nil {
+		res := runner.Run(ctx, "pg_ctl",
+			"stop",
+			"-D", dataDir,
+			"-m", "immediate",
+			"-w",
+		)
+		if res.Err != nil || res.ExitCode != 0 {
+			fmt.Fprintf(stderrW, "level=WARN msg=%q dir=%q\n",
+				"cluster destroy: stop of half-deployed member failed; proceeding with rm anyway",
+				dir)
+		}
+	}
+	return os.RemoveAll(dir)
 }

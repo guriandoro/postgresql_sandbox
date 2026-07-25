@@ -697,6 +697,42 @@ func TestClusterLoadAcceptsPlainMemberName(t *testing.T) {
 	}
 }
 
+func TestClusterMemberStateRoundTrip(t *testing.T) {
+	// The state field records failed members (MED-8). It must
+	// round-trip for failed members, stay empty for ok members, and
+	// serialize ONLY on failed members (omitempty) so manifests with
+	// only successful members are byte-identical to pre-state
+	// writers. Manifests WITHOUT any "state" key — every manifest
+	// written before the field existed — are covered by the other
+	// LoadCluster tests in this file, which all omit it.
+	dir := t.TempDir()
+	in := mkClusterManifest("mycluster")
+	in.Members[2].State = MemberStateFailed
+	if err := SaveCluster(dir, in); err != nil {
+		t.Fatalf("SaveCluster: %v", err)
+	}
+	out, err := LoadCluster(dir)
+	if err != nil {
+		t.Fatalf("LoadCluster: %v", err)
+	}
+	if out.Members[2].State != MemberStateFailed {
+		t.Errorf("member[2] state: got %q, want %q", out.Members[2].State, MemberStateFailed)
+	}
+	for i := 0; i <= 1; i++ {
+		if out.Members[i].State != "" {
+			t.Errorf("member[%d] state: got %q, want empty", i, out.Members[i].State)
+		}
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, ClusterFilename))
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	if got := strings.Count(string(raw), `"state"`); got != 1 {
+		t.Errorf(`"state" key count in serialized manifest: got %d, want 1 (failed member only):\n%s`,
+			got, raw)
+	}
+}
+
 func TestIsClusterDir(t *testing.T) {
 	dir := t.TempDir()
 	if IsClusterDir(dir) {

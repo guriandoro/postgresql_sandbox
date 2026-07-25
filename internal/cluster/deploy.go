@@ -366,14 +366,30 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 			}
 		}
 
+		memberRole := config.RoleStandby
+		if opts.Mode == config.ClusterLogical {
+			memberRole = config.RoleSubscriber
+		}
+
 		memberRes, mErr := sandbox.Deploy(ctx, runner, memberOpts, stderrW)
 		if mErr != nil {
 			// Partial deploy: persist a manifest reflecting the
-			// members that DID make it so the on-disk state and the
-			// manifest agree. Then return the cluster-level error.
+			// members that DID make it PLUS this member marked
+			// state=failed, so the on-disk state and the manifest
+			// agree. A member can fail AFTER its sandbox was
+			// deployed and started (e.g. the subscribe step of a
+			// logical member), and the sandbox layer deliberately
+			// leaves that sandbox in place for inspection — without
+			// a manifest entry the running orphan would be invisible
+			// to `cluster destroy`/`cluster status`.
 			fmt.Fprintf(stderrW, "level=ERROR msg=%q member=%q index=%d err=%q\n",
 				"cluster: member deploy failed; leaving partial cluster for inspection",
 				name, i, mErr.Error())
+			members = append(members, config.ClusterMember{
+				Name:  name,
+				Role:  memberRole,
+				State: config.MemberStateFailed,
+			})
 			if writeErr := saveManifest(opts.ClusterDir, cluster, opts.Mode, members, opts, stderrW); writeErr != nil {
 				fmt.Fprintf(stderrW, "level=WARN msg=%q err=%q\n",
 					"cluster: could not write partial manifest", writeErr.Error())
@@ -382,10 +398,6 @@ func Deploy(ctx context.Context, runner pgexec.Runner, opts DeployOptions, stder
 				fmt.Errorf("cluster: deploy member %d (%s): %w", i, name, mErr))
 		}
 
-		memberRole := config.RoleStandby
-		if opts.Mode == config.ClusterLogical {
-			memberRole = config.RoleSubscriber
-		}
 		members = append(members, config.ClusterMember{
 			Name: name,
 			Role: memberRole,

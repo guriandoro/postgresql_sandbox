@@ -577,6 +577,146 @@ func TestDestroyRejectsPathEscapingMember(t *testing.T) {
 }
 
 // ---------------------------------------------------------------- //
+// Cluster partial deploy — failed member recorded (MED-8)
+// ---------------------------------------------------------------- //
+
+// TestDeployPartialFailureRecordsFailedMember: member 2's subscribe
+// step fails AFTER its standalone sandbox deployed and started. The
+// partial manifest must include member 2 marked state=failed — the
+// sandbox layer deliberately leaves the sandbox in place, and an
+// unrecorded entry would orphan a running postmaster.
+func TestDeployPartialFailureRecordsFailedMember(t *testing.T) {
+	clusterDir, _ := deployLogicalPartialFixture(t)
+
+	m, err := config.LoadCluster(clusterDir)
+	if err != nil {
+		t.Fatalf("LoadCluster: %v", err)
+	}
+	if len(m.Members) != 3 {
+		t.Fatalf("members: got %d, want 3 (publisher + s1 ok, s2 failed)", len(m.Members))
+	}
+	for i := 0; i <= 1; i++ {
+		if m.Members[i].State != "" {
+			t.Errorf("member[%d] state: got %q, want empty (deployed ok)", i, m.Members[i].State)
+		}
+	}
+	failed := m.Members[2]
+	if failed.Name != "mylog_s2" {
+		t.Errorf("failed member name: got %q, want mylog_s2", failed.Name)
+	}
+	if failed.Role != config.RoleSubscriber {
+		t.Errorf("failed member role: got %q, want subscriber", failed.Role)
+	}
+	if failed.State != config.MemberStateFailed {
+		t.Errorf("failed member state: got %q, want %q", failed.State, config.MemberStateFailed)
+	}
+
+	// The orphan is real: member 2's standalone deploy succeeded
+	// before the subscribe step died, so its dir is a full sandbox
+	// left on disk for inspection.
+	if !config.IsSandboxDir(filepath.Join(clusterDir, "mylog_s2")) {
+		t.Error("member 2 dir should be a deployed sandbox left for inspection")
+	}
+}
+
+// TestDestroyTearsDownFailedMember: destroy on a partial cluster must
+// tear down the failed member's sandbox too and remove the cluster
+// dir cleanly (no ExitClusterDestroyPartial, no leftover dir).
+func TestDestroyTearsDownFailedMember(t *testing.T) {
+	clusterDir, runner := deployLogicalPartialFixture(t)
+
+	if err := Destroy(context.Background(), runner, DestroyOptions{ClusterDir: clusterDir}, io.Discard); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if _, err := os.Stat(clusterDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("cluster dir still exists after destroy: err=%v", err)
+	}
+}
+
+// TestDestroyFailedMemberHalfDeployedStub: a failed member whose dir
+// exists but never got pg_sandbox.json (deploy died before the config
+// write). Destroy must best-effort stop + remove it — including a
+// pg_ctl stop attempt when a pidfile is present, since deploy writes
+// the config only AFTER pg_ctl start.
+func TestDestroyFailedMemberHalfDeployedStub(t *testing.T) {
+	clusterDir, runner := deployPhysicalFixture(t, 1)
+	m, err := config.LoadCluster(clusterDir)
+	if err != nil {
+		t.Fatalf("LoadCluster: %v", err)
+	}
+	m.Members = append(m.Members, config.ClusterMember{
+		Name:  "mycluster_s2",
+		Role:  config.RoleStandby,
+		State: config.MemberStateFailed,
+	})
+	if err := config.SaveCluster(clusterDir, m); err != nil {
+		t.Fatalf("SaveCluster: %v", err)
+	}
+	stubData := filepath.Join(clusterDir, "mycluster_s2", "data")
+	if err := os.MkdirAll(stubData, 0o755); err != nil {
+		t.Fatalf("mkdir stub: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(stubData, "postmaster.pid"),
+		[]byte(strconv.Itoa(os.Getpid())+"\n"), 0o600); err != nil {
+		t.Fatalf("write pidfile: %v", err)
+	}
+
+	runner.Calls = nil
+	if err := Destroy(context.Background(), runner, DestroyOptions{ClusterDir: clusterDir}, io.Discard); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if _, err := os.Stat(clusterDir); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("cluster dir still exists after destroy: err=%v", err)
+	}
+	// The stub's postmaster got a best-effort immediate-mode stop.
+	foundStop := false
+	for _, c := range runner.Calls {
+		if c.Name != "pg_ctl" || len(c.Args) == 0 || c.Args[0] != "stop" {
+			continue
+		}
+		for i, a := range c.Args {
+			if a == "-D" && i+1 < len(c.Args) && c.Args[i+1] == stubData {
+				foundStop = true
+			}
+		}
+	}
+	if !foundStop {
+		t.Errorf("expected pg_ctl stop -D %s for the half-deployed stub; calls=%+v",
+			stubData, runner.Calls)
+	}
+}
+
+// TestStatusRendersFailedMember: status must surface the manifest's
+// state=failed distinctly (member_deploy_state=failed in the text
+// view; deployState in the struct/JSON), while ok members carry none.
+func TestStatusRendersFailedMember(t *testing.T) {
+	clusterDir, runner := deployLogicalPartialFixture(t)
+
+	rep, err := Status(context.Background(), runner, StatusOptions{ClusterDir: clusterDir}, io.Discard)
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(rep.Members) != 3 {
+		t.Fatalf("members in status: got %d, want 3", len(rep.Members))
+	}
+	for i := 0; i <= 1; i++ {
+		if rep.Members[i].DeployState != "" {
+			t.Errorf("member[%d] deploy state: got %q, want empty", i, rep.Members[i].DeployState)
+		}
+	}
+	if rep.Members[2].DeployState != config.MemberStateFailed {
+		t.Errorf("member[2] deploy state: got %q, want %q",
+			rep.Members[2].DeployState, config.MemberStateFailed)
+	}
+
+	var text bytes.Buffer
+	rep.RenderText(&text)
+	if !strings.Contains(text.String(), "member_deploy_state=failed") {
+		t.Errorf("text render missing member_deploy_state=failed:\n%s", text.String())
+	}
+}
+
+// ---------------------------------------------------------------- //
 // Test helpers
 // ---------------------------------------------------------------- //
 
@@ -708,6 +848,71 @@ func deployPhysicalFixture(t *testing.T, standbys int) (string, *pidDroppingFake
 	}, io.Discard)
 	if err != nil {
 		t.Fatalf("deployPhysicalFixture: %v", err)
+	}
+	return clusterDir, runner
+}
+
+// subscribeFailingFake wraps pidDroppingFake and fails any psql call
+// whose argv carries a CREATE SUBSCRIPTION statement mentioning
+// failSubstr. Everything else (including canned Results) behaves like
+// pidDroppingFake — this reproduces "member i's standalone deploy
+// succeeded, then its subscribe step died".
+type subscribeFailingFake struct {
+	pidDroppingFake
+	failSubstr string
+}
+
+func (f *subscribeFailingFake) Run(ctx context.Context, name string, args ...string) pgexec.Result {
+	if name == "psql" {
+		for _, a := range args {
+			if strings.Contains(a, "CREATE SUBSCRIPTION") && strings.Contains(a, f.failSubstr) {
+				f.Calls = append(f.Calls, pgexec.FakeCall{Method: "Run", Name: name, Args: args})
+				return pgexec.Result{
+					Stderr:   []byte("ERROR:  could not connect to the publisher\n"),
+					ExitCode: 1,
+				}
+			}
+		}
+	}
+	return f.pidDroppingFake.Run(ctx, name, args...)
+}
+
+// deployLogicalPartialFixture deploys a 3-member logical cluster where
+// member 2's subscribe step fails AFTER its standalone sandbox was
+// deployed and started — the MED-8 scenario. Asserts the deploy failed
+// with ExitClusterDeployFailed and returns the cluster dir + runner
+// for follow-up Destroy / Status assertions.
+func deployLogicalPartialFixture(t *testing.T) (string, *subscribeFailingFake) {
+	t.Helper()
+	root := t.TempDir()
+	clusterDir := filepath.Join(root, "mylog")
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	primaryPort := freeProbePort(t)
+	// Member 2's default sub name is "<member>_sub" (see
+	// sandbox.Subscribe), so failing on it hits exactly that member.
+	runner := &subscribeFailingFake{failSubstr: "mylog_s2_sub"}
+	// SHOW wal_level → "logical" (same trick as TestDeployLogicalHappyPath).
+	runner.SetResult("psql", pgexec.Result{Stdout: []byte("logical\n"), ExitCode: 0})
+	t.Cleanup(func() { runner.closeAllListeners() })
+
+	_, err := Deploy(context.Background(), runner, DeployOptions{
+		ClusterDir:   clusterDir,
+		BinDir:       binDir,
+		Host:         "127.0.0.1",
+		Port:         primaryPort,
+		PortExplicit: true,
+		Nodes:        2,
+		Mode:         config.ClusterLogical,
+		SelfPath:     "/usr/local/bin/pg_sandbox",
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("expected member 2 deploy failure, got nil")
+	}
+	if got := ExitCodeFor(err); got != ui.ExitClusterDeployFailed {
+		t.Fatalf("exit code: got %d, want %d", got, ui.ExitClusterDeployFailed)
 	}
 	return clusterDir, runner
 }

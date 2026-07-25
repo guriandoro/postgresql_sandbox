@@ -264,6 +264,23 @@ type ClusterManifest struct {
 	LastModifiedAt time.Time       `json:"lastModifiedAt"`
 }
 
+// MemberState records a cluster member's deploy outcome in the
+// manifest. The zero value (empty string) means the member deployed
+// fully — deliberate, so manifests written before this field existed
+// load unchanged and manifests with only successful members
+// serialize without any "state" key (omitempty). Like Role, values
+// may be added but never renamed.
+type MemberState string
+
+const (
+	// MemberStateFailed marks a member whose deploy failed partway
+	// through. Its dir can hold anything from nothing at all to a
+	// started sandbox (deploy deliberately leaves partial state on
+	// disk for inspection), so `cluster destroy` tears these down
+	// best-effort and `cluster status` reports them distinctly.
+	MemberStateFailed MemberState = "failed"
+)
+
 // ClusterMember is one entry in ClusterManifest.Members.
 type ClusterMember struct {
 	Name string `json:"name"`
@@ -273,6 +290,13 @@ type ClusterMember struct {
 	// Pointer (rather than int with 0 as "unset") to keep "first
 	// sync slot" (index 0) distinguishable from "not sync".
 	SyncIndex *int `json:"syncIndex,omitempty"`
+	// State is the member's deploy outcome. Empty means the member
+	// deployed fully; MemberStateFailed marks a member whose deploy
+	// failed partway. Recorded so destroy/status still see partial
+	// members — a member can fail AFTER its sandbox was deployed
+	// and started, and leaving it out of the manifest would orphan
+	// a running postmaster.
+	State MemberState `json:"state,omitempty"`
 }
 
 // ClusterRepl carries the cluster-level replication parameters.

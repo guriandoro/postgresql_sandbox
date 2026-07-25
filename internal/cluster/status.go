@@ -59,6 +59,12 @@ type MemberStatus struct {
 	// the text view; JSON consumers can branch on this flag.
 	Missing bool `json:"missing"`
 
+	// DeployState is the manifest-recorded deploy outcome. Empty
+	// for members that deployed fully; config.MemberStateFailed for
+	// members whose deploy died partway. Orthogonal to Missing /
+	// Report, which describe what's on disk right now.
+	DeployState config.MemberState `json:"deployState,omitempty"`
+
 	// Report is the per-member sandbox.Status output. nil when
 	// Missing is true or when LoadSandbox failed.
 	Report *sandbox.StatusReport `json:"report,omitempty"`
@@ -108,8 +114,9 @@ func Status(ctx context.Context, runner pgexec.Runner, opts StatusOptions, stder
 					member.Name, opts.ClusterDir))
 		}
 		entry := MemberStatus{
-			Name: member.Name,
-			Role: member.Role,
+			Name:        member.Name,
+			Role:        member.Role,
+			DeployState: member.State,
 		}
 		if !config.IsSandboxDir(dir) {
 			// Manifest declares it; dir is gone or never finished
@@ -154,6 +161,14 @@ func (cs *ClusterStatus) RenderText(w io.Writer) {
 		fmt.Fprintln(w)
 		fmt.Fprintf(w, "member=%s\n", m.Name)
 		fmt.Fprintf(w, "member_role=%s\n", m.Role)
+		if m.DeployState != "" {
+			// Manifest-recorded deploy outcome (e.g. "failed" for a
+			// member whose deploy died partway). Deliberately a
+			// separate key from the live state= vocabulary below —
+			// a failed member can still be running (subscribe died
+			// after its sandbox started) or missing entirely.
+			fmt.Fprintf(w, "member_deploy_state=%s\n", m.DeployState)
+		}
 		if m.Missing {
 			// SPEC §6.4 frames missing as a state, not an error. We
 			// mirror sandbox.RenderText's vocabulary (running/
