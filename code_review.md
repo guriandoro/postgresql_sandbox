@@ -39,7 +39,7 @@ re-verified — re-confirm the failure mode before fixing.
 | MED-2  | medium | NormalizeString lets invalid chars into replication slot names | fixed     |
 | MED-3  | medium | `--quiet` makes y/N confirmation prompts invisible             | fixed     |
 | MED-4  | medium | `config migrate -s` bypasses resolveSandboxArg; relative path corrupts Name | fixed |
-| MED-5  | medium | cleanup-install-versions can delete an in-use install (3 ways) | not-fixed |
+| MED-5  | medium | cleanup-install-versions can delete an in-use install (3 ways) | fixed     |
 | MED-6  | medium | `build --force` deletes a live mismatched-version install      | not-fixed |
 | MED-7  | medium | Cluster destroy trusts manifest member names (path escape)     | not-fixed |
 | MED-8  | medium | Cluster partial deploy orphans a running member                | not-fixed |
@@ -553,9 +553,9 @@ sandboxRoot (extend the existing resolve tests).
 
 ```yaml
 id: MED-5
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: 9787d02
+fixed-date: 2026-07-25
 severity: medium
 type: bug (destructive)
 files:
