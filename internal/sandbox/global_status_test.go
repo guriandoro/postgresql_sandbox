@@ -91,6 +91,63 @@ func writeClusterFixture(t *testing.T, root, name string, members []string, base
 	return cdir
 }
 
+// writeClusterFixtureNamed is writeClusterFixture with the directory
+// name decoupled from the manifest name. The walk visits cluster dirs
+// in directory-name order but sorts gs.Clusters by manifest name, so a
+// dirName that sorts differently from manifestName is what exercises
+// the MED-12 pre-sort/post-sort index mismatch.
+func writeClusterFixtureNamed(t *testing.T, root, dirName, manifestName string, members []string, basePort int) string {
+	t.Helper()
+	cdir := filepath.Join(root, dirName)
+	if err := os.MkdirAll(cdir, 0o755); err != nil {
+		t.Fatalf("mkdir cluster: %v", err)
+	}
+	m := &config.ClusterManifest{
+		Name: manifestName,
+		Mode: config.ClusterPhysical,
+	}
+	for i, mn := range members {
+		role := config.RolePrimary
+		if i > 0 {
+			role = config.RoleStandby
+		}
+		m.Members = append(m.Members, config.ClusterMember{Name: mn, Role: role})
+		writeSandboxFixture(t, cdir, mn, basePort+i, manifestName)
+		mcfg, _ := config.LoadSandbox(filepath.Join(cdir, mn))
+		mcfg.Role = role
+		_ = config.SaveSandbox(filepath.Join(cdir, mn), mcfg)
+	}
+	if err := config.SaveCluster(cdir, m); err != nil {
+		t.Fatalf("SaveCluster: %v", err)
+	}
+	return cdir
+}
+
+// findCluster returns the ClusterEntry with the given manifest name, or
+// nil. Returns a pointer into gs.Clusters so callers can inspect Members.
+func findCluster(gs *GlobalStatus, name string) *ClusterEntry {
+	for i := range gs.Clusters {
+		if gs.Clusters[i].Name == name {
+			return &gs.Clusters[i]
+		}
+	}
+	return nil
+}
+
+// clusterHasMember reports whether the cluster lists a member of the
+// given name.
+func clusterHasMember(c *ClusterEntry, name string) bool {
+	if c == nil {
+		return false
+	}
+	for _, mb := range c.Members {
+		if mb.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
 // ----------------------------------------------------------------- //
 // Walk basics
 // ----------------------------------------------------------------- //
@@ -263,6 +320,62 @@ func TestGlobalStatusOrphan(t *testing.T) {
 	}
 	if gs.Orphaned[0].Cluster != "ghost_cluster" {
 		t.Errorf("orphan cluster name: got %q, want ghost_cluster", gs.Orphaned[0].Cluster)
+	}
+}
+
+func TestGlobalStatusRelocatedMemberAttachedToCorrectClusterAfterSort(t *testing.T) {
+	// Regression for MED-12. clusterByName records each cluster's index
+	// as it is appended during the walk (directory-name order); gs.Clusters
+	// is then sorted by manifest name; orphan reconciliation indexes the
+	// SORTED slice with those PRE-sort positions. When walk order differs
+	// from sorted order, a relocated sandbox that names an on-disk cluster
+	// was appended to the wrong cluster's member list.
+	//
+	// Setup: dir-walk order (by dir name) is "dir_a" then "dir_b", but the
+	// manifests inside them sort the other way — "zeta" then "alpha". A
+	// relocated top-level sandbox names cluster "alpha" and must land under
+	// alpha, never under zeta.
+	root := t.TempDir()
+
+	// dir "dir_a" (visited first) holds a cluster whose manifest is "zeta".
+	writeClusterFixtureNamed(t, root, "dir_a", "zeta", []string{"zeta_p"}, freeProbePort(t))
+	// dir "dir_b" (visited second) holds a cluster whose manifest is "alpha".
+	writeClusterFixtureNamed(t, root, "dir_b", "alpha", []string{"alpha_p"}, freeProbePort(t))
+
+	// A relocated sandbox living at the root that claims membership in the
+	// on-disk cluster "alpha" (not nested under its cluster dir).
+	writeSandboxFixture(t, root, "relocated_sb", freeProbePort(t), "alpha")
+
+	gs, err := GlobalStatusWalk(context.Background(), GlobalStatusOptions{Root: root}, io.Discard)
+	if err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+
+	if len(gs.Clusters) != 2 {
+		t.Fatalf("clusters: got %d, want 2", len(gs.Clusters))
+	}
+	alpha := findCluster(gs, "alpha")
+	zeta := findCluster(gs, "zeta")
+	if alpha == nil || zeta == nil {
+		t.Fatalf("expected clusters alpha and zeta, got %+v", gs.Clusters)
+	}
+	if !clusterHasMember(alpha, "relocated_sb") {
+		t.Errorf("relocated_sb should be a member of cluster alpha; alpha members=%+v", alpha.Members)
+	}
+	if clusterHasMember(zeta, "relocated_sb") {
+		t.Errorf("relocated_sb wrongly attached to cluster zeta; zeta members=%+v", zeta.Members)
+	}
+	// It must not linger as a top-level sandbox, and it names an on-disk
+	// cluster so it must not be orphaned either.
+	for _, sb := range gs.Sandboxes {
+		if sb.Name == "relocated_sb" {
+			t.Errorf("relocated_sb should have been moved into a cluster, still top-level")
+		}
+	}
+	for _, sb := range gs.Orphaned {
+		if sb.Name == "relocated_sb" {
+			t.Errorf("relocated_sb names an on-disk cluster; should not be orphaned")
+		}
 	}
 }
 

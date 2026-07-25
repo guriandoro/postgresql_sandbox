@@ -199,13 +199,16 @@ func GlobalStatusWalk(ctx context.Context, opts GlobalStatusOptions, stderrW io.
 	sort.Slice(gs.Sandboxes, func(i, j int) bool {
 		return gs.Sandboxes[i].Name < gs.Sandboxes[j].Name
 	})
-	sort.Slice(gs.Clusters, func(i, j int) bool {
-		return gs.Clusters[i].Name < gs.Clusters[j].Name
-	})
 
 	// Reconcile orphans: any top-level sandbox that claims membership
-	// in a cluster we didn't see on disk goes into Orphaned. We do
-	// this AFTER sorting so the orphan section is also deterministic.
+	// in a cluster we didn't see on disk goes into Orphaned. gs.Sandboxes
+	// is already sorted, so the orphan section is deterministic.
+	//
+	// This MUST run before gs.Clusters is sorted: clusterByName maps each
+	// cluster name to its walk-order (append-time) index, so those indices
+	// are only valid while gs.Clusters is still in walk order. Sorting the
+	// cluster slice first would make the idx lookup below attach relocated
+	// members to the wrong cluster (MED-12).
 	kept := gs.Sandboxes[:0]
 	for _, sb := range gs.Sandboxes {
 		if sb.Cluster != "" {
@@ -233,6 +236,14 @@ func GlobalStatusWalk(ctx context.Context, opts GlobalStatusOptions, stderrW io.
 		kept = append(kept, sb)
 	}
 	gs.Sandboxes = kept
+
+	// Sort clusters by name LAST — after reconciliation has consumed the
+	// walk-order indices in clusterByName. Sorting here (rather than
+	// alongside the sandbox sort above) keeps the output deterministic
+	// without invalidating those indices. See MED-12.
+	sort.Slice(gs.Clusters, func(i, j int) bool {
+		return gs.Clusters[i].Name < gs.Clusters[j].Name
+	})
 
 	return gs, nil
 }
