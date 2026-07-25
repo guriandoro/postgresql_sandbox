@@ -42,7 +42,7 @@ re-verified — re-confirm the failure mode before fixing.
 | MED-5  | medium | cleanup-install-versions can delete an in-use install (3 ways) | fixed     |
 | MED-6  | medium | `build --force` deletes a live mismatched-version install      | fixed     |
 | MED-7  | medium | Cluster destroy trusts manifest member names (path escape)     | fixed |
-| MED-8  | medium | Cluster partial deploy orphans a running member                | not-fixed |
+| MED-8  | medium | Cluster partial deploy orphans a running member                | fixed |
 | MED-9  | medium | `deploy --subscribe-to` forces dbname=postgres                 | not-fixed |
 | MED-10 | medium | `promote` leaks the replication slot on the old source         | not-fixed |
 | MED-11 | medium | Unescaped SQL interpolation (publish/subscribe/destroy/status) | not-fixed |
@@ -687,9 +687,9 @@ on a hand-written bad manifest → clean error, nothing touched.
 
 ```yaml
 id: MED-8
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: 43e5769
+fixed-date: 2026-07-25
 severity: medium
 type: bug (resource leak / stuck state)
 files:
