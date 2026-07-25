@@ -313,7 +313,7 @@ func Generate(ctx context.Context, opts Options, stderrW io.Writer) (*Result, er
 	)
 	if res.Err != nil || res.ExitCode != 0 {
 		writeStderr(stderrW, "psql load schema", res.Stderr)
-		return nil, leftover(fmt.Errorf("psql (schema+ingest) exit=%d: %w", res.ExitCode, res.Err))
+		return nil, leftover(psqlStepErr("schema+ingest", res.ExitCode, res.Err))
 	}
 
 	// Step 4: run gather_report.sql with stdout captured to a file.
@@ -356,10 +356,7 @@ func Generate(ctx context.Context, opts Options, stderrW io.Writer) (*Result, er
 	// So we treat res.ExitCode != 0 as fatal too.
 	if res.Err != nil || res.ExitCode != 0 {
 		writeStderr(stderrW, "psql render report", res.Stderr)
-		if res.Err != nil {
-			return nil, leftover(fmt.Errorf("psql (render report) exit=%d: %w", res.ExitCode, res.Err))
-		}
-		return nil, leftover(fmt.Errorf("psql (render report) exit=%d", res.ExitCode))
+		return nil, leftover(psqlStepErr("render report", res.ExitCode, res.Err))
 	}
 	// Even on a clean exit 0, sanity-check the captured HTML before it
 	// touches disk: a render truncated before its final `\echo </html>`
@@ -730,6 +727,21 @@ func randomTag() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b[:]), nil
+}
+
+// psqlStepErr builds the failure error for a psql pipeline step. It
+// wraps res.Err with %w ONLY when it's non-nil: in the by-far-most-
+// common failure — a malformed out.txt trips ON_ERROR_STOP so psql
+// exits non-zero with a nil res.Err — wrapping the nil error would
+// render as the literal "%!w(<nil>)" in the user-facing message. A nil
+// error yields a plain "exit=N" message instead. Shared by the
+// schema+ingest and render steps so both branches build the message
+// the same way.
+func psqlStepErr(step string, exitCode int, err error) error {
+	if err != nil {
+		return fmt.Errorf("psql (%s) exit=%d: %w", step, exitCode, err)
+	}
+	return fmt.Errorf("psql (%s) exit=%d", step, exitCode)
 }
 
 // writeStderr writes a single structured-log line summarising the

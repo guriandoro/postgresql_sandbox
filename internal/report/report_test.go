@@ -664,6 +664,40 @@ func TestGenerateSchemaLoadFailureLeavesSandbox(t *testing.T) {
 	if le != nil && !strings.Contains(le.Dir, "_report_") {
 		t.Errorf("throwaway dir doesn't look like _report_*: %q", le.Dir)
 	}
+	// MED-1b regression: this is the common ON_ERROR_STOP shape — psql
+	// exits non-zero (3) with a nil res.Err. The message must NOT wrap
+	// the nil error (which would render as "%!w(<nil>)"); it must be the
+	// plain "exit=3" form.
+	msg := err.Error()
+	if strings.Contains(msg, "%!w") {
+		t.Errorf("message wraps a nil error (%%!w): %q", msg)
+	}
+	if !strings.Contains(msg, "psql (schema+ingest) exit=3") {
+		t.Errorf("message missing plain schema+ingest exit=3 text: %q", msg)
+	}
+}
+
+// TestPsqlStepErr unit-tests the shared message builder directly: with a
+// non-nil error it wraps via %w (and Unwrap recovers it); with a nil
+// error it produces a plain "exit=N" string and never the "%!w(<nil>)"
+// artifact that MED-1b was about.
+func TestPsqlStepErr(t *testing.T) {
+	inner := errors.New("boom")
+	wrapped := psqlStepErr("schema+ingest", 1, inner)
+	if !strings.Contains(wrapped.Error(), "psql (schema+ingest) exit=1: boom") {
+		t.Errorf("wrapped message: got %q", wrapped.Error())
+	}
+	if !errors.Is(wrapped, inner) {
+		t.Errorf("wrapped error does not unwrap to inner: %v", wrapped)
+	}
+
+	plain := psqlStepErr("render report", 3, nil)
+	if strings.Contains(plain.Error(), "%!w") {
+		t.Errorf("nil-error message contains %%!w artifact: %q", plain.Error())
+	}
+	if plain.Error() != "psql (render report) exit=3" {
+		t.Errorf("nil-error message: got %q, want %q", plain.Error(), "psql (render report) exit=3")
+	}
 }
 
 // TestGenerateSchemaLoadFailureDestroyOnFailure mirrors the test above
