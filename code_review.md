@@ -31,7 +31,7 @@ re-verified — re-confirm the failure mode before fixing.
 
 | ID     | Sev    | Title                                                          | Status    |
 |--------|--------|----------------------------------------------------------------|-----------|
-| HIGH-1 | high   | Stale postmaster.pid wedges start/stop/restart                 | not-fixed |
+| HIGH-1 | high   | Stale postmaster.pid wedges start/stop/restart                 | fixed     |
 | HIGH-2 | high   | PG* env shadowed by user's shell in `run`/`use` (syscall.Exec) | not-fixed |
 | HIGH-3 | high   | Shared predictable /tmp build dir + unverified tarball cache   | not-fixed |
 | HIGH-4 | high   | `report` executes untrusted input via psql meta-commands       | not-fixed |
@@ -77,9 +77,9 @@ re-verified — re-confirm the failure mode before fixing.
 
 ```yaml
 id: HIGH-1
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: c080c15
+fixed-date: 2026-07-25
 severity: high
 type: bug
 files:
