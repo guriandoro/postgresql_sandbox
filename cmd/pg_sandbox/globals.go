@@ -140,6 +140,24 @@ func (o *GlobalOpts) WrapStderr(stderr io.Writer) io.Writer {
 	return &quietFilter{inner: stderr, buf: &bytes.Buffer{}}
 }
 
+// promptWriter returns the writer that interactive y/N confirmation
+// prompts MUST use: the terminal stderr, bypassing the quiet filter.
+//
+// A prompt is ERROR-tier interactive output written WITHOUT a trailing
+// newline. The quietFilter buffers until it sees '\n' (it needs the
+// whole line to prefix-match the gated level= prefixes), so a
+// newline-less prompt routed through it would sit in the buffer while
+// the process blocks on stdin — the user sees nothing and it looks like
+// a hang (MED-3). So when stderr is a quietFilter we unwrap to its
+// inner (unfiltered) writer; otherwise stderr is already unfiltered and
+// is returned as-is. Callers pass the result to the confirm helpers.
+func promptWriter(stderr io.Writer) io.Writer {
+	if q, ok := stderr.(*quietFilter); ok {
+		return q.inner
+	}
+	return stderr
+}
+
 // quietFilter is the io.Writer that strips INFO/WARN level= lines.
 // We buffer until we see a newline so we can decide per-line. Partial
 // writes that don't contain a newline are held until the next Write

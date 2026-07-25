@@ -69,7 +69,7 @@ func runDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "pg_sandbox destroy: stdin is not a TTY and --force was not set; refusing")
 			return ui.ExitNotATTY.Int()
 		}
-		if !confirmDestroy(cfg.Name, sandboxDir, os.Stdin, stderr) {
+		if !confirmDestroy(cfg.Name, sandboxDir, os.Stdin, promptWriter(stderr)) {
 			fmt.Fprintln(stderr, "pg_sandbox destroy: aborted")
 			return ui.ExitOK.Int()
 		}

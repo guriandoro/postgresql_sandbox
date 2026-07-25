@@ -352,7 +352,7 @@ func runClusterDestroy(args []string, _ io.Writer, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "pg_sandbox cluster destroy: stdin is not a TTY and --force was not set; refusing")
 			return ui.ExitNotATTY.Int()
 		}
-		if !confirmClusterDestroy(m.Name, clusterDir, len(m.Members), os.Stdin, stderr) {
+		if !confirmClusterDestroy(m.Name, clusterDir, len(m.Members), os.Stdin, promptWriter(stderr)) {
 			fmt.Fprintln(stderr, "pg_sandbox cluster destroy: aborted")
 			return ui.ExitOK.Int()
 		}

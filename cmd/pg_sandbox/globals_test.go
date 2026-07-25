@@ -297,6 +297,82 @@ func TestWrapStderr_quietHandlesPartialLines(t *testing.T) {
 	}
 }
 
+func TestPromptWriter_bypassesQuietFilterImmediately(t *testing.T) {
+	// MED-3: a y/N prompt is written WITHOUT a trailing newline, so
+	// routing it through the line-buffering quietFilter would leave it
+	// stuck in the buffer while the process blocks on stdin — an
+	// apparent hang. promptWriter must hand back the unfiltered inner
+	// writer so the prompt reaches the terminal the instant it's
+	// written.
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	globals := registerGlobalFlags(fs)
+	if err := fs.Parse([]string{"--quiet"}); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if _, _, err := globals.Resolve(io.Discard); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	var buf bytes.Buffer
+	wrapped := globals.WrapStderr(&buf)
+
+	// Sanity: under --quiet the wrapped writer really is a buffering
+	// filter, and a newline-less write through it is NOT yet visible —
+	// this is the exact trap MED-3 describes.
+	if _, err := wrapped.Write([]byte("destroy sandbox \"x\" at /tmp/x? [y/N]: ")); err != nil {
+		t.Fatalf("wrapped Write: %v", err)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("precondition: newline-less prompt should sit in the quiet filter buffer, got %q", buf.String())
+	}
+
+	// The fix: the same prompt written via the prompt path lands on the
+	// terminal immediately, no trailing newline required.
+	var buf2 bytes.Buffer
+	wrapped2 := globals.WrapStderr(&buf2)
+	promptW := promptWriter(wrapped2)
+	if promptW == io.Writer(wrapped2) {
+		t.Fatalf("promptWriter returned the quiet filter instead of the unfiltered inner writer")
+	}
+	const prompt = "destroy sandbox \"x\" at /tmp/x? [y/N]: "
+	if _, err := promptW.Write([]byte(prompt)); err != nil {
+		t.Fatalf("promptWriter Write: %v", err)
+	}
+	if buf2.String() != prompt {
+		t.Errorf("prompt did not reach the terminal immediately: got %q, want %q", buf2.String(), prompt)
+	}
+}
+
+func TestPromptWriter_passthroughWithoutQuiet(t *testing.T) {
+	// Without --quiet there is no filter to bypass: promptWriter must
+	// return the writer unchanged, and a newline-less prompt still
+	// reaches it immediately.
+	fs := flag.NewFlagSet("test", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	globals := registerGlobalFlags(fs)
+	if err := fs.Parse(nil); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if _, _, err := globals.Resolve(io.Discard); err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+
+	var buf bytes.Buffer
+	wrapped := globals.WrapStderr(&buf)
+	promptW := promptWriter(wrapped)
+	if promptW != io.Writer(&buf) {
+		t.Errorf("promptWriter altered the writer without --quiet: %T", promptW)
+	}
+	const prompt = "Remove 2 unused install version(s)? [y/N]: "
+	if _, err := promptW.Write([]byte(prompt)); err != nil {
+		t.Fatalf("promptWriter Write: %v", err)
+	}
+	if buf.String() != prompt {
+		t.Errorf("prompt did not reach the writer immediately: got %q, want %q", buf.String(), prompt)
+	}
+}
+
 func TestCaptureGlobalFlags_table(t *testing.T) {
 	cases := []struct {
 		name         string

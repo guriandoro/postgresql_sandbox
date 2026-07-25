@@ -111,7 +111,7 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintln(stderr, "pg_sandbox cleanup-install-versions: stdin is not a TTY and --force was not set; refusing")
 			return ui.ExitNotATTY.Int()
 		}
-		if !cleanup.Confirm(os.Stdin, stderr, unused) {
+		if !cleanup.Confirm(os.Stdin, promptWriter(stderr), unused) {
 			fmt.Fprintln(stderr, "pg_sandbox cleanup-install-versions: aborted")
 			return ui.ExitOK.Int()
 		}
