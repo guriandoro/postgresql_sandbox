@@ -12,6 +12,7 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -356,6 +357,56 @@ func TestResolveSandboxArg_usesGlobalConfigWhenEnvUnset(t *testing.T) {
 	got := resolveSandboxArg("pg18", g)
 	if got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// TestRunConfigMigrate_bareNameResolvesUnderSandboxRoot pins that
+// `config migrate -s <barename>` routes through resolveSandboxArg like
+// every other config subcommand: a bare name is found under
+// sandboxRoot, not in cwd. Regression guard for MED-4, where migrate
+// used the raw flag value and so failed (or migrated the wrong dir)
+// unless run from sandboxRoot itself.
+func TestRunConfigMigrate_bareNameResolvesUnderSandboxRoot(t *testing.T) {
+	resetEnv(t)
+	root := t.TempDir()
+	t.Setenv("PGS_SANDBOX_ROOT", root)
+	// Keep any real global config out of the way (GlobalConfigPath
+	// honors XDG_CONFIG_HOME before falling back to HOME).
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(t.TempDir(), "xdg"))
+
+	// Legacy env lives at <root>/mybox/pg_sandbox.env. The current
+	// working directory is the package dir, which has no "mybox" — so
+	// success can only come from resolving under sandboxRoot.
+	boxDir := filepath.Join(root, "mybox")
+	if err := os.MkdirAll(boxDir, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	legacy := `PGS_BIN_DIR=/opt/pg/bin
+PGS_DATADIR=data
+PGS_LOG=server.log
+PGS_ROLE=primary
+`
+	if err := os.WriteFile(filepath.Join(boxDir, "pg_sandbox.env"), []byte(legacy), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	rc := runConfigMigrate([]string{"-s", "mybox"}, &stdout, &stderr)
+	if rc != 0 {
+		t.Fatalf("rc = %d, want 0; stderr=%q", rc, stderr.String())
+	}
+
+	// The new file must have landed under sandboxRoot, and its Name
+	// must be the basename "mybox" (not "." or a cwd-derived value).
+	sb, err := config.LoadSandbox(boxDir)
+	if err != nil {
+		t.Fatalf("LoadSandbox(%s): %v", boxDir, err)
+	}
+	if sb.Name != "mybox" {
+		t.Errorf("Name = %q, want %q", sb.Name, "mybox")
+	}
+	if !filepath.IsAbs(sb.DataDir) || filepath.Base(sb.DataDir) != "data" {
+		t.Errorf("DataDir = %q, want an absolute path ending in /data", sb.DataDir)
 	}
 }
 

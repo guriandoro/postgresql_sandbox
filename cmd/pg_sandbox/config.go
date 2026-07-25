@@ -759,6 +759,12 @@ func runConfigMigrate(args []string, _ io.Writer, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "pg_sandbox config migrate: --sandbox-dir is required")
 		return ui.ExitUsage.Int()
 	}
+	// Resolve -s exactly like every other config subcommand (show/get/
+	// set/validate): a bare name or relative path resolves under
+	// sandboxRoot (§3.3) and a leading ~ is expanded. Without this,
+	// `config migrate -s mybox` would look for mybox/pg_sandbox.env in
+	// cwd instead of <sandboxRoot>/mybox/pg_sandbox.env.
+	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 
 	legacyPath := filepath.Join(sandboxDir, "pg_sandbox.env")
 	if _, err := os.Stat(legacyPath); err != nil {

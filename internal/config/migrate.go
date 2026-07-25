@@ -45,6 +45,17 @@ import (
 // the resulting Sandbox is persisted (typically pg_sandbox.json
 // next to the original .env).
 func Migrate(legacyPath string) (*Sandbox, error) {
+	// Resolve to an absolute path up front so sandboxDir (below) — and
+	// the relative PGS_DATADIR/PGS_LOG values resolved against it, plus
+	// the sandbox Name derived from its basename — are absolute
+	// regardless of the caller's cwd. A relative legacyPath such as
+	// "pg_sandbox.env" would otherwise yield sandboxDir="." and
+	// s.Name=".", and a relative DataDir that Validate then rejects.
+	legacyPath, err := filepath.Abs(legacyPath)
+	if err != nil {
+		return nil, fmt.Errorf("config.Migrate: %w", err)
+	}
+
 	f, err := os.Open(legacyPath)
 	if err != nil {
 		return nil, fmt.Errorf("config.Migrate: %w", err)

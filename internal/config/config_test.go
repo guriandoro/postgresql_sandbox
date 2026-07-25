@@ -446,6 +446,64 @@ func TestMigrateBadPort(t *testing.T) {
 	}
 }
 
+func TestMigrateRelativeLegacyPathAbsolutizes(t *testing.T) {
+	// A relative legacyPath (e.g. `config migrate -s .` → the raw
+	// "pg_sandbox.env" once joined) must NOT leak into Name or DataDir
+	// as a relative value. Migrate.filepath.Abs's it first, so the
+	// derived sandboxDir/Name/DataDir come back absolute and correct
+	// regardless of the caller's cwd. See MED-4.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "pg_sandbox.env"), []byte(`
+PGS_BIN_DIR=/opt/pg/bin
+PGS_DATADIR=data
+PGS_LOG=server.log
+PGS_PORT=65432
+`), 0o644); err != nil {
+		t.Fatalf("write legacy: %v", err)
+	}
+
+	// chdir into dir so a relative "pg_sandbox.env" resolves here.
+	// Save/restore CWD manually (t.Chdir is 1.24+; go.mod baseline is
+	// 1.22).
+	origCWD, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(origCWD) })
+
+	// EvalSymlinks because on macOS t.TempDir() lives under /var →
+	// /private/var; filepath.Abs from the chdir'd CWD reports the
+	// resolved path, so the expected values must be resolved too.
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s, err := Migrate("pg_sandbox.env")
+	if err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	if s.Name != filepath.Base(realDir) {
+		t.Errorf("Name = %q, want %q (basename of the resolved sandbox dir, not \".\")", s.Name, filepath.Base(realDir))
+	}
+	if !filepath.IsAbs(s.DataDir) {
+		t.Errorf("DataDir = %q, want an absolute path", s.DataDir)
+	}
+	if want := filepath.Join(realDir, "data"); s.DataDir != want {
+		t.Errorf("DataDir = %q, want %q", s.DataDir, want)
+	}
+	if !filepath.IsAbs(s.LogFile) {
+		t.Errorf("LogFile = %q, want an absolute path", s.LogFile)
+	}
+	if want := filepath.Join(realDir, "server.log"); s.LogFile != want {
+		t.Errorf("LogFile = %q, want %q", s.LogFile, want)
+	}
+}
+
 func TestGlobalConfigPathRespectsXDG(t *testing.T) {
 	// Set XDG_CONFIG_HOME for the test. t.Setenv restores the
 	// previous value (or unsetness) on test cleanup, so this is
