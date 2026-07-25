@@ -35,7 +35,7 @@ re-verified — re-confirm the failure mode before fixing.
 | HIGH-2 | high   | PG* env shadowed by user's shell in `run`/`use` (syscall.Exec) | fixed     |
 | HIGH-3 | high   | Shared predictable /tmp build dir + unverified tarball cache   | fixed |
 | HIGH-4 | high   | `report` executes untrusted input via psql meta-commands       | fixed |
-| MED-1  | medium | Report render step treats psql failure as success              | not-fixed |
+| MED-1  | medium | Report render step treats psql failure as success              | fixed     |
 | MED-2  | medium | NormalizeString lets invalid chars into replication slot names | not-fixed |
 | MED-3  | medium | `--quiet` makes y/N confirmation prompts invisible             | not-fixed |
 | MED-4  | medium | `config migrate -s` bypasses resolveSandboxArg; relative path corrupts Name | not-fixed |
@@ -339,9 +339,9 @@ CWD no longer consulted (or requires confirmation).
 
 ```yaml
 id: MED-1
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: ff4f9e3
+fixed-date: 2026-07-25
 severity: medium
 type: bug (silent data loss)
 files:
