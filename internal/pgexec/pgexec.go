@@ -238,7 +238,7 @@ func (e *Exec) runCaptured(ctx context.Context, stdin io.Reader, name string, ar
 	// don't truncate normal completion.
 	cmd.WaitDelay = 500 * time.Millisecond
 	if len(e.Env) > 0 {
-		cmd.Env = append(os.Environ(), e.Env...)
+		cmd.Env = mergeEnv(os.Environ(), e.Env)
 	}
 	if stdin != nil {
 		cmd.Stdin = stdin
@@ -264,7 +264,7 @@ func (e *Exec) RunInteractive(ctx context.Context, name string, args ...string) 
 	cmd := exec.CommandContext(ctx, full, args...)
 	cmd.WaitDelay = 500 * time.Millisecond
 	if len(e.Env) > 0 {
-		cmd.Env = append(os.Environ(), e.Env...)
+		cmd.Env = mergeEnv(os.Environ(), e.Env)
 	}
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -287,6 +287,18 @@ func (e *Exec) RunInteractive(ctx context.Context, name string, args ...string) 
 // syscall.Exec with a pristine env — the parent already established
 // the user's locale, PATH, etc., and clobbering all of that would
 // surprise the user.
+//
+// We must dedup here (via mergeEnv) rather than naively append:
+// syscall.Exec passes the env slice to execve verbatim, and libc
+// getenv on both glibc and macOS returns the FIRST match for a key.
+// A plain append(os.Environ(), e.Env...) would leave the user's
+// shell PGHOST/PGPORT/etc. ahead of the sandbox's values, silently
+// shadowing them in the child — data-damaging when a tool like
+// pgbench then connects to the user's real server. (The os/exec
+// Run* paths don't need this: os/exec dedups keeping the LAST
+// value, so the appended e.Env already wins there — but we use
+// mergeEnv uniformly so every child sees exactly one entry per key
+// with e.Env winning.)
 func (e *Exec) Exec(name string, args ...string) error {
 	full, err := e.Locate(name)
 	if err != nil {
@@ -300,9 +312,41 @@ func (e *Exec) Exec(name string, args ...string) error {
 	argv := append([]string{full}, args...)
 	env := os.Environ()
 	if len(e.Env) > 0 {
-		env = append(env, e.Env...)
+		env = mergeEnv(env, e.Env)
 	}
 	return syscall.Exec(full, argv, env)
+}
+
+// mergeEnv combines base and overlay into a single KEY=VALUE slice
+// with no duplicate keys. Overlay wins on conflicts; base ordering
+// is preserved and an overlaid key keeps base's position (its value
+// is updated in place) so the child's env is stable regardless of
+// which side set a variable. Entries without an '=' are treated as
+// a key with an empty value (matching execve's view of the string).
+//
+// This exists because syscall.Exec does not deduplicate the env it
+// is handed, and libc getenv returns the first match — see Exec's
+// doc comment for why the first-match rule makes naive appending a
+// correctness (and data-safety) bug.
+func mergeEnv(base, overlay []string) []string {
+	seen := make(map[string]int, len(base)+len(overlay))
+	out := make([]string, 0, len(base)+len(overlay))
+	add := func(kv string) {
+		k, _, _ := strings.Cut(kv, "=")
+		if i, ok := seen[k]; ok {
+			out[i] = kv
+			return
+		}
+		seen[k] = len(out)
+		out = append(out, kv)
+	}
+	for _, kv := range base {
+		add(kv)
+	}
+	for _, kv := range overlay {
+		add(kv)
+	}
+	return out
 }
 
 // logExec writes a single debug-level line per invocation when a

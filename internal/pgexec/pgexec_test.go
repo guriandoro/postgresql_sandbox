@@ -306,6 +306,110 @@ func TestExitCodeOfWrapping(t *testing.T) {
 	}
 }
 
+// mergeEnv must let the overlay win on a key collision while
+// preserving base's ordering (the overlaid key keeps base's slot,
+// only its value changes) and never emitting a duplicate key.
+func TestMergeEnvOverlayWins(t *testing.T) {
+	base := []string{"PGHOST=base-host", "PATH=/usr/bin", "PGPORT=5432"}
+	overlay := []string{"PGPORT=1", "PGDATABASE=mybox"}
+	got := mergeEnv(base, overlay)
+
+	// Order: base keys keep their positions (PGHOST, PATH, PGPORT),
+	// then overlay-only keys append in overlay order (PGDATABASE).
+	want := []string{"PGHOST=base-host", "PATH=/usr/bin", "PGPORT=1", "PGDATABASE=mybox"}
+	if len(got) != len(want) {
+		t.Fatalf("mergeEnv length: got %d (%v), want %d (%v)", len(got), got, len(want), want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("mergeEnv[%d]: got %q, want %q (full: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// mergeEnv must collapse duplicates that already exist WITHIN a
+// single input slice (base or overlay), keeping the last value for
+// that key — the same last-wins rule os/exec applies — and leaving
+// exactly one entry per key.
+func TestMergeEnvNoDuplicateKeys(t *testing.T) {
+	base := []string{"PGPORT=1", "PGPORT=2", "PGHOST=h"}
+	overlay := []string{"PGHOST=h2", "PGHOST=h3"}
+	got := mergeEnv(base, overlay)
+
+	seen := map[string]int{}
+	for _, kv := range got {
+		k, _, _ := strings.Cut(kv, "=")
+		seen[k]++
+	}
+	for k, n := range seen {
+		if n != 1 {
+			t.Errorf("key %q appears %d times, want exactly 1 (full: %v)", k, n, got)
+		}
+	}
+	// Last value within a slice wins, overlay beats base overall.
+	if v := envValue(got, "PGPORT"); v != "2" {
+		t.Errorf("PGPORT: got %q, want %q (last base value)", v, "2")
+	}
+	if v := envValue(got, "PGHOST"); v != "h3" {
+		t.Errorf("PGHOST: got %q, want %q (last overlay value)", v, "h3")
+	}
+}
+
+// End-to-end on the Exec env build: with a fake PGPORT already in
+// the parent process's environment, the slice handed to syscall.Exec
+// must contain exactly ONE PGPORT= entry carrying the sandbox's
+// value — the whole point of HIGH-2. We reach the built env by
+// re-running mergeEnv over the same inputs Exec uses (os.Environ()
+// as base, e.Env as overlay); a purpose-built helper keeps this
+// hermetic without actually replacing the process.
+func TestExecEnvHasSinglePGPORTWithOverlayValue(t *testing.T) {
+	t.Setenv("PGPORT", "5432") // pretend the user's shell exported this
+
+	e := &Exec{Env: pgEnvForTest()}
+	built := mergeEnv(os.Environ(), e.Env)
+
+	var count int
+	for _, kv := range built {
+		if k, _, _ := strings.Cut(kv, "="); k == "PGPORT" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("PGPORT entries in built env: got %d, want 1 (env: %v)", count, filterPG(built))
+	}
+	if v := envValue(built, "PGPORT"); v != "55432" {
+		t.Errorf("PGPORT value: got %q, want %q (sandbox overlay must beat the shell)", v, "55432")
+	}
+}
+
+// pgEnvForTest mirrors the sandbox-side PG* overlay shape used by
+// `use`/`run` — a single PGPORT override is enough to exercise the
+// shadowing bug.
+func pgEnvForTest() []string { return []string{"PGPORT=55432"} }
+
+// envValue returns the value of the last KEY=VALUE entry for key, or
+// "" if absent.
+func envValue(env []string, key string) string {
+	val := ""
+	for _, kv := range env {
+		if k, v, ok := strings.Cut(kv, "="); ok && k == key {
+			val = v
+		}
+	}
+	return val
+}
+
+// filterPG keeps only PG* entries, for readable failure output.
+func filterPG(env []string) []string {
+	var out []string
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "PG") {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
 // Helper retained for future tests; silences unused-import lint
 // for io across the file if it gets used later.
 var _ = io.Discard
