@@ -13,15 +13,22 @@
 //     itself when its basename already matches major.minor — to avoid
 //     surprising `/opt/pg/18.4/18.4`-style double-nesting; a mismatch
 //     between that basename and the build version emits a warning),
-//     build scratch (PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/),
-//     per-step log dir.
+//     build scratch (PGS_BUILD_DIR, or the per-user
+//     os.UserCacheDir()/pg_sandbox/build — NOT the shared /tmp, where
+//     another local user could pre-own the path and poison the cache),
+//     per-step log dir. The build dir is created 0o700 and refused if
+//     it is owned by another user or group/world-writable.
 //  3. Handle --force: if the install prefix already exists, abort
 //     (ExitBuildFailed) unless --force was passed; with --force we
 //     RemoveAll the existing prefix so make install has a clean target.
-//  4. Download the tarball over HTTPS from ftp.postgresql.org. A
-//     non-200 response is treated as "wrong version" (the most common
-//     user error) and reported as such. A non-zero cached tarball is
-//     reused to avoid re-downloading on repeated builds.
+//  4. Download the tarball over HTTPS from ftp.postgresql.org and
+//     verify it against the upstream .sha256 companion file (fetched
+//     first; stored next to the tarball). A non-200 response for the
+//     tarball is treated as "wrong version" (the most common user
+//     error) and reported as such. A cached tarball is reused only
+//     after re-hashing it against the stored (or re-fetched) .sha256;
+//     a mismatch is a hard "delete and retry" error. Releases with no
+//     upstream .sha256 (HTTP 404) proceed with a loud WARN.
 //  5. Extract via tar -xzf. We shell out rather than using
 //     archive/tar+compress/gzip because tar handles symlinks,
 //     permissions, and large archives more robustly than a hand-

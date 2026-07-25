@@ -56,7 +56,7 @@ func runBuild(args []string, stdout, stderr io.Writer) int {
 	fs.BoolVar(&force, "f", false, "Alias for --force")
 	fs.StringVar(&binDir, "bin-dir", "", "Install root (each version goes under <bin-dir>/<version>/). Default $PGS_BIN_DIR, global defaultBinDir, or /opt/postgresql.")
 	fs.StringVar(&binDir, "b", "", "Alias for --bin-dir")
-	fs.StringVar(&buildDir, "build-dir", "", "Build scratch dir. Default $PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/")
+	fs.StringVar(&buildDir, "build-dir", "", "Build scratch dir. Default $PGS_BUILD_DIR or <user-cache-dir>/pg_sandbox/build/")
 
 	// Reorder bool flags ahead of positionals so `build 18.4 --force`
 	// works. See parseSubcommandArgs in argv.go for the full rationale
@@ -138,7 +138,7 @@ func buildHelp(w io.Writer) {
 	fmt.Fprintln(w, "Flags:")
 	writeHelpFlags(w, []helpFlag{
 		{"-b, --bin-dir <dir>", "Install root (default $PGS_BIN_DIR, global defaultBinDir, or /opt/postgresql)"},
-		{"    --build-dir <dir>", "Build scratch dir (default $PGS_BUILD_DIR or $TMPDIR/pg_sandbox-build/)"},
+		{"    --build-dir <dir>", "Build scratch dir (default $PGS_BUILD_DIR or <user-cache-dir>/pg_sandbox/build/)"},
 		{"    --with-icu", "Pass --with-icu to configure"},
 		{"    --with-openssl", "Pass --with-openssl to configure"},
 		{"    --configure-opts <s>", "Extra ./configure flags (whitespace-split, NOT shell-parsed)"},

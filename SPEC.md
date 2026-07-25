@@ -200,7 +200,7 @@ The tool MUST NOT depend on `bash` features, `sed`, `awk`, `perl`, or other core
 | `PGS_DBNAME` | Default database name | `postgres` |
 | `PGS_DEBUG` | Set non-empty to behave as if `--debug` was passed | unset |
 | `PGS_PG_GATHER_DIR` | pg_gather scripts location | (none) |
-| `PGS_BUILD_DIR` | Build scratch dir (Phase 2) | `$TMPDIR/pg_sandbox-build/` |
+| `PGS_BUILD_DIR` | Build scratch dir (Phase 2) | `<user-cache-dir>/pg_sandbox/build/` |
 | `NO_COLOR` | Standard; disables color output if set | unset |
 
 `PGS_LOG_LEVEL` and `PGS_CONFIG_FILE` are deliberately not consumed in the Go port — log control collapses onto `--debug` / `--quiet` / `PGS_DEBUG`, and the global config path follows standard XDG via `XDG_CONFIG_HOME`. See `docs/environment.md` for the full rationale.
@@ -477,7 +477,7 @@ Behavior:
 
 ### 7.1 `build` (Phase 2)
 
-Compile PostgreSQL from source. Inputs: positional `<version>` (e.g. `18.4`); optional `--with-icu`, `--with-openssl`, `--configure-opts="…"`. Downloads tarball, extracts under build dir, runs `./configure`, `make -j`, `make install`, then `make` + `make install` in `contrib/`. Per-step logs under build dir.
+Compile PostgreSQL from source. Inputs: positional `<version>` (e.g. `18.4`); optional `--with-icu`, `--with-openssl`, `--configure-opts="…"`. Downloads tarball, verifies it against the upstream `.sha256` companion file (cached tarballs are re-verified before reuse; a mismatch is a hard error), extracts under build dir, runs `./configure`, `make -j`, `make install`, then `make` + `make install` in `contrib/`. Per-step logs under build dir. The build dir defaults to a per-user cache location (never the shared `/tmp`), is created `0700`, and is refused if owned by another user or group/world-writable.
 
 ### 7.2 `cleanup-install-versions` (Phase 2)
 

@@ -11,6 +11,8 @@ package build
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -150,8 +152,9 @@ func TestBuildDebugEnv(t *testing.T) {
 	}
 }
 
-// fakeHTTP returns the configured response without making any
-// real network calls.
+// fakeHTTP returns the configured response for every request without
+// making any real network calls. Use routedHTTP when the checksum and
+// tarball URLs must answer differently.
 type fakeHTTP struct {
 	status int
 	body   string
@@ -170,10 +173,52 @@ func (f *fakeHTTP) Do(req *http.Request) (*http.Response, error) {
 	}, nil
 }
 
+// fakeResponse is one canned answer for routedHTTP.
+type fakeResponse struct {
+	status int
+	body   string
+	err    error
+}
+
+// routedHTTP maps exact request URLs to canned responses and records
+// the order of requests, so tests can drive the .sha256 and tarball
+// fetches independently and assert which ones happened.
+type routedHTTP struct {
+	routes map[string]fakeResponse
+	calls  []string
+}
+
+func (f *routedHTTP) Do(req *http.Request) (*http.Response, error) {
+	url := req.URL.String()
+	f.calls = append(f.calls, url)
+	r, ok := f.routes[url]
+	if !ok {
+		return nil, fmt.Errorf("routedHTTP: unexpected request %s", url)
+	}
+	if r.err != nil {
+		return nil, r.err
+	}
+	return &http.Response{
+		StatusCode: r.status,
+		Body:       io.NopCloser(strings.NewReader(r.body)),
+		Request:    req,
+		Header:     make(http.Header),
+	}, nil
+}
+
+// sha256Hex returns the lowercase hex SHA-256 of s, for building
+// matching .sha256 bodies in tests.
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
 func TestDownloadTarball_404(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "postgresql-99.99.tar.gz")
 	var buf bytes.Buffer
+	// Everything 404s: the .sha256 miss downgrades to a WARN, the
+	// tarball miss is the "typo'd version" error.
 	err := downloadTarball(context.Background(), &fakeHTTP{status: 404}, "99.99", target, &buf)
 	if err == nil {
 		t.Fatalf("expected error on 404, got nil")
@@ -193,8 +238,12 @@ func TestDownloadTarball_200(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
 	const body = "fake-tarball-bytes"
+	fc := &routedHTTP{routes: map[string]fakeResponse{
+		ChecksumURL("17.3"): {status: 200, body: sha256Hex(body) + "  postgresql-17.3.tar.gz\n"},
+		TarballURL("17.3"):  {status: 200, body: body},
+	}}
 	var buf bytes.Buffer
-	err := downloadTarball(context.Background(), &fakeHTTP{status: 200, body: body}, "17.3", target, &buf)
+	err := downloadTarball(context.Background(), fc, "17.3", target, &buf)
 	if err != nil {
 		t.Fatalf("download: %v", err)
 	}
@@ -205,17 +254,106 @@ func TestDownloadTarball_200(t *testing.T) {
 	if string(data) != body {
 		t.Errorf("body mismatch: got %q want %q", string(data), body)
 	}
+	// The verified digest must be stored next to the tarball so a
+	// later cache hit can verify offline.
+	sha, err := os.ReadFile(target + ".sha256")
+	if err != nil {
+		t.Fatalf("read stored .sha256: %v", err)
+	}
+	if !strings.Contains(string(sha), sha256Hex(body)) {
+		t.Errorf("stored .sha256 %q should contain digest %s", string(sha), sha256Hex(body))
+	}
+	// The .sha256 must be fetched BEFORE the tarball (fail early, and
+	// never leave an unverified file behind).
+	if len(fc.calls) != 2 || fc.calls[0] != ChecksumURL("17.3") {
+		t.Errorf("expected [.sha256, tarball] request order, got %v", fc.calls)
+	}
 }
 
-func TestDownloadTarball_cached(t *testing.T) {
+func TestDownloadTarball_200_ChecksumMismatch(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
+	fc := &routedHTTP{routes: map[string]fakeResponse{
+		ChecksumURL("17.3"): {status: 200, body: strings.Repeat("a", 64) + "  postgresql-17.3.tar.gz\n"},
+		TarballURL("17.3"):  {status: 200, body: "tampered-bytes"},
+	}}
+	var buf bytes.Buffer
+	err := downloadTarball(context.Background(), fc, "17.3", target, &buf)
+	if err == nil {
+		t.Fatal("expected error on checksum mismatch")
+	}
+	if !strings.Contains(err.Error(), "SHA-256") {
+		t.Errorf("error %q should mention SHA-256", err.Error())
+	}
+	if _, statErr := os.Stat(target); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("mismatch must not leave a tarball on disk; stat err=%v", statErr)
+	}
+	// No stray temp files either.
+	entries, _ := os.ReadDir(dir)
+	if len(entries) != 0 {
+		t.Errorf("expected empty dir after mismatch, found %v", entries)
+	}
+}
+
+func TestDownloadTarball_200_MissingUpstreamChecksum(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
+	const body = "fake-tarball-bytes"
+	fc := &routedHTTP{routes: map[string]fakeResponse{
+		ChecksumURL("17.3"): {status: 404},
+		TarballURL("17.3"):  {status: 200, body: body},
+	}}
+	var buf bytes.Buffer
+	if err := downloadTarball(context.Background(), fc, "17.3", target, &buf); err != nil {
+		t.Fatalf("download with missing upstream .sha256: %v", err)
+	}
+	data, _ := os.ReadFile(target)
+	if string(data) != body {
+		t.Errorf("body mismatch: got %q want %q", string(data), body)
+	}
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "WITHOUT checksum verification") {
+		t.Errorf("expected a loud WARN about unverified download; stderr=\n%s", buf.String())
+	}
+	if _, err := os.Stat(target + ".sha256"); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("no .sha256 should be stored when upstream has none; stat err=%v", err)
+	}
+}
+
+func TestDownloadTarball_ChecksumFetchFailureIsFatal(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
+	fc := &routedHTTP{routes: map[string]fakeResponse{
+		ChecksumURL("17.3"): {status: 500},
+		TarballURL("17.3"):  {status: 200, body: "never-reached"},
+	}}
+	var buf bytes.Buffer
+	err := downloadTarball(context.Background(), fc, "17.3", target, &buf)
+	if err == nil {
+		t.Fatal("expected error when the .sha256 fetch fails with 500")
+	}
+	if !strings.Contains(err.Error(), "unexpected status 500") {
+		t.Errorf("error %q should mention the 500", err.Error())
+	}
+	// Fail closed: the tarball must not have been requested at all.
+	for _, c := range fc.calls {
+		if c == TarballURL("17.3") {
+			t.Errorf("tarball must not be fetched when the checksum fetch fails; calls=%v", fc.calls)
+		}
+	}
+}
+
+func TestDownloadTarball_CachedVerifiedOffline(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
 	const cached = "cached-bytes"
 	if err := os.WriteFile(target, []byte(cached), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// httpClient that would fail if called — proves the cache path
-	// returns without touching it.
+	if err := os.WriteFile(target+".sha256", []byte(sha256Hex(cached)+"  postgresql-17.3.tar.gz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// httpClient that would fail if called — a cached tarball with a
+	// stored checksum verifies offline.
 	fc := &fakeHTTP{err: errors.New("must not call")}
 	var buf bytes.Buffer
 	if err := downloadTarball(context.Background(), fc, "17.3", target, &buf); err != nil {
@@ -224,6 +362,266 @@ func TestDownloadTarball_cached(t *testing.T) {
 	data, _ := os.ReadFile(target)
 	if string(data) != cached {
 		t.Errorf("cached file overwritten: got %q want %q", string(data), cached)
+	}
+	if !strings.Contains(buf.String(), "sha256=verified") {
+		t.Errorf("expected cache-hit log to say the hash was verified; stderr=\n%s", buf.String())
+	}
+}
+
+func TestDownloadTarball_CachedHashMismatchIsFatal(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
+	if err := os.WriteFile(target, []byte("evil-or-corrupt"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target+".sha256", []byte(sha256Hex("what-was-downloaded")+"  postgresql-17.3.tar.gz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	err := downloadTarball(context.Background(), &fakeHTTP{err: errors.New("must not call")}, "17.3", target, &buf)
+	if err == nil {
+		t.Fatal("expected error when cached tarball fails verification")
+	}
+	if !strings.Contains(err.Error(), "delete") || !strings.Contains(err.Error(), target) {
+		t.Errorf("error %q should tell the user to delete %s and retry", err.Error(), target)
+	}
+	// The poisoned file must NOT be silently replaced or trusted.
+	data, _ := os.ReadFile(target)
+	if string(data) != "evil-or-corrupt" {
+		t.Errorf("cached file was rewritten: %q", string(data))
+	}
+}
+
+func TestDownloadTarball_CachedWithoutStoredSha_FetchesAndVerifies(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
+	const cached = "cached-bytes"
+	if err := os.WriteFile(target, []byte(cached), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fc := &routedHTTP{routes: map[string]fakeResponse{
+		ChecksumURL("17.3"): {status: 200, body: sha256Hex(cached) + "  postgresql-17.3.tar.gz\n"},
+	}}
+	var buf bytes.Buffer
+	if err := downloadTarball(context.Background(), fc, "17.3", target, &buf); err != nil {
+		t.Fatalf("cached download without stored sha: %v", err)
+	}
+	// Only the .sha256 may be fetched; the tarball itself is reused.
+	if len(fc.calls) != 1 || fc.calls[0] != ChecksumURL("17.3") {
+		t.Errorf("expected exactly one .sha256 request, got %v", fc.calls)
+	}
+	// The fetched digest is stored for future offline verification.
+	sha, err := os.ReadFile(target + ".sha256")
+	if err != nil {
+		t.Fatalf("read stored .sha256: %v", err)
+	}
+	if !strings.Contains(string(sha), sha256Hex(cached)) {
+		t.Errorf("stored .sha256 %q should contain digest %s", string(sha), sha256Hex(cached))
+	}
+}
+
+func TestDownloadTarball_CachedWithoutStoredSha_Upstream404Warns(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
+	const cached = "cached-bytes"
+	if err := os.WriteFile(target, []byte(cached), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fc := &routedHTTP{routes: map[string]fakeResponse{
+		ChecksumURL("17.3"): {status: 404},
+	}}
+	var buf bytes.Buffer
+	if err := downloadTarball(context.Background(), fc, "17.3", target, &buf); err != nil {
+		t.Fatalf("cached download with upstream 404: %v", err)
+	}
+	if !strings.Contains(buf.String(), "level=WARN") || !strings.Contains(buf.String(), "WITHOUT verification") {
+		t.Errorf("expected a loud WARN about unverified cache reuse; stderr=\n%s", buf.String())
+	}
+}
+
+func TestDownloadTarball_CachedCorruptStoredShaIsFatal(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "postgresql-17.3.tar.gz")
+	if err := os.WriteFile(target, []byte("cached-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(target+".sha256", []byte("not a digest at all"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	err := downloadTarball(context.Background(), &fakeHTTP{err: errors.New("must not call")}, "17.3", target, &buf)
+	if err == nil {
+		t.Fatal("expected error on corrupt stored .sha256")
+	}
+	if !strings.Contains(err.Error(), "delete") {
+		t.Errorf("error %q should tell the user to delete and retry", err.Error())
+	}
+}
+
+func TestChecksumURL(t *testing.T) {
+	got := ChecksumURL("17.3")
+	want := "https://ftp.postgresql.org/pub/source/v17.3/postgresql-17.3.tar.gz.sha256"
+	if got != want {
+		t.Fatalf("ChecksumURL = %q want %q", got, want)
+	}
+}
+
+func TestParseChecksumDigest(t *testing.T) {
+	valid := strings.Repeat("ab", 32)
+	tests := []struct {
+		name    string
+		in      string
+		want    string
+		wantErr bool
+	}{
+		{"sha256sum format", valid + "  postgresql-17.3.tar.gz\n", valid, false},
+		{"bare digest", valid, valid, false},
+		{"uppercase normalized", strings.ToUpper(valid) + "  f.tar.gz", valid, false},
+		{"empty", "", "", true},
+		{"whitespace only", "  \n", "", true},
+		{"too short", "abc123  f.tar.gz", "", true},
+		{"non-hex", strings.Repeat("zz", 32) + "  f.tar.gz", "", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseChecksumDigest(tc.in)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("parseChecksumDigest(%q) err=%v wantErr=%v", tc.in, err, tc.wantErr)
+			}
+			if got != tc.want {
+				t.Errorf("digest: got %q want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDefaultBuildDir(t *testing.T) {
+	t.Run("prefers UserCacheDir", func(t *testing.T) {
+		cache := t.TempDir()
+		orig := userCacheDirFn
+		userCacheDirFn = func() (string, error) { return cache, nil }
+		t.Cleanup(func() { userCacheDirFn = orig })
+
+		got, err := defaultBuildDir()
+		if err != nil {
+			t.Fatalf("defaultBuildDir: %v", err)
+		}
+		want := filepath.Join(cache, "pg_sandbox", "build")
+		if got != want {
+			t.Errorf("defaultBuildDir = %q want %q", got, want)
+		}
+	})
+
+	t.Run("falls back to MkdirTemp when UserCacheDir fails", func(t *testing.T) {
+		orig := userCacheDirFn
+		userCacheDirFn = func() (string, error) { return "", errors.New("no HOME") }
+		t.Cleanup(func() { userCacheDirFn = orig })
+
+		got, err := defaultBuildDir()
+		if err != nil {
+			t.Fatalf("defaultBuildDir fallback: %v", err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(got) })
+		st, err := os.Stat(got)
+		if err != nil || !st.IsDir() {
+			t.Fatalf("fallback dir %q not usable: %v", got, err)
+		}
+		// MkdirTemp guarantees 0o700 and an unpredictable suffix.
+		if st.Mode().Perm() != 0o700 {
+			t.Errorf("fallback dir perm = %04o want 0700", st.Mode().Perm())
+		}
+		if !strings.Contains(filepath.Base(got), "pg_sandbox-build-") {
+			t.Errorf("fallback dir %q should carry the pg_sandbox-build- prefix", got)
+		}
+	})
+}
+
+func TestVerifyBuildDirTrust(t *testing.T) {
+	t.Run("private dir passes", func(t *testing.T) {
+		dir := t.TempDir() // 0o700 by construction
+		if err := verifyBuildDirTrust(dir); err != nil {
+			t.Errorf("private dir rejected: %v", err)
+		}
+	})
+
+	t.Run("0755 dir passes (no group/world WRITE)", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyBuildDirTrust(dir); err != nil {
+			t.Errorf("0755 dir rejected: %v", err)
+		}
+	})
+
+	t.Run("group-writable dir fails", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o770); err != nil {
+			t.Fatal(err)
+		}
+		err := verifyBuildDirTrust(dir)
+		if err == nil {
+			t.Fatal("expected error for group-writable dir")
+		}
+		if !strings.Contains(err.Error(), "writable") {
+			t.Errorf("error %q should mention writability", err.Error())
+		}
+	})
+
+	t.Run("world-writable dir fails", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyBuildDirTrust(dir); err == nil {
+			t.Fatal("expected error for world-writable dir")
+		}
+	})
+
+	t.Run("regular file fails", func(t *testing.T) {
+		f := filepath.Join(t.TempDir(), "not-a-dir")
+		if err := os.WriteFile(f, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := verifyBuildDirTrust(f); err == nil {
+			t.Fatal("expected error for non-directory")
+		}
+	})
+
+	t.Run("missing path fails", func(t *testing.T) {
+		if err := verifyBuildDirTrust(filepath.Join(t.TempDir(), "nope")); err == nil {
+			t.Fatal("expected error for missing path")
+		}
+	})
+}
+
+func TestBuild_RejectsUnsafeBuildDir(t *testing.T) {
+	bin := t.TempDir()
+	build := t.TempDir()
+	// Simulate an attacker-friendly pre-existing dir: world-writable.
+	if err := os.Chmod(build, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	swapBuildSeams(t, fakeDownload, makeExtractStep(build, "17.3", ""))
+
+	var buf bytes.Buffer
+	_, err := Build(context.Background(), Options{
+		Version:  "17.3",
+		BinDir:   bin,
+		BuildDir: build,
+	}, &buf)
+	if err == nil {
+		t.Fatal("expected error for world-writable build dir")
+	}
+	var be *BuildError
+	if !errors.As(err, &be) {
+		t.Fatalf("want *BuildError, got %T", err)
+	}
+	if be.ExitCode.Int() != 29 {
+		t.Errorf("ExitCode = %d, want 29 (ExitBuildFailed)", be.ExitCode.Int())
+	}
+	if !strings.Contains(err.Error(), build) {
+		t.Errorf("error %q should name the offending dir %q", err.Error(), build)
 	}
 }
 

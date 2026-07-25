@@ -20,6 +20,8 @@ package build
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,6 +32,7 @@ import (
 	"regexp"
 	"runtime"
 	"strings"
+	"syscall"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/fsutil"
 	"github.com/guriandoro/postgresql_sandbox/internal/ui"
@@ -45,6 +48,11 @@ var versionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
 // `v<version>/` and once in the filename `postgresql-<version>.tar.gz`.
 const tarballURLTemplate = "https://ftp.postgresql.org/pub/source/v%s/postgresql-%s.tar.gz"
 
+// sha256HexRE matches exactly one lowercase/uppercase hex SHA-256
+// digest. Used to validate the first field of the upstream .sha256
+// file before we treat it as an expected checksum.
+var sha256HexRE = regexp.MustCompile(`^[0-9a-fA-F]{64}$`)
+
 // Options captures every input to Build. The CLI layer populates this
 // from flag parsing; everything in this file consumes it.
 type Options struct {
@@ -56,8 +64,9 @@ type Options struct {
 	BinDir string
 
 	// BuildDir is the scratch directory for tarball download and
-	// source extraction. If empty, defaults to
-	// $TMPDIR/pg_sandbox-build/.
+	// source extraction. If empty, defaults to a per-user location:
+	// os.UserCacheDir()/pg_sandbox/build (see defaultBuildDir for the
+	// rationale and the fallback when UserCacheDir is unavailable).
 	BuildDir string
 
 	// WithICU appends --with-icu to ./configure. Off by default to
@@ -105,6 +114,10 @@ type httpClient interface {
 var downloadTarballFn = downloadTarball
 var runStepFn = runStep
 
+// userCacheDirFn is a seam so tests can simulate os.UserCacheDir being
+// unavailable (e.g. HOME unset) and exercise the fallback path.
+var userCacheDirFn = os.UserCacheDir
+
 // Build runs the entire compile pipeline. See doc.go.
 //
 // stderrW is where we write structured "step" log lines and human-
@@ -147,8 +160,11 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 	}
 	buildDir := opts.BuildDir
 	if buildDir == "" {
-		tmp := os.TempDir()
-		buildDir = filepath.Join(tmp, "pg_sandbox-build")
+		var derr error
+		buildDir, derr = defaultBuildDir()
+		if derr != nil {
+			return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: derr}
+		}
 	}
 	buildDir = fsutil.ExpandTilde(buildDir)
 	if !filepath.IsAbs(buildDir) {
@@ -179,7 +195,19 @@ func Build(ctx context.Context, opts Options, stderrW io.Writer) (*Result, error
 		}
 	}
 
-	for _, d := range []string{buildDir, logsDir, filepath.Join(buildDir, "pg_src")} {
+	// The build dir caches the tarball and holds the source tree we
+	// compile and install, so it is created private (0o700) and — new
+	// or pre-existing — verified to be ours and not writable by other
+	// users before anything is downloaded into it (HIGH-3).
+	if err := os.MkdirAll(buildDir, 0o700); err != nil {
+		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: fmt.Errorf("build: mkdir %s: %w", buildDir, err)}
+	}
+	if err := verifyBuildDirTrust(buildDir); err != nil {
+		return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: err}
+	}
+	// Sub-dirs are gated by the (verified) build dir itself, so plain
+	// 0o755 is fine for them.
+	for _, d := range []string{logsDir, filepath.Join(buildDir, "pg_src")} {
 		if err := os.MkdirAll(d, 0o755); err != nil {
 			return nil, &BuildError{ExitCode: ui.ExitBuildFailed, Err: fmt.Errorf("build: mkdir %s: %w", d, err)}
 		}
@@ -279,6 +307,64 @@ func TarballURL(v string) string {
 	return fmt.Sprintf(tarballURLTemplate, v, v)
 }
 
+// ChecksumURL returns the URL of the upstream SHA-256 companion file
+// that ftp.postgresql.org publishes next to each release tarball.
+func ChecksumURL(v string) string {
+	return TarballURL(v) + ".sha256"
+}
+
+// defaultBuildDir resolves the build scratch dir used when the user did
+// not pass --build-dir / PGS_BUILD_DIR. We deliberately do NOT default
+// to os.TempDir(): on multi-user Linux that is the world-writable /tmp,
+// where any local user can pre-create the predictable
+// /tmp/pg_sandbox-build/ path, own it, and feed us a poisoned tarball
+// or swap the extracted source tree mid-build (HIGH-3).
+// os.UserCacheDir (~/.cache on Linux, ~/Library/Caches on macOS) is
+// per-user by construction and survives reboots, so the tarball cache
+// keeps paying off across sessions. Only when UserCacheDir is
+// unavailable (e.g. HOME unset) do we fall back to a fresh, randomly
+// named 0o700 MkdirTemp dir — unpredictable, at the cost of losing the
+// cache for that run.
+func defaultBuildDir() (string, error) {
+	if cache, err := userCacheDirFn(); err == nil {
+		return filepath.Join(cache, "pg_sandbox", "build"), nil
+	}
+	dir, err := os.MkdirTemp("", "pg_sandbox-build-")
+	if err != nil {
+		return "", fmt.Errorf("build: no user cache dir and MkdirTemp fallback failed: %w", err)
+	}
+	return dir, nil
+}
+
+// verifyBuildDirTrust rejects a build dir that another local user could
+// tamper with. The tarball cache and the extracted source tree live
+// here and are subsequently compiled and installed, so a dir owned by
+// someone else or writable by group/other is a supply-chain hole:
+// whoever controls it controls the code we build. Called after MkdirAll
+// so a pre-existing dir (the attack vector — e.g. a pre-created
+// world-readable path) is checked rather than blindly reused.
+//
+// The ownership check relies on syscall.Stat_t, which is fine here:
+// the tool targets Linux/macOS only (it already uses syscall.Exec).
+func verifyBuildDirTrust(dir string) error {
+	st, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("build: stat build dir %s: %w", dir, err)
+	}
+	if !st.IsDir() {
+		return fmt.Errorf("build: build dir %s is not a directory", dir)
+	}
+	if perm := st.Mode().Perm(); perm&0o022 != 0 {
+		return fmt.Errorf("build: build dir %s is group/world-writable (%04o); another user could tamper with the source we compile — chmod go-w it or pass a private --build-dir", dir, perm)
+	}
+	if sys, ok := st.Sys().(*syscall.Stat_t); ok {
+		if uid := os.Getuid(); int(sys.Uid) != uid {
+			return fmt.Errorf("build: build dir %s is owned by uid %d, not the current user (uid %d); refusing to build from a directory another user controls — pass a private --build-dir", dir, sys.Uid, uid)
+		}
+	}
+	return nil
+}
+
 // installPrefixFor decides where `make install` should land given the
 // resolved BinDir and the requested build version.
 //
@@ -352,19 +438,48 @@ func buildDebugEnv() []string {
 	return []string{"CFLAGS=-O0 -g3"}
 }
 
-// downloadTarball streams the source archive into target. If target
-// already exists with a non-zero size, the download is skipped (we
-// trust the cached file — re-validating it would require the upstream
-// SHA which we don't fetch separately).
+// downloadTarball streams the source archive into target, verifying it
+// against the upstream .sha256 companion file (HIGH-3).
 //
-// A non-200 HTTP response is converted to a typo'd-version error
-// because that's the overwhelmingly common cause; the server's body
-// is small and harmless to read.
+// Checksum semantics:
+//
+//   - Fresh download: the .sha256 is fetched FIRST. On a match the
+//     digest is stored next to the tarball (<target>.sha256, sha256sum
+//     format) so later cache hits can verify offline. On a mismatch we
+//     refuse and delete nothing but the temp file (nothing was cached).
+//   - Cache reuse: a non-empty file at target is only trusted after
+//     re-hashing it against the stored .sha256 (or, if a previous tool
+//     version cached without one, against a freshly fetched .sha256).
+//     A mismatch is a hard error telling the user to delete the cached
+//     file and retry — we never silently rebuild from a file that
+//     failed verification.
+//   - Missing upstream .sha256 (HTTP 404 — releases predating the
+//     companion files): we WARN loudly and proceed without
+//     verification. Any other checksum-fetch failure (5xx, network
+//     error) is a hard error: a transient hiccup must not silently
+//     downgrade the security check.
+//
+// A non-200 HTTP response for the tarball itself is converted to a
+// typo'd-version error because that's the overwhelmingly common cause;
+// the server's body is small and harmless to read.
 func downloadTarball(ctx context.Context, client httpClient, version, target string, stderrW io.Writer) error {
 	logger := slog.New(slog.NewTextHandler(stderrW, nil))
+	shaPath := target + ".sha256"
+
+	// Cache-reuse path: never trust a pre-existing file without
+	// re-hashing it.
 	if st, err := os.Stat(target); err == nil && st.Size() > 0 {
-		logger.Info("using cached tarball", "path", target, "size", st.Size())
-		return nil
+		return verifyCachedTarball(ctx, client, version, target, shaPath, st.Size(), logger)
+	}
+
+	// Fresh download: expected digest first, then the tarball.
+	expected, err := fetchChecksum(ctx, client, version)
+	if err != nil {
+		return err
+	}
+	if expected == "" {
+		logger.Warn("upstream publishes no .sha256 for this version; proceeding WITHOUT checksum verification",
+			"url", ChecksumURL(version))
 	}
 
 	url := TarballURL(version)
@@ -386,13 +501,16 @@ func downloadTarball(ctx context.Context, client httpClient, version, target str
 
 	// Stream to a sibling temp file, then rename — so a failed
 	// download doesn't leave a partial file masquerading as cached.
+	// The stream is hashed as it is written so verification needs no
+	// second pass.
 	tmp, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".tmp.*")
 	if err != nil {
 		return fmt.Errorf("build: tempfile in %s: %w", filepath.Dir(target), err)
 	}
 	tmpName := tmp.Name()
 	cleanup := func() { _ = os.Remove(tmpName) }
-	written, err := io.Copy(tmp, resp.Body)
+	hasher := sha256.New()
+	written, err := io.Copy(io.MultiWriter(tmp, hasher), resp.Body)
 	if err != nil {
 		_ = tmp.Close()
 		cleanup()
@@ -402,12 +520,136 @@ func downloadTarball(ctx context.Context, client httpClient, version, target str
 		cleanup()
 		return fmt.Errorf("build: close %s: %w", tmpName, err)
 	}
+	got := hex.EncodeToString(hasher.Sum(nil))
+	if expected != "" && got != expected {
+		cleanup()
+		return fmt.Errorf("build: downloaded tarball failed SHA-256 verification (got %s, upstream %s says %s); refusing to build — retry, and investigate the network path if it persists", got, ChecksumURL(version), expected)
+	}
 	if err := os.Rename(tmpName, target); err != nil {
 		cleanup()
 		return fmt.Errorf("build: rename %s -> %s: %w", tmpName, target, err)
 	}
-	logger.Info("downloaded tarball", "path", target, "bytes", written)
+	if expected != "" {
+		if err := storeChecksum(shaPath, expected, filepath.Base(target)); err != nil {
+			// Non-fatal: the tarball itself is verified; a missing
+			// stored digest only means the next cache hit re-fetches
+			// the .sha256 from upstream.
+			logger.Warn("could not store checksum next to tarball", "path", shaPath, "err", err)
+		}
+		logger.Info("downloaded tarball", "path", target, "bytes", written, "sha256", got)
+		return nil
+	}
+	logger.Info("downloaded tarball", "path", target, "bytes", written, "sha256", "UNVERIFIED (no upstream .sha256)")
 	return nil
+}
+
+// verifyCachedTarball decides whether a pre-existing tarball at target
+// may be reused. The expected digest comes from the stored .sha256
+// sibling when present, or from upstream when a previous tool version
+// cached the tarball without one (in which case the fetched digest is
+// stored for next time). See downloadTarball for the full semantics.
+func verifyCachedTarball(ctx context.Context, client httpClient, version, target, shaPath string, size int64, logger *slog.Logger) error {
+	var expected string
+	if raw, err := os.ReadFile(shaPath); err == nil {
+		expected, err = parseChecksumDigest(string(raw))
+		if err != nil {
+			return fmt.Errorf("build: stored checksum %s is unusable (%v); delete %s and %s and retry", shaPath, err, target, shaPath)
+		}
+	} else {
+		expected, err = fetchChecksum(ctx, client, version)
+		if err != nil {
+			return err
+		}
+		if expected == "" {
+			logger.Warn("using cached tarball WITHOUT verification: no stored checksum and upstream publishes no .sha256 for this version",
+				"path", target, "url", ChecksumURL(version))
+			return nil
+		}
+	}
+	got, err := fileSHA256(target)
+	if err != nil {
+		return fmt.Errorf("build: hash cached tarball %s: %w", target, err)
+	}
+	if got != expected {
+		return fmt.Errorf("build: cached tarball %s failed SHA-256 verification (got %s, want %s); it may be corrupt or tampered with — delete %s and %s and retry", target, got, expected, target, shaPath)
+	}
+	if _, err := os.Stat(shaPath); err != nil {
+		if err := storeChecksum(shaPath, expected, filepath.Base(target)); err != nil {
+			logger.Warn("could not store checksum next to tarball", "path", shaPath, "err", err)
+		}
+	}
+	logger.Info("using cached tarball", "path", target, "size", size, "sha256", "verified")
+	return nil
+}
+
+// fetchChecksum GETs the upstream .sha256 companion for version and
+// returns the expected hex digest. A 404 returns ("", nil) — the
+// caller decides how loudly to proceed unverified (older releases
+// predate the companion files). Any other failure is an error: we fail
+// closed rather than let a transient hiccup skip verification.
+func fetchChecksum(ctx context.Context, client httpClient, version string) (string, error) {
+	url := ChecksumURL(version)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return "", fmt.Errorf("build: build request %s: %w", url, err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("build: GET %s: %w", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("build: GET %s: unexpected status %d", url, resp.StatusCode)
+	}
+	// The file is one sha256sum-format line (~100 bytes); cap the read
+	// defensively anyway.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return "", fmt.Errorf("build: read %s: %w", url, err)
+	}
+	digest, err := parseChecksumDigest(string(body))
+	if err != nil {
+		return "", fmt.Errorf("build: parse %s: %w", url, err)
+	}
+	return digest, nil
+}
+
+// parseChecksumDigest extracts the hex digest from sha256sum-format
+// content ("<64 hex chars>  <filename>\n"; a bare digest is also
+// accepted). Normalizes to lowercase.
+func parseChecksumDigest(s string) (string, error) {
+	fields := strings.Fields(s)
+	if len(fields) == 0 {
+		return "", fmt.Errorf("empty checksum content")
+	}
+	digest := strings.ToLower(fields[0])
+	if !sha256HexRE.MatchString(digest) {
+		return "", fmt.Errorf("first field %q is not a SHA-256 hex digest", fields[0])
+	}
+	return digest, nil
+}
+
+// storeChecksum writes the digest next to the tarball in sha256sum
+// format so a later `shasum -a 256 -c` by the user also works.
+func storeChecksum(shaPath, digest, tarballName string) error {
+	return os.WriteFile(shaPath, []byte(digest+"  "+tarballName+"\n"), 0o644)
+}
+
+// fileSHA256 returns the lowercase hex SHA-256 of the file at path.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // runStep executes one external-tool stage of the build (extract,
