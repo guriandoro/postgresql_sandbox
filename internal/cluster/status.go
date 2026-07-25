@@ -99,6 +99,14 @@ func Status(ctx context.Context, runner pgexec.Runner, opts StatusOptions, stder
 
 	for _, member := range m.Members {
 		dir := filepath.Join(opts.ClusterDir, member.Name)
+		// Belt-and-braces: LoadCluster already rejects path-escaping
+		// member names; refuse to probe anything that isn't a direct
+		// child of the cluster dir even if a bad manifest slipped past.
+		if filepath.Dir(dir) != filepath.Clean(opts.ClusterDir) {
+			return nil, wrapExit(ExitBadConfig,
+				fmt.Errorf("cluster status: member %q resolves outside cluster dir (%s)",
+					member.Name, opts.ClusterDir))
+		}
 		entry := MemberStatus{
 			Name: member.Name,
 			Role: member.Role,

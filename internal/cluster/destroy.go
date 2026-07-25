@@ -76,6 +76,15 @@ func Destroy(ctx context.Context, runner pgexec.Runner, opts DestroyOptions, std
 		member := m.Members[i]
 		dir := filepath.Join(opts.ClusterDir, member.Name)
 
+		// Belt-and-braces: LoadCluster already rejects path-escaping
+		// member names, but this is the destructive path — refuse to
+		// rm -rf anything that isn't a direct child of the cluster dir.
+		if filepath.Dir(dir) != filepath.Clean(opts.ClusterDir) {
+			return wrapExit(ExitBadConfig,
+				fmt.Errorf("cluster destroy: member %q resolves outside cluster dir (%s); refusing",
+					member.Name, opts.ClusterDir))
+		}
+
 		// Skip members whose dir has already been removed manually —
 		// the user may have torn one down by hand. We log it so the
 		// state isn't silent.

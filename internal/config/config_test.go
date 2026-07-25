@@ -18,7 +18,9 @@
 package config
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -649,6 +651,49 @@ func TestClusterLoadRejectsFutureSchemaVersion(t *testing.T) {
 	}
 	if !errors.Is(err, ErrSchemaVersionTooNew) {
 		t.Errorf("error not ErrSchemaVersionTooNew: %v", err)
+	}
+}
+
+func TestClusterLoadRejectsUnsafeMemberName(t *testing.T) {
+	// A member name that isn't a plain basename lets
+	// filepath.Join(clusterDir, name) escape the cluster dir, so
+	// LoadCluster must reject it (MED-7).
+	bad := []string{"../x", "../../important_sandbox", "a/b", ".", "..", ""}
+	for _, name := range bad {
+		t.Run(fmt.Sprintf("name=%q", name), func(t *testing.T) {
+			dir := t.TempDir()
+			nameJSON, err := json.Marshal(name)
+			if err != nil {
+				t.Fatalf("marshal name: %v", err)
+			}
+			manifest := fmt.Sprintf(
+				`{"schemaVersion":1,"name":"c","mode":"physical","members":[{"name":%s,"role":"primary"}],"replication":{"syncCount":0}}`,
+				nameJSON)
+			if err := os.WriteFile(filepath.Join(dir, ClusterFilename),
+				[]byte(manifest), 0o644); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			_, err = LoadCluster(dir)
+			if err == nil {
+				t.Fatalf("LoadCluster accepted unsafe member name %q", name)
+			}
+			if !errors.Is(err, ErrUnsafeMemberName) {
+				t.Errorf("error not ErrUnsafeMemberName: %v", err)
+			}
+		})
+	}
+}
+
+func TestClusterLoadAcceptsPlainMemberName(t *testing.T) {
+	// A normal basename with dots/hyphens/underscores must still load.
+	dir := t.TempDir()
+	manifest := `{"schemaVersion":1,"name":"c","mode":"physical","members":[{"name":"c_p","role":"primary"},{"name":"c-s1.0","role":"standby"}],"replication":{"syncCount":0}}`
+	if err := os.WriteFile(filepath.Join(dir, ClusterFilename),
+		[]byte(manifest), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := LoadCluster(dir); err != nil {
+		t.Fatalf("LoadCluster rejected valid member names: %v", err)
 	}
 }
 

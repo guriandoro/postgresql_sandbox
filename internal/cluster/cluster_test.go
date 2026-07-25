@@ -525,6 +525,57 @@ func TestDestroyMissingMemberDirIsSkipped(t *testing.T) {
 	}
 }
 
+// TestDestroyRejectsPathEscapingMember guards MED-7: a hand-written
+// manifest whose member name escapes the cluster dir (e.g.
+// "../victim") must be refused cleanly by both destroy and status,
+// with an unrelated sandbox sitting at that path left untouched.
+func TestDestroyRejectsPathEscapingMember(t *testing.T) {
+	root := t.TempDir()
+	clusterDir := filepath.Join(root, "cluster")
+	if err := os.MkdirAll(clusterDir, 0o755); err != nil {
+		t.Fatalf("mkdir cluster: %v", err)
+	}
+	// An unrelated sandbox one level up — "../victim" from clusterDir
+	// resolves here. Give it a sandbox marker so IsSandboxDir(victim)
+	// would be true (i.e. absent the fix, destroy would rm -rf it).
+	victim := filepath.Join(root, "victim")
+	if err := os.MkdirAll(victim, 0o755); err != nil {
+		t.Fatalf("mkdir victim: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(victim, config.SandboxFilename),
+		[]byte("{}"), 0o644); err != nil {
+		t.Fatalf("write victim marker: %v", err)
+	}
+
+	manifest := `{"schemaVersion":1,"name":"evil","mode":"physical",` +
+		`"members":[{"name":"../victim","role":"primary"}],` +
+		`"replication":{"syncCount":0}}`
+	if err := os.WriteFile(filepath.Join(clusterDir, config.ClusterFilename),
+		[]byte(manifest), 0o644); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	runner := &pidDroppingFake{}
+	if err := Destroy(context.Background(), runner,
+		DestroyOptions{ClusterDir: clusterDir}, io.Discard); err == nil {
+		t.Fatal("Destroy accepted a path-escaping member name")
+	} else if got := ExitCodeFor(err); got != ui.ExitBadConfig {
+		t.Errorf("Destroy exit code: got %d, want %d", got, ui.ExitBadConfig)
+	}
+
+	if _, err := Status(context.Background(), runner,
+		StatusOptions{ClusterDir: clusterDir}, io.Discard); err == nil {
+		t.Fatal("Status accepted a path-escaping member name")
+	} else if got := ExitCodeFor(err); got != ui.ExitBadConfig {
+		t.Errorf("Status exit code: got %d, want %d", got, ui.ExitBadConfig)
+	}
+
+	// The victim sandbox must be untouched.
+	if !config.IsSandboxDir(victim) {
+		t.Error("victim sandbox was destroyed or altered by a bad manifest")
+	}
+}
+
 // ---------------------------------------------------------------- //
 // Test helpers
 // ---------------------------------------------------------------- //

@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -30,6 +31,15 @@ import (
 // a newer pg_sandbox than the one reading it. Wrapped, not equal-
 // compared, so callers should errors.Is to detect.
 var ErrSchemaVersionTooNew = errors.New("config: schemaVersion newer than supported")
+
+// ErrUnsafeMemberName indicates a cluster manifest declared a member
+// whose name is not a plain directory element. Every member-iterating
+// code path forms the member dir with filepath.Join(clusterDir, name),
+// so a name like "../../elsewhere" resolves OUTSIDE the cluster dir and
+// could make `cluster destroy`/`status` operate on an unrelated
+// directory. Rejected at load time so no downstream path ever sees it.
+// Wrapped, not equal-compared; callers should errors.Is to detect.
+var ErrUnsafeMemberName = errors.New("config: unsafe cluster member name")
 
 // LoadSandbox reads <sandboxDir>/SandboxFilename and returns the
 // parsed Sandbox. Unknown keys are an error; schemaVersion >
@@ -64,7 +74,31 @@ func LoadCluster(clusterDir string) (*ClusterManifest, error) {
 		return nil, fmt.Errorf("%s: schemaVersion %d > supported %d (upgrade pg_sandbox): %w",
 			path, m.SchemaVersion, CurrentSchemaVersion, ErrSchemaVersionTooNew)
 	}
+	// Reject path-escaping member names here — the single choke point
+	// every member-iterating path (destroy, status, global_status)
+	// funnels through, so guarding it once covers them all.
+	for _, mb := range m.Members {
+		if err := validateMemberName(mb.Name); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+	}
 	return &m, nil
+}
+
+// validateMemberName rejects any cluster member name that is not a
+// plain directory element. A member dir is formed by
+// filepath.Join(clusterDir, name); anything but a bare basename
+// (empty, ".", "..", or a name containing a path separator) can escape
+// the cluster dir and make cluster operations touch an unrelated path.
+func validateMemberName(name string) error {
+	if name == "" || name == "." || name == ".." ||
+		strings.ContainsRune(name, '/') ||
+		strings.ContainsRune(name, os.PathSeparator) ||
+		name != filepath.Base(name) {
+		return fmt.Errorf("member name %q must be a plain directory name "+
+			"(no path separators, not \".\" or \"..\"): %w", name, ErrUnsafeMemberName)
+	}
+	return nil
 }
 
 // SaveCluster atomically writes m to <clusterDir>/ClusterFilename.
