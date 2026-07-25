@@ -612,6 +612,44 @@ func TestDestroyDropsSlotAtSource(t *testing.T) {
 	}
 }
 
+// TestDestroySlotDropEscapesQuotedSlotName covers MED-11: a
+// hand-edited config's slotName bypasses config.NormalizeString, so
+// bestEffortDropSlot must quoteLiteral it. The exact statement handed
+// to psql proves a quote in the name cannot break out of the literal.
+func TestDestroySlotDropEscapesQuotedSlotName(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	src := filepath.Join(root, "primary")
+	makeRunningSourceFixture(t, src, "primary", binDir, freeProbePort(t))
+
+	stb := filepath.Join(root, "standby1")
+	mustWriteStandbySandbox(t, stb, "standby1", binDir, freeProbePort(t),
+		"primary", "bad'slot")
+
+	f := &pgexec.Fake{}
+	if err := Destroy(context.Background(), f, DestroyOptions{SandboxDir: stb}, io.Discard); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	want := `SELECT pg_drop_replication_slot('bad''slot') WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name='bad''slot');`
+	found := false
+	for _, c := range f.Calls {
+		if c.Name != "psql" {
+			continue
+		}
+		for _, a := range c.Args {
+			if a == want {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected exact drop-slot statement %q; calls=%v", want, f.Calls)
+	}
+}
+
 func TestDestroySlotCleanupSilentWhenSourceGone(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")

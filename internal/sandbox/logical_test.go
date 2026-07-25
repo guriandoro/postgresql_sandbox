@@ -22,6 +22,7 @@ package sandbox
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -285,6 +286,67 @@ func TestPublishWithExplicitTables(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("CREATE PUBLICATION FOR TABLE not issued; calls=%v", f.Calls)
+	}
+}
+
+// TestPublishRejectsTableWithSemicolon covers MED-11: a --tables item
+// carrying extra statements must be rejected up front (ExitUsage),
+// before anything reaches psql.
+func TestPublishRejectsTableWithSemicolon(t *testing.T) {
+	dir := deployFixture(t)
+	f := &pgexec.Fake{}
+	err := Publish(context.Background(), f, PublishOptions{
+		SandboxDir: dir,
+		PubName:    "my_pub",
+		Tables:     []string{"t1; DROP DATABASE app; --"},
+	}, io.Discard)
+	if err == nil {
+		t.Fatal("expected ExitUsage for table item with ';'")
+	}
+	if ExitCodeFor(err) != ui.ExitUsage {
+		t.Errorf("exit code: got %d, want %d", ExitCodeFor(err), ui.ExitUsage)
+	}
+	if len(f.Calls) != 0 {
+		t.Errorf("no external command should run on rejected input; calls=%v", f.Calls)
+	}
+}
+
+// TestPublishRequotesQuotedTables covers MED-11: double-quoted
+// identifiers in --tables round-trip through the re-quoter, bare
+// identifiers stay bare, and the emitted statement is exactly the
+// safe re-quoted form.
+func TestPublishRequotesQuotedTables(t *testing.T) {
+	dir := deployFixture(t)
+	cfg, _ := config.LoadSandbox(dir)
+	mustCreatePid(t, cfg.DataDir)
+	ln := mustListenOn(t, cfg.Host, cfg.Port)
+	defer ln.Close()
+
+	f := &pgexec.Fake{}
+	f.SetResult("psql", pgexec.Result{Stdout: []byte("logical\n"), ExitCode: 0})
+
+	err := Publish(context.Background(), f, PublishOptions{
+		SandboxDir: dir,
+		PubName:    "my_pub",
+		Tables:     []string{`public."Weird Table"`, `"CamelSchema"."T2"`, "t3"},
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	want := `CREATE PUBLICATION my_pub FOR TABLE public."Weird Table", "CamelSchema"."T2", t3;`
+	found := false
+	for _, c := range f.Calls {
+		if c.Name != "psql" {
+			continue
+		}
+		for _, a := range c.Args {
+			if a == want {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected exact statement %q; calls=%v", want, f.Calls)
 	}
 }
 
@@ -797,6 +859,46 @@ func findCreateSubscriptionSQL(t *testing.T, f *pgexec.Fake) string {
 	return ""
 }
 
+// TestSubscribeConninfoQuoteEscaped covers MED-11: a single quote in
+// the dbname must survive both quoting layers — libpq value quoting
+// inside the conninfo, then SQL literal quoting of the whole
+// CONNECTION string — and the exact statement handed to psql proves
+// it cannot break out of the SQL literal.
+func TestSubscribeConninfoQuoteEscaped(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pubDir := filepath.Join(root, "pub")
+	pubPort := freeProbePort(t)
+	makeRunningSourceFixture(t, pubDir, "pub", binDir, pubPort)
+
+	subDir := filepath.Join(root, "sub1")
+	mustWriteSandboxFile(t, subDir, "sub1", binDir, freeProbePort(t))
+	subCfg, _ := config.LoadSandbox(subDir)
+	mustCreatePid(t, subCfg.DataDir)
+
+	f := &pgexec.Fake{}
+	err := Subscribe(context.Background(), f, SubscribeOptions{
+		SandboxDir:   subDir,
+		PublisherRef: "pub",
+		PubName:      "my_pub",
+		Dbname:       "o'brien",
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	// conninfo value: o'brien → 'o\'brien' (libpq quoting); the whole
+	// conninfo then has every ' doubled by quoteLiteral.
+	want := fmt.Sprintf(
+		`CREATE SUBSCRIPTION sub1_sub CONNECTION 'host=127.0.0.1 port=%d user=postgres dbname=''o\''brien''' PUBLICATION my_pub WITH (copy_data = true);`,
+		pubPort)
+	if got := findCreateSubscriptionSQL(t, f); got != want {
+		t.Errorf("CREATE SUBSCRIPTION statement:\n got: %s\nwant: %s", got, want)
+	}
+}
+
 func TestDeployRefusesReplicateAndSubscribe(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")
@@ -844,14 +946,15 @@ func TestDestroyDropsSubscription(t *testing.T) {
 	if err := Destroy(context.Background(), f, DestroyOptions{SandboxDir: subDir}, &stderr); err != nil {
 		t.Fatalf("Destroy: %v", err)
 	}
-	// A psql call with DROP SUBSCRIPTION must have been made.
+	// A psql call with DROP SUBSCRIPTION must have been made. The
+	// name is emitted quoteIdent'd (MED-11).
 	found := false
 	for _, c := range f.Calls {
 		if c.Name != "psql" {
 			continue
 		}
 		for _, a := range c.Args {
-			if strings.Contains(a, "DROP SUBSCRIPTION sub1_sub") &&
+			if strings.Contains(a, `DROP SUBSCRIPTION "sub1_sub"`) &&
 				strings.Contains(a, "slot_name = NONE") {
 				found = true
 			}
@@ -968,6 +1071,47 @@ func TestStatusReportsSubscription(t *testing.T) {
 	rep.RenderText(&buf)
 	if !strings.Contains(buf.String(), "subscription=name=sub1_sub enabled=true") {
 		t.Errorf("RenderText missing subscription line; got: %s", buf.String())
+	}
+}
+
+// TestStatusSubscriptionProbeEscapesName covers MED-11: a
+// hand-edited config's subscriptionName bypasses Subscribe's
+// sanitizer, so the pg_subscription probe must quoteLiteral it.
+func TestStatusSubscriptionProbeEscapesName(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	subDir := filepath.Join(root, "sub1")
+	mustWriteSubscriberSandbox(t, subDir, "sub1", binDir, freeProbePort(t),
+		"pub", "my_pub", "sub'x")
+	cfg, _ := config.LoadSandbox(subDir)
+	mustCreatePid(t, cfg.DataDir)
+	ln := mustListenOn(t, cfg.Host, cfg.Port)
+	defer ln.Close()
+
+	f := &pgexec.Fake{}
+	f.SetResult("psql", pgexec.Result{Stdout: []byte("x\n"), ExitCode: 0})
+	if _, err := Status(context.Background(), f, subDir); err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	found := false
+	for _, c := range f.Calls {
+		if c.Name != "psql" {
+			continue
+		}
+		for _, a := range c.Args {
+			if strings.Contains(a, "FROM pg_subscription") {
+				if !strings.Contains(a, `WHERE s.subname = 'sub''x';`) {
+					t.Errorf("probe must escape the name; got query %q", a)
+				}
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Errorf("pg_subscription probe not issued; calls=%v", f.Calls)
 	}
 }
 

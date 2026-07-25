@@ -441,7 +441,9 @@ func probePublications(ctx context.Context, runner pgexec.Runner, cfg *config.Sa
 // renderer.
 func probeSubscription(ctx context.Context, runner pgexec.Runner, cfg *config.Sandbox, rep *StatusReport, stderrW io.Writer) {
 	// COALESCE the stat columns to '' so a missing row degrades to
-	// empty strings rather than the NULL literal.
+	// empty strings rather than the NULL literal. The name is
+	// quoteLiteral'd (MED-11): Subscribe sanitizes it at create time,
+	// but a hand-edited config bypasses that.
 	query := fmt.Sprintf(
 		"SELECT s.subname, s.subenabled, "+
 			"COALESCE(st.pid::text, ''), "+
@@ -450,8 +452,8 @@ func probeSubscription(ctx context.Context, runner pgexec.Runner, cfg *config.Sa
 			"COALESCE(st.last_msg_send_time::text, '') "+
 			"FROM pg_subscription s "+
 			"LEFT JOIN pg_stat_subscription st ON st.subid = s.oid "+
-			"WHERE s.subname = '%s';",
-		cfg.Logical.SubscriptionName)
+			"WHERE s.subname = %s;",
+		quoteLiteral(cfg.Logical.SubscriptionName))
 	res := runner.Run(ctx, "psql",
 		"-X", "-A", "-t", "-F", "|",
 		"-h", cfg.Host,

@@ -59,7 +59,9 @@ type PublishOptions struct {
 	AllTables bool
 
 	// Tables is the explicit list of tables to include in the
-	// publication (verbatim, schema-qualified if the caller wants).
+	// publication, optionally schema-qualified. Each item must parse
+	// as (schema.)?name where each part is a bare identifier or a
+	// double-quoted one — see requotePublicationTable (MED-11).
 	// Mutually exclusive with AllTables.
 	Tables []string
 
@@ -82,7 +84,8 @@ const minReplicationSlots = 10
 // Documented failure modes:
 //
 //   - ExitNotASandbox: target dir is not a sandbox.
-//   - ExitUsage: required fields missing or AllTables+Tables both set.
+//   - ExitUsage: required fields missing, AllTables+Tables both set,
+//     or a --tables item is not a valid (schema.)?name.
 //   - ExitPgctlFailed: the restart-for-wal_level failed.
 //   - ExitPublicationFailed: CREATE PUBLICATION returned non-zero
 //     (including the "publication already exists" path; we don't
@@ -101,6 +104,20 @@ func Publish(ctx context.Context, runner pgexec.Runner, opts PublishOptions, std
 	if !opts.AllTables && len(opts.Tables) == 0 {
 		return wrapExit(ExitUsage,
 			fmt.Errorf("sandbox.Publish: one of --all-tables or --tables is required"))
+	}
+
+	// Validate and re-quote the table list up front (MED-11): each
+	// item must parse as (schema.)?name, bare or double-quoted, so a
+	// malicious or typo'd item cannot smuggle extra SQL into the
+	// psql -c string below — and so bad input fails here, before any
+	// ALTER SYSTEM / restart work has happened.
+	tables := make([]string, len(opts.Tables))
+	for i, item := range opts.Tables {
+		quoted, err := requotePublicationTable(item)
+		if err != nil {
+			return wrapExit(ExitUsage, fmt.Errorf("sandbox.Publish: --tables: %w", err))
+		}
+		tables[i] = quoted
 	}
 
 	cfg, err := loadSandboxOrFail(opts.SandboxDir)
@@ -130,15 +147,15 @@ func Publish(ctx context.Context, runner pgexec.Runner, opts PublishOptions, std
 
 	// Step 2: build and run CREATE PUBLICATION. We sanitize the
 	// publication name like the slot sanitizer does for physical
-	// slots (see commits 44e784e / 37a5fe4); the table list is
-	// taken verbatim because users include schema qualification.
+	// slots (see commits 44e784e / 37a5fe4); the table list was
+	// validated and re-quoted above.
 	pubName := sanitizeSQLIdentifier(opts.PubName)
 	var stmt string
 	if opts.AllTables {
 		stmt = fmt.Sprintf("CREATE PUBLICATION %s FOR ALL TABLES;", pubName)
 	} else {
 		stmt = fmt.Sprintf("CREATE PUBLICATION %s FOR TABLE %s;",
-			pubName, strings.Join(opts.Tables, ", "))
+			pubName, strings.Join(tables, ", "))
 	}
 
 	fmt.Fprintf(stderrW, "level=INFO msg=%q pub=%q db=%q sandbox=%q\n",

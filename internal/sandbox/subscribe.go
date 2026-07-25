@@ -169,16 +169,21 @@ func Subscribe(ctx context.Context, runner pgexec.Runner, opts SubscribeOptions,
 
 	// Step 5: build CONN and CREATE SUBSCRIPTION. We connect to the
 	// publisher as its superuser; local + trust = no password
-	// needed. See file-level comment for why this is safe.
+	// needed. See file-level comment for why this is safe. Each
+	// conninfo value is quoted per libpq rules and the whole conninfo
+	// is embedded via quoteLiteral (MED-11), so a quote in e.g.
+	// --dbname or a hand-edited publisher config cannot break out of
+	// the SQL string.
 	connStr := fmt.Sprintf("host=%s port=%d user=%s dbname=%s",
-		pubCfg.Host, pubCfg.Port, pubCfg.Superuser, pubDbname)
+		quoteConninfoValue(pubCfg.Host), pubCfg.Port,
+		quoteConninfoValue(pubCfg.Superuser), quoteConninfoValue(pubDbname))
 	copyData := "true"
 	if opts.NoCopyData {
 		copyData = "false"
 	}
 	createSQL := fmt.Sprintf(
-		"CREATE SUBSCRIPTION %s CONNECTION '%s' PUBLICATION %s WITH (copy_data = %s);",
-		subName, connStr, sanitizeSQLIdentifier(opts.PubName), copyData)
+		"CREATE SUBSCRIPTION %s CONNECTION %s PUBLICATION %s WITH (copy_data = %s);",
+		subName, quoteLiteral(connStr), sanitizeSQLIdentifier(opts.PubName), copyData)
 
 	fmt.Fprintf(stderrW, "level=INFO msg=%q sub=%q pub=%q publisher=%q\n",
 		"creating subscription", subName, opts.PubName, pubCfg.Name)

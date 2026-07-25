@@ -138,12 +138,15 @@ func bestEffortDropSlot(ctx context.Context, runner pgexec.Runner, sandboxDir st
 	}
 
 	// The query is guarded by EXISTS so dropping a missing slot is a
-	// no-op rather than a SQL error. We reuse the caller's runner
-	// (see function-level doc comment for why).
+	// no-op rather than a SQL error. The slot name is quoteLiteral'd
+	// (MED-11): deploy-time names go through config.NormalizeString,
+	// but a hand-edited config bypasses that entirely. We reuse the
+	// caller's runner (see function-level doc comment for why).
 	srcRunner := runner
+	slot := quoteLiteral(phys.SlotName)
 	query := fmt.Sprintf(
-		"SELECT pg_drop_replication_slot('%s') WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name='%s');",
-		phys.SlotName, phys.SlotName)
+		"SELECT pg_drop_replication_slot(%s) WHERE EXISTS (SELECT 1 FROM pg_replication_slots WHERE slot_name=%s);",
+		slot, slot)
 	res := srcRunner.Run(ctx, "psql",
 		"-X", "-A", "-t",
 		"-h", srcCfg.Host,
@@ -190,10 +193,14 @@ func bestEffortDropSubscription(ctx context.Context, runner pgexec.Runner, cfg *
 	// SET (slot_name = NONE) THEN DROP — see function-level comment
 	// for why. We chain via semicolons in a single psql -c so the
 	// three statements share a transaction-scoped session and we
-	// pay one auth round-trip.
+	// pay one auth round-trip. The name is quoteIdent'd (MED-11):
+	// Subscribe lower-cases and sanitizes it at create time, so the
+	// quoted form matches, but a hand-edited config bypasses that
+	// sanitizer entirely.
+	subIdent := quoteIdent(sub)
 	stmt := fmt.Sprintf(
 		"ALTER SUBSCRIPTION %s DISABLE; ALTER SUBSCRIPTION %s SET (slot_name = NONE); DROP SUBSCRIPTION %s;",
-		sub, sub, sub)
+		subIdent, subIdent, subIdent)
 	res := runner.Run(ctx, "psql",
 		"-X", "-A", "-t",
 		"-h", cfg.Host,
