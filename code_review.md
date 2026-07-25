@@ -43,7 +43,7 @@ re-verified — re-confirm the failure mode before fixing.
 | MED-6  | medium | `build --force` deletes a live mismatched-version install      | fixed     |
 | MED-7  | medium | Cluster destroy trusts manifest member names (path escape)     | fixed |
 | MED-8  | medium | Cluster partial deploy orphans a running member                | fixed |
-| MED-9  | medium | `deploy --subscribe-to` forces dbname=postgres                 | not-fixed |
+| MED-9  | medium | `deploy --subscribe-to` forces dbname=postgres                 | fixed     |
 | MED-10 | medium | `promote` leaks the replication slot on the old source         | not-fixed |
 | MED-11 | medium | Unescaped SQL interpolation (publish/subscribe/destroy/status) | not-fixed |
 | MED-12 | medium | global_status attaches members to the wrong cluster after sort | not-fixed |
@@ -726,9 +726,9 @@ removes the cluster dir cleanly.
 
 ```yaml
 id: MED-9
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: 4eff130
+fixed-date: 2026-07-25
 severity: medium
 type: bug (silent wrong behavior)
 files:
