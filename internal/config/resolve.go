@@ -545,10 +545,20 @@ func envKeyForSandbox(key string) string {
 	return ""
 }
 
+// NormalizeString maps an arbitrary sandbox/slot label onto the
+// character set PostgreSQL permits for replication slot names —
+// [a-z0-9_] — since its output feeds pg_basebackup --slot and the
+// per-cluster slot builders (see MED-2). It lowercases the input and
+// replaces every remaining character outside that set (dashes, dots,
+// and any other punctuation) with an underscore; a name like "pg17.4"
+// becomes "pg17_4" instead of the invalid "pg17.4".
+//
+// The mapping is intentionally lossy: distinct inputs can collapse to
+// the same output (e.g. "pg17.4" and "pg17-4" both yield "pg17_4").
+// That is acceptable for slot names, whose only hard requirement is
+// the restricted character set.
 func NormalizeString(s string) string {
-	re := regexp.MustCompile(`[A-Z]+`)
+	re := regexp.MustCompile(`[^a-z0-9_]`)
 
-	return strings.ReplaceAll(re.ReplaceAllStringFunc(s, func(match string) string {
-		return strings.ToLower(match)
-	}), "-", "_")
+	return re.ReplaceAllString(strings.ToLower(s), "_")
 }

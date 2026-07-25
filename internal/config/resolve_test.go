@@ -263,3 +263,25 @@ func TestIsSettableKeyAcceptsAllSettable(t *testing.T) {
 		}
 	}
 }
+
+func TestNormalizeString(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"lowercases and maps dot", "pg17.4", "pg17_4"},
+		{"lowercases, maps dash and dot", "A-B.c", "a_b_c"},
+		{"already clean is unchanged", "mycluster_s1", "mycluster_s1"},
+		{"digits preserved", "pg16", "pg16"},
+		{"dash to underscore", "pg-16", "pg_16"},
+		{"empty stays empty", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeString(tt.in); got != tt.want {
+				t.Errorf("NormalizeString(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
