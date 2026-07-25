@@ -36,7 +36,7 @@ re-verified — re-confirm the failure mode before fixing.
 | HIGH-3 | high   | Shared predictable /tmp build dir + unverified tarball cache   | fixed |
 | HIGH-4 | high   | `report` executes untrusted input via psql meta-commands       | fixed |
 | MED-1  | medium | Report render step treats psql failure as success              | fixed     |
-| MED-2  | medium | NormalizeString lets invalid chars into replication slot names | not-fixed |
+| MED-2  | medium | NormalizeString lets invalid chars into replication slot names | fixed     |
 | MED-3  | medium | `--quiet` makes y/N confirmation prompts invisible             | not-fixed |
 | MED-4  | medium | `config migrate -s` bypasses resolveSandboxArg; relative path corrupts Name | not-fixed |
 | MED-5  | medium | cleanup-install-versions can delete an in-use install (3 ways) | not-fixed |
@@ -424,9 +424,9 @@ message for the exit-nonzero/nil-err case contains no `%!w`.
 
 ```yaml
 id: MED-2
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: 0c9e0ba
+fixed-date: 2026-07-25
 severity: medium
 type: bug (deploy failure)
 files:
