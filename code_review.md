@@ -45,7 +45,7 @@ re-verified — re-confirm the failure mode before fixing.
 | MED-8  | medium | Cluster partial deploy orphans a running member                | fixed |
 | MED-9  | medium | `deploy --subscribe-to` forces dbname=postgres                 | fixed     |
 | MED-10 | medium | `promote` leaks the replication slot on the old source         | fixed     |
-| MED-11 | medium | Unescaped SQL interpolation (publish/subscribe/destroy/status) | not-fixed |
+| MED-11 | medium | Unescaped SQL interpolation (publish/subscribe/destroy/status) | fixed     |
 | MED-12 | medium | global_status attaches members to the wrong cluster after sort | not-fixed |
 | LOW-1  | low    | Standby application_name never actually configured             | not-fixed |
 | LOW-2  | low    | Destroying a stopped subscriber silently leaks publisher slot  | not-fixed |
@@ -799,9 +799,9 @@ source; failure of that query still promotes but logs the warning.
 
 ```yaml
 id: MED-11
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: cb736e4
+fixed-date: 2026-07-25
 severity: medium
 type: security (SQL injection; low practical impact under local trust auth)
 files:
