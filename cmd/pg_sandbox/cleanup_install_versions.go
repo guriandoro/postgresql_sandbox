@@ -75,12 +75,13 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 		return ui.ExitGeneric.Int()
 	}
 
-	plan, err := cleanup.Plan(cleanup.Options{
+	opts := cleanup.Options{
 		BinDir:       binDir,
 		SandboxRoot:  sandboxRoot,
 		OnlyVersions: onlyVersions,
 		Force:        force,
-	}, stderr)
+	}
+	plan, err := cleanup.Plan(opts, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox cleanup-install-versions: %v\n", err)
 		return cleanup.ExitCodeFor(err).Int()
@@ -117,7 +118,10 @@ func runCleanupInstallVersions(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	removed, err := cleanup.Apply(plan.Candidates, stderr)
+	// Apply re-walks the sandbox root before each removal so a
+	// sandbox deployed while the y/N prompt sat open still blocks
+	// deletion (TOCTOU guard; see cleanup.Apply's doc).
+	removed, err := cleanup.Apply(opts, plan.Candidates, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "pg_sandbox cleanup-install-versions: %v\n", err)
 		// We still report how many were removed for triage.

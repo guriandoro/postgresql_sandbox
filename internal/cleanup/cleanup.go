@@ -2,7 +2,7 @@
 //
 // The Plan + Apply split below makes the testability story easy:
 // Plan is pure (given a binDir + sandbox root it returns "candidate ->
-// in-use sandboxes"); Apply is the side-effectful step that prompts
+// in-use sandboxes"); Apply is the side-effectful step that re-checks
 // and removes. Tests exercise Plan directly with temp dirs; Apply is
 // covered by a smoke test that actually deploys + destroys a sandbox.
 
@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -22,11 +23,22 @@ import (
 	"github.com/guriandoro/postgresql_sandbox/internal/ui"
 )
 
+// installVersionRE is the shape a subdirectory name must have to be
+// treated as a removable install version: major.minor, decimal
+// integers only. It mirrors internal/build's versionRE — the shape
+// `build` accepts and installs under — so the pruner's candidate set
+// is exactly the set of dirs the tool itself creates. Anything else
+// under the install root (docs/, a stray tarball dir, and —
+// critically — the bin/include/lib/share layout of an install prefix
+// mistakenly used as the root) is never a deletion candidate.
+var installVersionRE = regexp.MustCompile(`^[0-9]+\.[0-9]+$`)
+
 // Options captures the CLI input to CleanupInstallVersions. Resolved
 // upstream by the dispatcher.
 type Options struct {
-	// BinDir is the install root (each subdir is a candidate version).
-	// REQUIRED. Resolves from --bin-dir / PGS_BIN_DIR in the CLI layer.
+	// BinDir is the install root (each version-shaped subdir, e.g.
+	// "16.4", is a candidate version). REQUIRED. Resolves from
+	// --bin-dir / PGS_BIN_DIR in the CLI layer.
 	BinDir string
 
 	// SandboxRoot is the directory to walk for sandboxes-in-use.
@@ -119,11 +131,40 @@ func Plan(opts Options, stderrW io.Writer) (PlanResult, error) {
 		}
 		return PlanResult{}, fmt.Errorf("cleanup: read %s: %w", binDir, err)
 	}
+
+	// Refuse to prune when binDir itself looks like a single install
+	// PREFIX rather than an install ROOT. The deploy/build layers
+	// accept a version-shaped PGS_BIN_DIR like /opt/postgresql/16.4
+	// whose children are bin/include/lib/share; treating those as
+	// removable "versions" would destroy the live install (they can
+	// never all be matched by a sandbox's binDir reference). The
+	// version-shape filter below already excludes them, but a pointed
+	// error beats a silent no-op scan of the wrong directory.
+	hasBin, hasLib := false, false
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		if strings.HasPrefix(e.Name(), ".") {
+		switch e.Name() {
+		case "bin":
+			hasBin = true
+		case "lib":
+			hasLib = true
+		}
+	}
+	if hasBin && hasLib {
+		return PlanResult{}, fmt.Errorf("cleanup: %s looks like a single PostgreSQL install prefix (contains bin/ and lib/), not an install root; refusing to prune — point --bin-dir / PGS_BIN_DIR at the parent directory that holds one subdirectory per version", binDir)
+	}
+
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		// Only version-shaped names ("16.4") are candidates. This
+		// also skips hidden dirs and anything else living under the
+		// install root that the tool didn't install (see
+		// installVersionRE's doc).
+		if !installVersionRE.MatchString(e.Name()) {
 			continue
 		}
 		candidates = append(candidates, Candidate{
@@ -137,21 +178,7 @@ func Plan(opts Options, stderrW io.Writer) (PlanResult, error) {
 
 	// 3. Cross-reference.
 	for i, c := range candidates {
-		// Trailing separator so "/opt/pg/16" doesn't match a sandbox
-		// referencing "/opt/pg/16.5/bin" (sub-string trap). Comparing
-		// against the version-dir prefix + os.PathSeparator is the
-		// cleanest "the sandbox's binDir lives UNDER this version dir"
-		// check.
-		prefix := c.Path + string(os.PathSeparator)
-		var used []string
-		for sbDir, binDirRef := range refs {
-			cleanedRef := filepath.Clean(binDirRef)
-			if cleanedRef == c.Path || strings.HasPrefix(cleanedRef, prefix) {
-				used = append(used, sbDir)
-			}
-		}
-		sort.Strings(used)
-		candidates[i].UsedBy = used
+		candidates[i].UsedBy = usedBy(c, refs)
 	}
 
 	sort.Slice(candidates, func(i, j int) bool {
@@ -245,6 +272,63 @@ func collectSandboxBinDirs(root string, stderrW io.Writer) map[string]string {
 	return out
 }
 
+// usedBy returns the sorted list of sandbox dirs (keys of refs) whose
+// binDir reference lives at or under candidate c's path. Shared by
+// Plan (scan-time classification) and Apply (fresh re-check after the
+// confirmation prompt).
+func usedBy(c Candidate, refs map[string]string) []string {
+	var used []string
+	for sbDir, binDirRef := range refs {
+		if refUnderCandidate(binDirRef, c.Path) {
+			used = append(used, sbDir)
+		}
+	}
+	sort.Strings(used)
+	return used
+}
+
+// refUnderCandidate reports whether a sandbox's binDir reference is
+// the candidate version dir itself or lives underneath it.
+//
+// Both sides are compared in every form pathForms yields (cleaned and
+// symlink-resolved), cross-product, so a reference that reaches the
+// install through a symlink still counts as in-use: `latest -> 16.4`
+// (config stores /opt/pg/latest/bin) matches candidate /opt/pg/16.4,
+// and /tmp vs /private/tmp on macOS match each other. Over-matching
+// is the safe direction here — a false "in use" keeps a dir, a false
+// "unused" deletes a live install.
+//
+// The trailing separator on the prefix is load-bearing: "/opt/pg/16.5"
+// must not match a sandbox referencing "/opt/pg/16.50/bin" (sub-string
+// trap). Comparing against candidate + os.PathSeparator is the
+// cleanest "the sandbox's binDir lives UNDER this version dir" check.
+func refUnderCandidate(binDirRef, candidatePath string) bool {
+	refForms := pathForms(binDirRef)
+	for _, cand := range pathForms(candidatePath) {
+		prefix := cand + string(os.PathSeparator)
+		for _, ref := range refForms {
+			if ref == cand || strings.HasPrefix(ref, prefix) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// pathForms returns the comparable forms of p: always the cleaned
+// path, plus the symlink-resolved path when EvalSymlinks succeeds and
+// differs. Best-effort by design — a dangling reference (sandbox
+// pointing at an already-deleted install) can't be resolved, and
+// falling back to the cleaned form keeps it participating in the
+// comparison instead of silently dropping out.
+func pathForms(p string) []string {
+	cleaned := filepath.Clean(p)
+	if resolved, err := filepath.EvalSymlinks(cleaned); err == nil && resolved != cleaned {
+		return []string{cleaned, resolved}
+	}
+	return []string{cleaned}
+}
+
 // RenderPlan writes a human-readable summary of the candidates to w.
 // Used by the CLI layer for both the "what would happen" preview and
 // the "what did happen" log.
@@ -336,16 +420,37 @@ func renderScanRootHeader(w io.Writer, binDir, sandboxRoot string) {
 // is responsible for prompting (or skipping the prompt with --force)
 // BEFORE calling Apply; Apply itself does no prompting.
 //
+// Because the plan was computed before the confirmation prompt — which
+// can sit open for an arbitrarily long time — Apply re-walks
+// opts.SandboxRoot and re-checks every scan-time-unused candidate
+// against the fresh references immediately before removing it. A
+// sandbox deployed while the prompt was open marks its version in-use
+// again; Apply skips it with a warn line instead of deleting it
+// (TOCTOU guard, MED-5).
+//
 // stderrW receives one "removed" line per version. Returns the
 // number removed and the first error encountered (we continue past
 // errors so a permission denial on one dir doesn't strand the
 // others).
-func Apply(plan []Candidate, stderrW io.Writer) (int, error) {
+func Apply(opts Options, plan []Candidate, stderrW io.Writer) (int, error) {
+	if opts.SandboxRoot == "" {
+		return 0, fmt.Errorf("cleanup: SandboxRoot is required")
+	}
 	logger := slog.New(slog.NewTextHandler(stderrW, nil))
+
+	// Fresh sandbox walk: the scan-time UsedBy answers "was it unused
+	// when we looked?"; deletion needs "is it unused NOW?".
+	refs := collectSandboxBinDirs(filepath.Clean(opts.SandboxRoot), stderrW)
+
 	var firstErr error
 	removed := 0
 	for _, c := range plan {
 		if !c.IsUnused() {
+			continue
+		}
+		if used := usedBy(c, refs); len(used) > 0 {
+			logger.Warn("cleanup: skipping version now in use (sandbox deployed since scan)",
+				"version", c.Version, "path", c.Path, "used_by", strings.Join(used, ", "))
 			continue
 		}
 		if err := os.RemoveAll(c.Path); err != nil {

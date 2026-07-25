@@ -138,25 +138,109 @@ func TestPlan_classifiesUsedVsUnused(t *testing.T) {
 }
 
 func TestPlan_noFalsePositiveOnSubstringPrefix(t *testing.T) {
-	// Regression: a sandbox at /bin/16.5/... must NOT mark /bin/16
-	// as in-use. Trailing-separator check in Plan guards this.
+	// Regression: a sandbox at /bin/16.50/... must NOT mark /bin/16.5
+	// as in-use. Trailing-separator check in refUnderCandidate guards
+	// this. (Both names are version-shaped so both survive the
+	// candidate filter — the pre-filter version of this test used
+	// "16" vs "16.5", but bare "16" is no longer a candidate.)
 	f := newFixture(t)
-	f.addVersion("16")
 	f.addVersion("16.5")
-	f.addSandbox("a", filepath.Join(f.binDir, "16.5", "bin"))
+	f.addVersion("16.50")
+	f.addSandbox("a", filepath.Join(f.binDir, "16.50", "bin"))
 
 	var buf bytes.Buffer
 	plan, err := Plan(Options{BinDir: f.binDir, SandboxRoot: f.sandboxRoot}, &buf)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
+	if len(plan.Candidates) != 2 {
+		t.Fatalf("len(plan.Candidates) = %d, want 2", len(plan.Candidates))
+	}
 	for _, c := range plan.Candidates {
-		if c.Version == "16" && !c.IsUnused() {
-			t.Errorf("16 incorrectly marked as in-use: %v", c.UsedBy)
+		if c.Version == "16.5" && !c.IsUnused() {
+			t.Errorf("16.5 incorrectly marked as in-use: %v", c.UsedBy)
 		}
-		if c.Version == "16.5" && c.IsUnused() {
-			t.Errorf("16.5 should be in-use but is unused")
+		if c.Version == "16.50" && c.IsUnused() {
+			t.Errorf("16.50 should be in-use but is unused")
 		}
+	}
+}
+
+func TestPlan_onlyVersionShapedCandidates(t *testing.T) {
+	// MED-5 fix 1: only major.minor-shaped subdir names become
+	// candidates. Anything else under the install root (docs, share,
+	// hidden dirs, a bare major like "16") must never be offered for
+	// deletion.
+	f := newFixture(t)
+	f.addVersion("16.4")
+	for _, d := range []string{"share", "docs", ".cache", "16", "16.4rc1", "v16.4"} {
+		if err := os.MkdirAll(filepath.Join(f.binDir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	plan, err := Plan(Options{BinDir: f.binDir, SandboxRoot: f.sandboxRoot}, &buf)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	if len(plan.Candidates) != 1 || plan.Candidates[0].Version != "16.4" {
+		t.Errorf("plan.Candidates = %+v, want exactly [16.4]", plan.Candidates)
+	}
+}
+
+func TestPlan_refusesInstallPrefixRoot(t *testing.T) {
+	// MED-5 fix 1 (second half): a bin dir that IS an install prefix
+	// (e.g. PGS_BIN_DIR=/opt/postgresql/16.4, whose children are
+	// bin/include/lib/share) must be refused with a pointed error,
+	// not scanned — its subdirs are not versions and deleting them
+	// destroys the live install.
+	f := newFixture(t)
+	for _, d := range []string{"bin", "include", "lib", "share"} {
+		if err := os.MkdirAll(filepath.Join(f.binDir, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	_, err := Plan(Options{BinDir: f.binDir, SandboxRoot: f.sandboxRoot}, &buf)
+	if err == nil {
+		t.Fatal("expected error for install-prefix-shaped bin dir")
+	}
+	if !strings.Contains(err.Error(), "install prefix") {
+		t.Errorf("error %q should mention 'install prefix'", err.Error())
+	}
+	for _, d := range []string{"bin", "include", "lib", "share"} {
+		if _, statErr := os.Stat(filepath.Join(f.binDir, d)); statErr != nil {
+			t.Errorf("%s should be untouched: %v", d, statErr)
+		}
+	}
+}
+
+func TestPlan_symlinkedRefCountsAsInUse(t *testing.T) {
+	// MED-5 fix 2: a sandbox that reaches the install through a
+	// symlink (latest -> 16.4; config stores .../latest/bin) must
+	// mark 16.4 as in-use. Pre-fix the literal string-prefix match
+	// never resolved symlinks and the live install was deleted.
+	f := newFixture(t)
+	f.addVersion("16.4")
+	if err := os.Symlink(filepath.Join(f.binDir, "16.4"), filepath.Join(f.binDir, "latest")); err != nil {
+		t.Fatal(err)
+	}
+	f.addSandbox("a", filepath.Join(f.binDir, "latest", "bin"))
+
+	var buf bytes.Buffer
+	plan, err := Plan(Options{BinDir: f.binDir, SandboxRoot: f.sandboxRoot}, &buf)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	// The symlink itself must not become a candidate (ReadDir reports
+	// it as a non-dir entry, and "latest" isn't version-shaped anyway).
+	if len(plan.Candidates) != 1 {
+		t.Fatalf("len(plan.Candidates) = %d, want 1 (the symlink must not be a candidate)", len(plan.Candidates))
+	}
+	if c := plan.Candidates[0]; c.Version != "16.4" || c.IsUnused() {
+		t.Errorf("16.4 should be in-use via the latest symlink; got %+v", c)
 	}
 }
 
@@ -207,12 +291,13 @@ func TestApply_removesOnlyUnused(t *testing.T) {
 	f.addSandbox("a", filepath.Join(f.binDir, "16.4", "bin"))
 
 	var buf bytes.Buffer
-	plan, err := Plan(Options{BinDir: f.binDir, SandboxRoot: f.sandboxRoot}, &buf)
+	opts := Options{BinDir: f.binDir, SandboxRoot: f.sandboxRoot}
+	plan, err := Plan(opts, &buf)
 	if err != nil {
 		t.Fatalf("Plan: %v", err)
 	}
 
-	removed, err := Apply(plan.Candidates, &buf)
+	removed, err := Apply(opts, plan.Candidates, &buf)
 	if err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -224,6 +309,48 @@ func TestApply_removesOnlyUnused(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.binDir, "17.3")); !os.IsNotExist(err) {
 		t.Errorf("17.3 (unused) should be gone; stat err = %v", err)
+	}
+}
+
+func TestApply_rechecksBeforeRemove(t *testing.T) {
+	// MED-5 fix 3 (TOCTOU): the plan is computed BEFORE the y/N
+	// prompt; a sandbox deployed while the prompt sits open must
+	// block deletion. Apply re-walks the sandbox root, so a candidate
+	// that was unused at scan time but is referenced now is skipped.
+	f := newFixture(t)
+	f.addVersion("16.4")
+	f.addVersion("17.3")
+
+	var buf bytes.Buffer
+	opts := Options{BinDir: f.binDir, SandboxRoot: f.sandboxRoot}
+	plan, err := Plan(opts, &buf)
+	if err != nil {
+		t.Fatalf("Plan: %v", err)
+	}
+	for _, c := range plan.Candidates {
+		if !c.IsUnused() {
+			t.Fatalf("%s should be unused at scan time; UsedBy = %v", c.Version, c.UsedBy)
+		}
+	}
+
+	// Simulate "sandbox deployed while the prompt was open".
+	f.addSandbox("late", filepath.Join(f.binDir, "16.4", "bin"))
+
+	removed, err := Apply(opts, plan.Candidates, &buf)
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if removed != 1 {
+		t.Errorf("removed = %d, want 1 (only 17.3)", removed)
+	}
+	if _, err := os.Stat(filepath.Join(f.binDir, "16.4")); err != nil {
+		t.Errorf("16.4 (newly in-use) was deleted despite the re-check: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(f.binDir, "17.3")); !os.IsNotExist(err) {
+		t.Errorf("17.3 (still unused) should be gone; stat err = %v", err)
+	}
+	if !strings.Contains(buf.String(), "now in use") {
+		t.Errorf("Apply output should warn about the now-in-use skip; got:\n%s", buf.String())
 	}
 }
 
