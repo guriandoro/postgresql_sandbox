@@ -46,7 +46,7 @@ re-verified — re-confirm the failure mode before fixing.
 | MED-9  | medium | `deploy --subscribe-to` forces dbname=postgres                 | fixed     |
 | MED-10 | medium | `promote` leaks the replication slot on the old source         | fixed     |
 | MED-11 | medium | Unescaped SQL interpolation (publish/subscribe/destroy/status) | fixed     |
-| MED-12 | medium | global_status attaches members to the wrong cluster after sort | not-fixed |
+| MED-12 | medium | global_status attaches members to the wrong cluster after sort | fixed |
 | LOW-1  | low    | Standby application_name never actually configured             | not-fixed |
 | LOW-2  | low    | Destroying a stopped subscriber silently leaks publisher slot  | not-fixed |
 | LOW-3  | low    | Subscribing a sandbox to itself hangs forever                  | not-fixed |
@@ -856,9 +856,9 @@ runner receives); slot name with `'` in config → escaped statement.
 
 ```yaml
 id: MED-12
-status: not-fixed
-fixed-commit: null
-fixed-date: null
+status: fixed
+fixed-commit: b5fa353
+fixed-date: 2026-07-25
 severity: medium
 type: bug (wrong output)
 files:
