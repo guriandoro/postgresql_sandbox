@@ -16,11 +16,14 @@ package sandbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/guriandoro/postgresql_sandbox/internal/config"
 	"github.com/guriandoro/postgresql_sandbox/internal/pgexec"
@@ -37,11 +40,13 @@ func Start(ctx context.Context, runner pgexec.Runner, dir string, stderrW io.Wri
 		return err
 	}
 
-	// SPEC §6.2: "already running" is a no-op success. We check the
-	// pidfile (cheap, no fork). A pidfile-but-port-dead state is
-	// suspect and reported by Status; for Start we treat any pidfile
-	// presence as "already up" and let pg_ctl's own idempotency
-	// handle the corner case if a user retries.
+	// SPEC §6.2: "already running" is a no-op success. isRunning
+	// checks the pidfile AND that the recorded PID is alive, so a
+	// stale pidfile left by a reboot or kill -9 does not
+	// short-circuit the start — pg_ctl runs and applies its own
+	// stale-pid handling. A pid-alive-but-port-dead state is suspect
+	// and reported by Status; for Start we treat a live PID as
+	// "already up".
 	if isRunning(cfg) {
 		fmt.Fprintf(stderrW, "level=INFO msg=\"already running\" name=%q port=%d\n", cfg.Name, cfg.Port)
 		return nil
@@ -78,6 +83,16 @@ func Stop(ctx context.Context, runner pgexec.Runner, dir string, stderrW io.Writ
 		return err
 	}
 	if !isRunning(cfg) {
+		// A pidfile whose PID is dead (host reboot, kill -9) would
+		// make `pg_ctl stop` fail and wedge Restart before it ever
+		// reaches Start. Remove it and treat Stop as a no-op success.
+		pidPath := pidfilePath(cfg)
+		if _, statErr := os.Stat(pidPath); statErr == nil {
+			fmt.Fprintf(stderrW, "level=WARN msg=\"stale postmaster.pid, removing\" name=%q path=%q\n", cfg.Name, pidPath)
+			if rmErr := os.Remove(pidPath); rmErr != nil {
+				fmt.Fprintf(stderrW, "level=WARN msg=\"stale pidfile removal failed\" name=%q error=%q\n", cfg.Name, rmErr)
+			}
+		}
 		fmt.Fprintf(stderrW, "level=INFO msg=\"not running\" name=%q\n", cfg.Name)
 		return nil
 	}
@@ -122,16 +137,51 @@ func loadSandboxOrFail(dir string) (*config.Sandbox, error) {
 
 // isRunning is a cheap "is postgres up" check used by Start, Stop,
 // and Status. It returns true iff the data dir's postmaster.pid
-// exists. We deliberately do NOT also probe the port here — a
-// pidfile-present-but-port-dead state is an "unhealthy/crashed"
-// condition that Status surfaces separately; Start/Stop just want
-// "should I bother shelling out to pg_ctl".
+// exists AND the PID on its first line is alive (signal-0 probe;
+// EPERM counts as alive). A missing, unparsable, or dead-PID pidfile
+// all mean "not running" — a stale pidfile left by a reboot or
+// kill -9 must not wedge Start/Restart. We deliberately do NOT also
+// probe the port here — a pid-alive-but-port-dead state is an
+// "unhealthy/crashed" condition that Status surfaces separately;
+// Start/Stop just want "should I bother shelling out to pg_ctl".
 func isRunning(cfg *config.Sandbox) bool {
 	if cfg == nil {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(cfg.DataDir, "postmaster.pid"))
-	return err == nil
+	pid, err := readPidfile(pidfilePath(cfg))
+	if err != nil {
+		return false
+	}
+	return pidAlive(pid)
+}
+
+// pidfilePath returns the sandbox's postmaster.pid path.
+func pidfilePath(cfg *config.Sandbox) string {
+	return filepath.Join(cfg.DataDir, "postmaster.pid")
+}
+
+// readPidfile reads the first line of a postmaster.pid file and
+// parses it as a PID. A missing file or garbage content comes back
+// as an error — callers treat both as "not running".
+func readPidfile(path string) (int, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return 0, err
+	}
+	first, _, _ := strings.Cut(string(b), "\n")
+	pid, err := strconv.Atoi(strings.TrimSpace(first))
+	if err != nil || pid <= 0 {
+		return 0, fmt.Errorf("unparsable pidfile %s: first line %q", path, first)
+	}
+	return pid, nil
+}
+
+// pidAlive probes pid with signal 0. nil and EPERM both mean a
+// process exists (EPERM = alive but owned by someone else); ESRCH —
+// or any other failure — means it does not.
+func pidAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 // isPortListening returns true if something is listening on the

@@ -557,8 +557,10 @@ func (f *pidDroppingFake) Run(ctx context.Context, name string, args ...string) 
 		dataDir, host, port := parsePgCtlStart(args)
 		if dataDir != "" {
 			_ = os.MkdirAll(dataDir, 0o755)
+			// isRunning probes the recorded PID for liveness, so the
+			// pidfile must name a live process — use our own PID.
 			_ = os.WriteFile(filepath.Join(dataDir, "postmaster.pid"),
-				[]byte("12345\n"), 0o600)
+				[]byte(strconv.Itoa(os.Getpid())+"\n"), 0o600)
 			hba := filepath.Join(dataDir, "pg_hba.conf")
 			if _, err := os.Stat(hba); errors.Is(err, os.ErrNotExist) {
 				_ = os.WriteFile(hba, []byte("local all all trust\n"), 0o600)

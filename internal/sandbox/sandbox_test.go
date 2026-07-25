@@ -22,6 +22,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -433,6 +434,111 @@ func TestStopPgctlFailure(t *testing.T) {
 }
 
 // ---------------------------------------------------------------
+// isRunning liveness tests (regression: HIGH-1, stale postmaster.pid
+// used to wedge start/stop/restart because only pidfile presence was
+// checked, never whether the recorded PID was alive)
+// ---------------------------------------------------------------
+
+func TestIsRunningLiveness(t *testing.T) {
+	if isRunning(nil) {
+		t.Error("nil cfg should not be running")
+	}
+
+	cases := []struct {
+		name    string
+		content string // "" → no pidfile at all
+		want    bool
+	}{
+		{"no pidfile", "", false},
+		{"alive own pid", strconv.Itoa(os.Getpid()) + "\n" + "/some/data/dir\n", true},
+		{"dead pid", strconv.Itoa(deadPid(t)) + "\n", false},
+		{"garbage pidfile", "not-a-pid\n", false},
+		{"empty pidfile", "\n", false},
+		{"negative pid", "-1\n", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := &config.Sandbox{DataDir: t.TempDir()}
+			if tc.content != "" {
+				mustCreatePidContent(t, cfg.DataDir, tc.content)
+			}
+			if got := isRunning(cfg); got != tc.want {
+				t.Errorf("isRunning: got %v, want %v (pidfile content %q)", got, tc.want, tc.content)
+			}
+		})
+	}
+}
+
+// Regression (HIGH-1): a stale pidfile (dead PID) must NOT
+// short-circuit Start into an "already running" no-op — pg_ctl start
+// must be invoked so the sandbox actually comes up.
+func TestStartStalePidfileInvokesPgctl(t *testing.T) {
+	dir := deployFixture(t)
+	cfg, err := config.LoadSandbox(dir)
+	if err != nil {
+		t.Fatalf("LoadSandbox: %v", err)
+	}
+	mustCreatePidContent(t, cfg.DataDir, strconv.Itoa(deadPid(t))+"\n")
+
+	f := &pgexec.Fake{}
+	if err := Start(context.Background(), f, dir, io.Discard); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if len(f.Calls) != 1 || f.Calls[0].Name != "pg_ctl" || f.Calls[0].Args[0] != "start" {
+		t.Errorf("Start with stale pidfile must invoke pg_ctl start; calls=%v", f.Calls)
+	}
+}
+
+// Regression (HIGH-1): Stop with a stale pidfile warns, removes the
+// pidfile, and returns no-op success without shelling out to pg_ctl
+// (which would fail against the dead PID and abort Restart).
+func TestStopStalePidfileRemovesAndNoops(t *testing.T) {
+	dir := deployFixture(t)
+	cfg, err := config.LoadSandbox(dir)
+	if err != nil {
+		t.Fatalf("LoadSandbox: %v", err)
+	}
+	mustCreatePidContent(t, cfg.DataDir, strconv.Itoa(deadPid(t))+"\n")
+
+	f := &pgexec.Fake{}
+	var stderr bytes.Buffer
+	if err := Stop(context.Background(), f, dir, &stderr); err != nil {
+		t.Fatalf("Stop (stale pidfile): %v", err)
+	}
+	if len(f.Calls) != 0 {
+		t.Errorf("Stop with stale pidfile should not invoke pg_ctl; calls=%v", f.Calls)
+	}
+	if !strings.Contains(stderr.String(), "stale postmaster.pid") {
+		t.Errorf("expected WARN about stale pidfile, got: %q", stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(cfg.DataDir, "postmaster.pid")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("stale pidfile should have been removed; stat err=%v", err)
+	}
+}
+
+// Regression (HIGH-1): Restart with a stale pidfile must proceed to
+// Start (stop is a no-op) instead of aborting on a failed pg_ctl stop.
+func TestRestartStalePidfileProceedsToStart(t *testing.T) {
+	dir := deployFixture(t)
+	cfg, err := config.LoadSandbox(dir)
+	if err != nil {
+		t.Fatalf("LoadSandbox: %v", err)
+	}
+	mustCreatePidContent(t, cfg.DataDir, strconv.Itoa(deadPid(t))+"\n")
+
+	f := &pgexec.Fake{}
+	if err := Restart(context.Background(), f, dir, io.Discard); err != nil {
+		t.Fatalf("Restart (stale pidfile): %v", err)
+	}
+	if callsContain(f, "pg_ctl", "stop") {
+		t.Errorf("Restart with stale pidfile should skip pg_ctl stop; calls=%v", f.Calls)
+	}
+	if !callsContain(f, "pg_ctl", "start") {
+		t.Errorf("Restart with stale pidfile must reach pg_ctl start; calls=%v", f.Calls)
+	}
+}
+
+// ---------------------------------------------------------------
 // Status tests
 // ---------------------------------------------------------------
 
@@ -663,16 +769,36 @@ func freeProbePort(t *testing.T) int {
 }
 
 // mustCreatePid drops a synthetic postmaster.pid file in dataDir so
-// isRunning returns true. Content is irrelevant — only presence
-// matters.
+// isRunning returns true. isRunning probes the recorded PID for
+// liveness, so the first line must name a live process — we use our
+// own PID.
 func mustCreatePid(t *testing.T, dataDir string) {
+	t.Helper()
+	mustCreatePidContent(t, dataDir, strconv.Itoa(os.Getpid())+"\n")
+}
+
+// mustCreatePidContent drops a postmaster.pid with explicit content;
+// stale-pid and garbage-pid tests need control over the first line.
+func mustCreatePidContent(t *testing.T, dataDir, content string) {
 	t.Helper()
 	if err := os.MkdirAll(dataDir, 0o755); err != nil {
 		t.Fatalf("mkdir data: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(dataDir, "postmaster.pid"), []byte("12345\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dataDir, "postmaster.pid"), []byte(content), 0o600); err != nil {
 		t.Fatalf("pidfile: %v", err)
 	}
+}
+
+// deadPid spawns a short-lived child, waits for it, and returns its
+// PID — guaranteed dead, and (PIDs being allocated sequentially) not
+// recycled within the lifetime of a test.
+func deadPid(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("spawn child for dead pid: %v", err)
+	}
+	return cmd.Process.Pid
 }
 
 // containsString reports whether ss contains target.

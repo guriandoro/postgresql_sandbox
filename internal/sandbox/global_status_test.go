@@ -150,10 +150,8 @@ func TestGlobalStatusRunningState(t *testing.T) {
 	root := t.TempDir()
 	port := freeProbePort(t)
 	dir := writeSandboxFixture(t, root, "running", port, "")
-	// Drop a pidfile so isRunning is true.
-	if err := os.WriteFile(filepath.Join(dir, "data", "postmaster.pid"), []byte("123\n"), 0o600); err != nil {
-		t.Fatalf("write pidfile: %v", err)
-	}
+	// Drop a pidfile (with a live PID) so isRunning is true.
+	mustCreatePid(t, filepath.Join(dir, "data"))
 	// Bind a listener so isPortListening is true.
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
 	if err != nil {
@@ -178,9 +176,7 @@ func TestGlobalStatusCrashedState(t *testing.T) {
 	root := t.TempDir()
 	port := freeProbePort(t)
 	dir := writeSandboxFixture(t, root, "crashed", port, "")
-	if err := os.WriteFile(filepath.Join(dir, "data", "postmaster.pid"), []byte("123\n"), 0o600); err != nil {
-		t.Fatalf("write pidfile: %v", err)
-	}
+	mustCreatePid(t, filepath.Join(dir, "data"))
 
 	gs, err := GlobalStatusWalk(context.Background(), GlobalStatusOptions{Root: root}, io.Discard)
 	if err != nil {
