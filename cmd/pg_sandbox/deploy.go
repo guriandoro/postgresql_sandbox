@@ -110,14 +110,21 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	// only — matching how the read commands resolve -s.
 	sandboxDir = resolveSandboxArg(sandboxDir, loadGlobalConfig())
 
-	// Detect whether --port was supplied explicitly. flag.FlagSet
-	// has no built-in "was this flag set" predicate, so we walk
-	// Visit, which only visits flags that appeared on the command
-	// line.
+	// Detect whether --port / --dbname were supplied explicitly.
+	// flag.FlagSet has no built-in "was this flag set" predicate, so
+	// we walk Visit, which only visits flags that appeared on the
+	// command line. dbnameExplicit gates the logical-subscriber path:
+	// a defaulted dbname must not silently override the publisher's
+	// database (SPEC §6.1 / MED-9), so only an explicit --dbname is
+	// forwarded to the subscription.
 	portExplicit := false
+	dbnameExplicit := false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "port" || f.Name == "p" {
+		switch f.Name {
+		case "port", "p":
 			portExplicit = true
+		case "dbname", "d":
+			dbnameExplicit = true
 		}
 	})
 
@@ -153,25 +160,26 @@ func runDeploy(args []string, stdout, stderr io.Writer) int {
 	selfPath, _ := os.Executable() // empty on rare failure → Deploy retries internally
 
 	opts := sandbox.DeployOptions{
-		SandboxDir:    sandboxDir,
-		BinDir:        resolvedBinDir,
-		Host:          firstNonEmpty(host, base.Host),
-		Port:          portOrEnv(port, portExplicit, base.Port),
-		PortExplicit:  portExplicit,
-		Superuser:     firstNonEmpty(user, base.Superuser),
-		Dbname:        firstNonEmpty(dbname, base.DefaultDatabase),
-		DataDirName:   firstNonEmpty(dataDirName, "data"),
-		LogName:       firstNonEmpty(logName, "server.log"),
-		PortBase:      portalloc.DefaultBasePort,
-		PortRange:     portalloc.DefaultRange,
-		SelfPath:      selfPath,
-		ReplicateFrom: replicateFrom,
-		SlotName:      slotName,
-		SubscribeTo:   subscribeTo,
-		PubName:       pubName,
-		SubName:       subName,
-		CopySchema:    copySchema,
-		NoCopyData:    noCopyData,
+		SandboxDir:     sandboxDir,
+		BinDir:         resolvedBinDir,
+		Host:           firstNonEmpty(host, base.Host),
+		Port:           portOrEnv(port, portExplicit, base.Port),
+		PortExplicit:   portExplicit,
+		Superuser:      firstNonEmpty(user, base.Superuser),
+		Dbname:         firstNonEmpty(dbname, base.DefaultDatabase),
+		DbnameExplicit: dbnameExplicit,
+		DataDirName:    firstNonEmpty(dataDirName, "data"),
+		LogName:        firstNonEmpty(logName, "server.log"),
+		PortBase:       portalloc.DefaultBasePort,
+		PortRange:      portalloc.DefaultRange,
+		SelfPath:       selfPath,
+		ReplicateFrom:  replicateFrom,
+		SlotName:       slotName,
+		SubscribeTo:    subscribeTo,
+		PubName:        pubName,
+		SubName:        subName,
+		CopySchema:     copySchema,
+		NoCopyData:     noCopyData,
 	}
 
 	// SPEC §4.1: Ctrl-C must propagate to child processes. Cancel

@@ -59,9 +59,20 @@ func deploySubscriber(ctx context.Context, runner pgexec.Runner, opts DeployOpti
 		PublisherRef: opts.SubscribeTo,
 		PubName:      opts.PubName,
 		SubName:      opts.SubName,
-		Dbname:       opts.Dbname,
 		CopySchema:   opts.CopySchema,
 		NoCopyData:   opts.NoCopyData,
+	}
+	// Only forward an explicitly-chosen --dbname. When the user didn't
+	// pass one, normalizeDeployOptions has force-filled opts.Dbname to
+	// "postgres" for the sandbox's OWN DefaultDatabase — but that
+	// default must NOT silently become the subscription's target
+	// database, or a `deploy --subscribe-to` against a publisher whose
+	// publication lives elsewhere would attach to the wrong DB and
+	// replication would silently never flow (MED-9). Leaving Dbname
+	// empty lets Subscribe fall back to each side's DefaultDatabase,
+	// matching what the standalone `subscribe` command does.
+	if opts.DbnameExplicit {
+		subOpts.Dbname = opts.Dbname
 	}
 	if err := Subscribe(ctx, runner, subOpts, stderrW); err != nil {
 		// SPEC §6.1 step 7 doesn't say to undeploy on subscribe

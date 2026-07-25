@@ -683,6 +683,120 @@ func TestDeploySubscriberRequiresPubName(t *testing.T) {
 	}
 }
 
+// TestDeploySubscriberUsesPublisherDefaultDatabase covers MED-9: a
+// `deploy --subscribe-to` with no explicit --dbname must NOT force the
+// subscription's CONNECTION onto "postgres". With Dbname left as a
+// defaulted value (DbnameExplicit false), the deploy path leaves
+// SubscribeOptions.Dbname empty so Subscribe's publisher-default
+// fallback engages — while the new sandbox's OWN DefaultDatabase still
+// defaults to "postgres".
+func TestDeploySubscriberUsesPublisherDefaultDatabase(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pubDir := filepath.Join(root, "pub")
+	makeRunningSourceFixture(t, pubDir, "pub", binDir, freeProbePort(t))
+	// Publisher's default database is deliberately NOT "postgres".
+	setSandboxDefaultDatabase(t, pubDir, "app")
+
+	subDir := filepath.Join(root, "sub1")
+	f := &pgexec.Fake{}
+	res, err := Deploy(context.Background(), f, DeployOptions{
+		SandboxDir:   subDir,
+		BinDir:       binDir,
+		Port:         freeProbePort(t),
+		PortExplicit: true,
+		SubscribeTo:  "pub",
+		PubName:      "my_pub",
+		// Dbname unset, DbnameExplicit false: this is the no---dbname case.
+	}, io.Discard)
+	if err != nil {
+		t.Fatalf("Deploy --subscribe-to: %v", err)
+	}
+	conn := findCreateSubscriptionSQL(t, f)
+	if !strings.Contains(conn, "dbname=app") {
+		t.Errorf("CONNECTION must use publisher default db; got %q", conn)
+	}
+	if strings.Contains(conn, "dbname=postgres") {
+		t.Errorf("CONNECTION must NOT force dbname=postgres; got %q", conn)
+	}
+	// The new sandbox's own default database still defaults to postgres.
+	if res.Sandbox.DefaultDatabase != "postgres" {
+		t.Errorf("subscriber DefaultDatabase: got %q, want postgres", res.Sandbox.DefaultDatabase)
+	}
+}
+
+// TestDeploySubscriberExplicitDbnameWins verifies that an explicit
+// --dbname still overrides both ends of the subscription — the MED-9
+// fallback only applies when the user gave no dbname at all.
+func TestDeploySubscriberExplicitDbnameWins(t *testing.T) {
+	root := t.TempDir()
+	binDir := filepath.Join(root, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	pubDir := filepath.Join(root, "pub")
+	makeRunningSourceFixture(t, pubDir, "pub", binDir, freeProbePort(t))
+	setSandboxDefaultDatabase(t, pubDir, "app")
+
+	subDir := filepath.Join(root, "sub1")
+	f := &pgexec.Fake{}
+	if _, err := Deploy(context.Background(), f, DeployOptions{
+		SandboxDir:     subDir,
+		BinDir:         binDir,
+		Port:           freeProbePort(t),
+		PortExplicit:   true,
+		SubscribeTo:    "pub",
+		PubName:        "my_pub",
+		Dbname:         "chosen",
+		DbnameExplicit: true,
+	}, io.Discard); err != nil {
+		t.Fatalf("Deploy --subscribe-to: %v", err)
+	}
+	conn := findCreateSubscriptionSQL(t, f)
+	if !strings.Contains(conn, "dbname=chosen") {
+		t.Errorf("explicit --dbname must win; got %q", conn)
+	}
+}
+
+// setSandboxDefaultDatabase rewrites a fixture sandbox's on-disk
+// config to use a non-default DefaultDatabase so subscribe tests can
+// assert the publisher-default fallback picks it up.
+func setSandboxDefaultDatabase(t *testing.T, dir, db string) {
+	t.Helper()
+	cfg, err := config.LoadSandbox(dir)
+	if err != nil {
+		t.Fatalf("load %s: %v", dir, err)
+	}
+	cfg.DefaultDatabase = db
+	if err := config.Validate(cfg); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if err := config.SaveSandbox(dir, cfg); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+}
+
+// findCreateSubscriptionSQL returns the CREATE SUBSCRIPTION SQL string
+// handed to psql, failing the test if none was issued.
+func findCreateSubscriptionSQL(t *testing.T, f *pgexec.Fake) string {
+	t.Helper()
+	for _, c := range f.Calls {
+		if c.Name != "psql" {
+			continue
+		}
+		for _, a := range c.Args {
+			if strings.Contains(a, "CREATE SUBSCRIPTION") {
+				return a
+			}
+		}
+	}
+	t.Fatalf("CREATE SUBSCRIPTION not issued; calls=%v", f.Calls)
+	return ""
+}
+
 func TestDeployRefusesReplicateAndSubscribe(t *testing.T) {
 	root := t.TempDir()
 	binDir := filepath.Join(root, "bin")

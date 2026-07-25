@@ -79,6 +79,15 @@ type DeployOptions struct {
 	// postgres.
 	Dbname string
 
+	// DbnameExplicit is true iff the caller specifically chose Dbname
+	// (the user passed --dbname) rather than it being a fall-through
+	// default. It gates the logical-subscriber path: an explicit
+	// Dbname is forwarded to Subscribe as the subscription's target
+	// database on BOTH ends, while a defaulted one is left empty so
+	// Subscribe's publisher-default fallback engages (SPEC §6.1). The
+	// sandbox's own DefaultDatabase always uses Dbname regardless.
+	DbnameExplicit bool
+
 	// DataDirName is the basename of the data directory under
 	// SandboxDir. Default "data". Always interpreted as a child of
 	// SandboxDir; an absolute path here would be a misuse and is
