@@ -18,9 +18,9 @@ The flag always wins. Setting an env var lets you avoid repeating the same flag 
 | `PGS_PORT` | Default port for new sandboxes | `65432` |
 | `PGS_USER` | Default PG superuser | `postgres` |
 | `PGS_DBNAME` | Default database name | `postgres` |
-| `PGS_PG_GATHER_DIR` | `pg_gather` scripts location (used by `report`) | (none; falls back to discovering the scripts in the current dir or on `$PATH`) |
-| `PGS_BUILD_DIR` | Build scratch directory (used by `build`) | `$TMPDIR/pg_sandbox-build/` |
-| `PGS_BUILD_DEBUG` | Set to `1` to retain the build scratch tree and surface raw `./configure` / `make` output. Narrow scope — only `build` reads it. | unset |
+| `PGS_PG_GATHER_DIR` | `pg_gather` scripts location (used by `report`) | (none; falls back to discovering the scripts on `$PATH` — the current dir is deliberately never searched) |
+| `PGS_BUILD_DIR` | Build scratch directory (used by `build`) | `<user-cache-dir>/pg_sandbox/build/` (macOS: `~/Library/Caches/pg_sandbox/build/`, Linux: `~/.cache/pg_sandbox/build/`) |
+| `PGS_BUILD_DEBUG` | Set to `1` to produce a debuggable build: appends `--enable-cassert --enable-debug` to `./configure` and sets `CFLAGS=-O0 -g3`. Narrow scope — only `build` reads it. | unset |
 | `PGS_DEBUG` | Set non-empty to behave as if `--debug` was passed (debug-level logging plus `# exec:` traces for every external command). The flag wins when both are present; `--quiet` always wins over both. | unset |
 | `XDG_CONFIG_HOME` | Standard XDG var — controls where the global config file is read from (`$XDG_CONFIG_HOME/pg_sandbox/config.json`) | `$HOME/.config` |
 
