@@ -47,6 +47,9 @@ re-verified — re-confirm the failure mode before fixing.
 | MED-10 | medium | `promote` leaks the replication slot on the old source         | fixed     |
 | MED-11 | medium | Unescaped SQL interpolation (publish/subscribe/destroy/status) | fixed     |
 | MED-12 | medium | global_status attaches members to the wrong cluster after sort | fixed |
+| MED-13 | medium | Failed physical standby setup can leak an upstream replication slot | not-fixed |
+| MED-14 | medium | Subscribe can leave an untracked live subscription after metadata persistence fails | not-fixed |
+| MED-15 | medium | Metadata-save failure after PostgreSQL starts leaves an unmanaged server | not-fixed |
 | LOW-1  | low    | Standby application_name never actually configured             | not-fixed |
 | LOW-2  | low    | Destroying a stopped subscriber silently leaks publisher slot  | not-fixed |
 | LOW-3  | low    | Subscribing a sandbox to itself hangs forever                  | not-fixed |
@@ -67,6 +70,7 @@ re-verified — re-confirm the failure mode before fixing.
 | LOW-18 | low    | `report --debug` discards the logger (no `# exec:` lines)      | not-fixed |
 | LOW-19 | low    | Failed report deploys accumulate unnamed `_report_*` dirs      | not-fixed |
 | LOW-20 | low    | cleanup sandbox walk depth-bounded at 4, silently excluding    | not-fixed |
+| LOW-21 | low    | Logical replication names beginning with a digit produce invalid SQL | not-fixed |
 | MED-1b | medium | `%w` wraps nil error → `%!w(<nil>)` in user-facing message     | fixed |
 
 ---
@@ -887,7 +891,165 @@ cluster.
 
 ---
 
+### MED-13: Failed physical standby setup can leak an upstream replication slot
+
+```yaml
+id: MED-13
+status: not-fixed
+severity: medium
+type: bug (resource leak / WAL retention)
+files:
+  - internal/sandbox/deploy_standby.go:143-215
+  - internal/cluster/deploy.go:374-398
+  - internal/cluster/destroy.go:94-115
+verification: confirmed-in-source
+related: [MED-8, MED-10]
+fixed-commit: null
+```
+
+`deployStandby` asks `pg_basebackup` to create the source-side slot with
+`-C --slot=...`, then starts the new standby and only afterward writes its
+config. If `pg_basebackup` succeeds but `pg_ctl start` or `SaveSandbox`
+fails, the source slot already exists while the destination has no usable
+metadata that identifies it. The failure is especially troublesome for a
+partial physical cluster: its manifest marks the member as `failed`, but
+`destroyFailedMemberStub` only stops and removes the member directory. It
+does not derive and drop that member's slot from the surviving primary.
+
+**Failure scenario.** A physical cluster's second member completes
+`pg_basebackup -C`, then its start fails (for example, a port race). `cluster
+destroy` removes the failed member stub and subsequently removes the
+manifest, but the primary retains an inactive slot. That slot prevents WAL
+recycling and can eventually fill the primary's disk.
+
+**Suggested fix.** Once `pg_basebackup` has succeeded, make every later
+failure path attempt a best-effort `pg_drop_replication_slot` on the source
+before returning. Retain enough pending metadata for crash recovery, or have
+cluster destroy derive `physicalSlotName(manifest.Replication.SlotPrefix,
+member.Name)` for failed physical members and clean it before removing the
+manifest. Do not blindly drop a slot when `pg_basebackup` itself failed: the
+slot may have pre-existed and caused that failure.
+
+**Tests.** Fake a successful `pg_basebackup` followed by failed `pg_ctl
+start`; assert a source-side slot-drop query is issued. Repeat through
+`cluster.Destroy` with a `MemberStateFailed` physical member and assert it
+does not leave the derived slot behind.
+
+### MED-14: Subscribe can leave an untracked live subscription after metadata persistence fails
+
+```yaml
+id: MED-14
+status: not-fixed
+severity: medium
+type: bug (remote state / metadata divergence)
+files:
+  - internal/sandbox/subscribe.go:184-228
+  - internal/config/load_save.go:155-168
+verification: confirmed-in-source
+related: [LOW-2, MED-11]
+fixed-commit: null
+```
+
+`Subscribe` successfully runs `CREATE SUBSCRIPTION` before it validates and
+saves the subscriber's updated config. A validation failure caused by an
+already-corrupt config, a failed atomic save, or a process crash in that
+window leaves PostgreSQL with a live subscription (and normally a publisher
+slot), but `pg_sandbox.json` still describes the sandbox as a primary with no
+`logical` block.
+
+**Failure scenario.** `CREATE SUBSCRIPTION` returns 0, then the config save
+fails because the filesystem is full. Retrying returns "subscription already
+exists". `destroy` cannot find `Logical.SubscriptionName`, so it removes the
+subscriber directory without dropping the remote slot; the publisher retains
+WAL indefinitely.
+
+**Suggested fix.** Validate the staged subscriber config before issuing
+`CREATE SUBSCRIPTION`, then compensate on every post-create persistence
+failure with `DROP SUBSCRIPTION` while the subscriber is still reachable. If
+compensation fails, persist explicit pending/recovery metadata or return an
+error that names the subscription, publisher, and required manual cleanup.
+
+**Tests.** Inject a `SaveSandbox` failure after a successful fake CREATE and
+assert a compensating DROP is attempted. Also start with an invalid loaded
+config and assert validation fails before the CREATE call.
+
+### MED-15: Metadata-save failure after PostgreSQL starts leaves an unmanaged server
+
+```yaml
+id: MED-15
+status: not-fixed
+severity: medium
+type: bug (orphaned process / retry wedge)
+files:
+  - internal/sandbox/deploy.go:273-331
+  - internal/sandbox/deploy_standby.go:143-229
+  - internal/config/load_save.go:155-168
+  - internal/report/report.go:250-257
+verification: confirmed-in-source
+related: [LOW-19, MED-13]
+fixed-commit: null
+```
+
+Both deploy paths start PostgreSQL before `SaveSandbox` writes the marker
+file. If that write fails, deploy returns an error but leaves a live
+postmaster in a directory that `IsSandboxDir` deliberately does not
+recognize. The normal lifecycle and destroy commands then refuse to manage
+it, while a retry refuses the non-empty directory. `report.Generate` also
+assumes every deploy error occurred before the throwaway directory became
+meaningful, so it neither cleans up nor reports this leaked running sandbox.
+
+**Failure scenario.** Disk-full or an I/O error during the atomic config
+write occurs after `pg_ctl start -w` succeeds. The command reports failure,
+yet its port remains occupied by an untracked server. The user must discover
+the data directory from logs and manually run `pg_ctl stop -D ...` before
+they can recover.
+
+**Suggested fix.** Treat the config save as a deployment commit point: on
+failure after a successful start, immediately stop the instance and remove
+only the known newly-created directory, or return a structured leftover error
+that includes the exact data directory and recovery command. The report
+pipeline should use the same leftover handling for all post-start deploy
+failures.
+
+**Tests.** Inject a config-save failure after a fake successful `pg_ctl
+start`; assert `pg_ctl stop` is attempted and the target can be deployed
+again. For `report`, assert the returned error names the leftover directory
+when cleanup is not possible.
+
 ## Low severity
+
+### LOW-21: Logical replication names beginning with a digit produce invalid SQL
+
+```yaml
+id: LOW-21
+status: not-fixed
+severity: low
+type: bug (input validation)
+files:
+  - internal/sandbox/publish.go:148-169
+  - internal/sandbox/subscribe.go:143-147
+  - internal/sandbox/subscribe.go:184-186
+  - internal/sandbox/subscribe.go:298-315
+verification: confirmed-in-source
+related: [MED-11]
+fixed-commit: null
+```
+
+`sanitizeSQLIdentifier` allows digits in the first position, but its callers
+splice the result into SQL as an unquoted identifier. PostgreSQL identifiers
+cannot begin with a digit, so `--pub-name 2026` creates `CREATE PUBLICATION
+2026 ...` and fails. The same affects an explicit `--sub-name 2026` and the
+default subscription name for a sandbox directory whose basename begins with
+a digit (for example `17_s1`).
+
+**Suggested fix.** Either quote the sanitized name with `quoteIdent` at every
+SQL use, or make the sanitizer prefix names whose first byte is not `[a-z_]`.
+Use the same canonicalized value in the persisted logical config and add a
+first-character check to the unit tests.
+
+**Tests.** Assert that publish with `PubName: "2026"` sends syntactically
+valid SQL, and that a subscriber deployed in a `17_s1` directory gets a
+valid default subscription name.
 
 ### LOW-1: Standby application_name never actually configured
 
