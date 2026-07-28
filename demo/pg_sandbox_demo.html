@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pg_sandbox — live demo</title>
+
+  <!-- reveal.js from CDN. For an offline venue, vendor these three files into
+       demo/ and switch the URLs to relative paths (see demo notes). -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.css">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/theme/black.css" id="theme">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/monokai.css">
+
+  <style>
+    :root { --pg-accent: #38bdf8; }
+    .reveal h1, .reveal h2, .reveal h3 { color: var(--pg-accent); text-transform: none; }
+    .reveal section { text-align: left; }
+    .reveal section.center { text-align: center; }
+    .reveal pre { width: 100%; box-shadow: none; font-size: 0.52em; }
+    .reveal pre code { padding: 18px; border-radius: 8px; max-height: none; line-height: 1.35; }
+    .reveal .muted { color: #9aa6b2; font-size: 0.7em; }
+    .reveal .step { color: var(--pg-accent); font-weight: bold; }
+    .reveal ul { display: block; }
+    .reveal code.inline { color: var(--pg-accent); background: #1e293b; padding: 1px 6px; border-radius: 4px; }
+    .reveal .tag {
+      display: inline-block; font-size: 0.45em; color: #0b1220; background: var(--pg-accent);
+      padding: 2px 10px; border-radius: 999px; vertical-align: middle; margin-left: 10px;
+    }
+    .reveal .lead { font-size: 0.8em; color: #cbd5e1; margin-bottom: 0.4em; }
+  </style>
+</head>
+<body>
+<div class="reveal"><div class="slides">
+
+  <!-- ───────────────────────── SLIDE 1 ───────────────────────── -->
+  <section class="center" data-auto-animate>
+    <h1 data-id="title">pg_sandbox</h1>
+    <h3 style="color:#cbd5e1;margin-top:-10px">disposable PostgreSQL, on demand</h3>
+    <ul style="display:inline-block;margin-top:30px">
+      <li>Spin up <strong>any installed PG version</strong> in seconds</li>
+      <li>Full topologies — <strong>replication &amp; clusters</strong> — with one command</li>
+      <li>Every sandbox is a <strong>throwaway directory</strong> under <code class="inline">~/postgresql-sandboxes/</code></li>
+    </ul>
+    <p class="muted" style="margin-top:36px">
+      On this box: PG 16.5 · 17.1 · 17.2 · 17.4 · 18.3 &nbsp;—&nbsp;
+      <code class="inline">pg_sandbox --version</code> → v1.0.1
+    </p>
+  </section>
+
+  <!-- ───────────────────────── SLIDE 2 ───────────────────────── -->
+  <section>
+    <h2>Single instance lifecycle <span class="tag">core flow</span></h2>
+    <p class="lead"><span class="step">deploy</span> → connect → load data → inspect → <span class="step">destroy</span></p>
+    <pre data-id="code"><code data-trim data-line-numbers class="language-bash">
+export PGS_BIN_DIR=/opt/postgresql/18.3
+cd ~/postgresql-sandboxes
+
+pg_sandbox deploy  -s pg18
+pg_sandbox status  -s pg18
+pg_sandbox use     -s pg18 -- -c "SELECT version();"
+pg_sandbox run     -s pg18 -- pgbench -i      # -d auto-injected
+pg_sandbox run     -s pg18 -- pgbench -T 3    # ~6k tps locally
+pg_sandbox config  show -s pg18               # KEY / VALUE / SOURCE
+pg_sandbox destroy -s pg18 --force
+    </code></pre>
+    <p class="muted">One binary wraps initdb, pg_ctl, psql and every client — connection params injected for you.</p>
+  </section>
+
+  <!-- ───────────────────────── SLIDE 3 ───────────────────────── -->
+  <section>
+    <h2>Streaming replication <span class="tag">primary + standby</span></h2>
+    <p class="lead">A primary and an async standby on its own port — then promote.</p>
+    <pre data-id="code"><code data-trim data-line-numbers class="language-bash">
+pg_sandbox deploy -s primary
+pg_sandbox deploy -s standby1 \
+    --replicate-from primary --slot primary_standby1_slot
+
+sleep 2
+pg_sandbox status -s primary    # replicas[0]=walreceiver state=streaming
+
+pg_sandbox use -s primary  -- -c "CREATE TABLE t(id int); INSERT INTO t VALUES (1);"
+pg_sandbox use -s standby1 -- -c "SELECT * FROM t;"   # → the row, replicated
+
+pg_sandbox promote -s standby1  # standby1 role → primary
+
+pg_sandbox destroy -s standby1 --force
+pg_sandbox destroy -s primary  --force
+    </code></pre>
+    <p class="muted">Replica gets its own port automatically. <code class="inline">status</code> reports live write/flush/replay lag.</p>
+  </section>
+
+  <!-- ───────────────────────── SLIDE 4 ───────────────────────── -->
+  <section>
+    <h2>One-shot cluster <span class="tag">1 command</span></h2>
+    <p class="lead">A whole primary + N-standby topology, managed as a unit.</p>
+    <pre data-id="code"><code data-trim data-line-numbers class="language-bash">
+pg_sandbox cluster deploy -s rep -N 2   # rep_p + rep_s1 + rep_s2
+
+sleep 2
+pg_sandbox cluster status -s rep        # primary shows BOTH replicas streaming
+pg_sandbox global_status                # grouped fleet view
+
+pg_sandbox cluster destroy -s rep --force   # tears down all 3 members
+    </code></pre>
+    <p class="muted">
+      Members auto-named <code class="inline">rep_p</code> / <code class="inline">rep_s1</code> / <code class="inline">rep_s2</code>, ports 65432–65434.
+      <code class="inline">--sync-count</code> is accepted but currently deferred (still async today).
+    </p>
+  </section>
+
+  <!-- ───────────────────────── SLIDE 5 ───────────────────────── -->
+  <section>
+    <h2>Logical replication <span class="tag">PG 17 → 18</span></h2>
+    <p class="lead">Table-level pub/sub <strong>across major versions</strong> — the classic upgrade path.</p>
+    <pre data-id="code"><code data-trim data-line-numbers class="language-bash">
+pg_sandbox deploy  -s pub -b /opt/postgresql/17.4         # publisher on PG 17
+pg_sandbox use     -s pub -- -c "CREATE TABLE t(id int primary key); INSERT INTO t VALUES (1);"
+pg_sandbox publish -s pub --pub-name my_pub --all-tables   # auto wal_level=logical + restart
+
+pg_sandbox deploy    -s sub -b /opt/postgresql/18.3        # subscriber on PG 18
+pg_sandbox subscribe -s sub --from pub --pub-name my_pub --copy-schema
+
+sleep 2
+pg_sandbox use -s sub -- -c "SELECT * FROM t;"   # → the row, replicated
+
+pg_sandbox destroy -s sub --force
+pg_sandbox destroy -s pub --force
+    </code></pre>
+    <p class="muted">Per-sandbox <code class="inline">-b</code> picks the major. <code class="inline">publish</code> raises <code class="inline">wal_level=logical</code> &amp; restarts for you; <code class="inline">--copy-schema</code> dumps the schema from 17 into 18 first.</p>
+  </section>
+
+  <!-- ───────────────────────── SLIDE 6 ───────────────────────── -->
+  <section>
+    <h2>pg_gather report <span class="tag">diagnostics</span></h2>
+    <p class="lead">Turn a captured <code class="inline">out.txt</code> into an HTML diagnostics report.</p>
+    <pre data-id="code"><code data-trim data-line-numbers class="language-bash">
+# capture from any sandbox, then render
+pg_sandbox use -s pg18 -- -X -f "$GATHER/gather.sql" > out.txt
+pg_sandbox report --pg-gather-dir "$GATHER" \
+                  --input ~/postgresql-sandboxes/out.txt \
+                  --output ~/postgresql-sandboxes/gather.html
+open ~/postgresql-sandboxes/gather.html
+    </code></pre>
+    <p class="muted" style="margin-top:10px">
+      Auto-resolves bin-dir; ingests the dump in a throwaway sandbox that then self-destructs. Input is pre-scanned — psql meta-commands in a hostile out.txt are rejected.
+    </p>
+    <p class="muted" style="margin-top:6px">
+      Also: <code class="inline">global_status</code> (fleet view) ·
+      <code class="inline">build &lt;ver&gt;</code> (compile from source) — everything reproducible &amp; disposable.
+    </p>
+  </section>
+
+</div></div>
+
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/dist/reveal.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/highlight/highlight.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/reveal.js@5.1.0/plugin/notes/notes.js"></script>
+<script>
+  Reveal.initialize({
+    hash: true,
+    slideNumber: 'c/t',
+    transition: 'slide',
+    plugins: [ RevealHighlight, RevealNotes ],
+  });
+</script>
+</body>
+</html>
