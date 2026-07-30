@@ -19,7 +19,11 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # 'stable' tracks the latest supported Go; 1.22 is EOL. This job
+          # cross-compiles from Linux with CGO disabled, so it is not hit by
+          # the macOS LC_UUID launch bug that breaks ci.yml's macOS test job,
+          # but we keep both workflows on a supported toolchain.
+          go-version: 'stable'
           check-latest: true
           cache: true
 
