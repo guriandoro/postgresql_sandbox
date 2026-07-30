@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>pg_sandbox — disposable PostgreSQL, on demand</title>
+  <meta name="description" content="pg_sandbox provisions, manages, and tears down local PostgreSQL sandbox instances for development, testing, and bug reproduction. Single static binary for macOS and Linux.">
+  <link rel="canonical" href="https://guriandoro.github.io/postgresql_sandbox/">
+  <meta name="theme-color" content="#0b1220">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="pg_sandbox">
+  <meta property="og:title" content="pg_sandbox — disposable PostgreSQL, on demand">
+  <meta property="og:description" content="Provision, manage, and tear down local PostgreSQL sandbox instances for development, testing, and bug reproduction. Single static binary for macOS and Linux.">
+  <meta property="og:url" content="https://guriandoro.github.io/postgresql_sandbox/">
+  <!-- og:image intentionally omitted: scrapers need a raster URL. Add site/og.png (1200x630) and reference it here if link previews should carry an image. -->
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="pg_sandbox — disposable PostgreSQL, on demand">
+  <meta name="twitter:description" content="Provision, manage, and tear down local PostgreSQL sandbox instances for development, testing, and bug reproduction. Single static binary for macOS and Linux.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect x='2' y='2' width='60' height='60' rx='14' fill='%230b1220' stroke='%2338bdf8' stroke-width='2.5'/%3E%3Cg stroke='%2338bdf8' stroke-width='4' fill='none' stroke-linecap='round'%3E%3Cellipse cx='32' cy='19' rx='14' ry='6'/%3E%3Cpath d='M18 19v14c0 3.3 6.3 6 14 6s14-2.7 14-6V19'/%3E%3C/g%3E%3Cpath d='M20 45l6 5-6 5' stroke='%23e2e8f0' stroke-width='4' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3Crect x='31' y='52' width='13' height='4' rx='1' fill='%23e2e8f0'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+  <script>document.documentElement.className += ' js';</script>
+  <style>
+    :root {
+      --accent: #38bdf8;
+      --accent-2: #818cf8;
+      --accent-3: #22d3ee;
+      --accent-soft: rgba(56, 189, 248, 0.12);
+      --accent-border: rgba(56, 189, 248, 0.28);
+      --grad: linear-gradient(120deg, var(--accent), var(--accent-2));
+      --bg: #0b1220;
+      --bg-2: #0f172a;
+      --panel: #111c30;
+      --panel-2: #16233b;
+      --border: #1e2d47;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --dim: #64748b;
+      --code-bg: #0a1424;
+      --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      --display: "Space Grotesk", var(--sans);
+    }
+
+    * { box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      margin: 0;
+      font-family: var(--sans);
+      background:
+        radial-gradient(1100px 600px at 78% -8%, rgba(56, 189, 248, 0.10), transparent 60%),
+        radial-gradient(900px 500px at 8% 4%, rgba(129, 140, 248, 0.06), transparent 55%),
+        var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    ::selection { background: rgba(56, 189, 248, 0.30); color: #f8fafc; }
+
+    a { color: var(--accent); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+
+    :where(a, button):focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 0 24px; }
+
+    code, pre { font-family: var(--mono); }
+
+    pre { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+    pre::-webkit-scrollbar { height: 8px; }
+    pre::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+    pre::-webkit-scrollbar-track { background: transparent; }
+
+    /* Anchored sections must clear the sticky nav when jumped to. */
+    section[id] { scroll-margin-top: 76px; }
+
+    /* ── Nav ───────────────────────────── */
+    header.nav {
+      position: sticky; top: 0; z-index: 50;
+      -webkit-backdrop-filter: blur(10px);
+      backdrop-filter: blur(10px);
+      background: rgba(11, 18, 32, 0.78);
+      border-bottom: 1px solid var(--border);
+    }
+    .nav .progress {
+      position: absolute; left: 0; bottom: -1px; width: 100%; height: 2px;
+      background: var(--grad); transform-origin: 0 50%; transform: scaleX(0);
+    }
+    .nav-inner {
+      display: flex; align-items: center; justify-content: space-between;
+      height: 60px; max-width: 1080px; margin: 0 auto; padding: 0 24px;
+    }
+    .brand { display: flex; align-items: center; gap: 10px; font-family: var(--display); font-weight: 700; font-size: 1.05rem; letter-spacing: -0.02em; }
+    .brand .mark { width: 22px; height: 22px; flex: none; }
+    .brand code { color: var(--text); font-size: 1rem; }
+    .nav-links { display: flex; align-items: center; gap: 24px; font-size: 0.92rem; font-family: var(--display); font-weight: 500; }
+    .nav-links a { color: var(--muted); position: relative; padding: 3px 0; }
+    .nav-links a:hover { color: var(--text); text-decoration: none; }
+    .nav-links a.active { color: var(--text); }
+    .nav-links a.active::after {
+      content: ""; position: absolute; left: 0; right: 0; bottom: -3px; height: 2px;
+      border-radius: 2px; background: var(--grad);
+    }
+    .nav-links a.gh {
+      display: inline-flex; align-items: center; gap: 7px; padding: 7px 13px;
+      border: 1px solid var(--border); border-radius: 9px; color: var(--text);
+      transition: border-color .15s ease, background .15s ease;
+    }
+    .nav-links a.gh:hover { border-color: var(--accent-border); background: var(--accent-soft); }
+    .nav-links a.gh svg { width: 16px; height: 16px; fill: currentColor; }
+    @media (max-width: 720px) { .nav-links a.hide-sm { display: none; } }
+    @media (max-width: 640px) { .nav-links a.gh span { display: none; } }
+
+    /* ── Buttons ───────────────────────── */
+    .btn {
+      display: inline-flex; align-items: center; gap: 8px;
+      padding: 11px 20px; border-radius: 9px; font-family: var(--display); font-weight: 600; font-size: 0.95rem;
+      border: 1px solid transparent; cursor: pointer; transition: transform .08s ease, background .15s ease, border-color .15s ease, filter .15s ease;
+    }
+    .btn:hover { text-decoration: none; transform: translateY(-1px); }
+    .btn-primary {
+      background: linear-gradient(120deg, var(--accent), var(--accent-3), var(--accent-2));
+      background-size: 220% 100%; color: #06121f;
+      box-shadow: 0 8px 28px -10px rgba(56, 189, 248, 0.55);
+      animation: sheen 6s ease infinite;
+    }
+    .btn-primary:hover { filter: brightness(1.08); }
+    .btn-ghost { background: transparent; color: var(--text); border-color: var(--border); }
+    .btn-ghost:hover { border-color: var(--accent-border); background: var(--accent-soft); }
+    @keyframes sheen { 0%, 100% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } }
+
+    /* ── Hero ──────────────────────────── */
+    .hero { position: relative; padding: 88px 0 72px; overflow: hidden; }
+    .hero::before {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background-image: radial-gradient(rgba(148, 163, 184, 0.15) 1px, transparent 1px);
+      background-size: 26px 26px;
+      -webkit-mask-image: radial-gradient(ellipse 85% 75% at 55% 0%, black 25%, transparent 74%);
+      mask-image: radial-gradient(ellipse 85% 75% at 55% 0%, black 25%, transparent 74%);
+    }
+    .hero::after {
+      content: ""; position: absolute; top: -240px; left: 50%; width: 920px; height: 540px;
+      pointer-events: none; transform: translateX(-50%);
+      background:
+        radial-gradient(closest-side at 30% 55%, rgba(56, 189, 248, 0.26), transparent),
+        radial-gradient(closest-side at 72% 40%, rgba(129, 140, 248, 0.22), transparent);
+      filter: blur(70px); opacity: 0.55;
+      animation: aurora 18s ease-in-out infinite alternate;
+    }
+    @keyframes aurora {
+      from { transform: translateX(-56%) translateY(0) scale(1); }
+      to   { transform: translateX(-44%) translateY(30px) scale(1.08); }
+    }
+    .hero .wrap { position: relative; z-index: 1; max-width: 1160px; }
+    /* minmax(0, …) tracks: without it, auto/fr tracks size to the terminal's
+       max-content width and overflow small viewports. */
+    .hero-grid { display: grid; gap: 48px; align-items: center; grid-template-columns: minmax(0, 1fr); }
+    @media (min-width: 981px) { .hero-grid { grid-template-columns: minmax(0, 1.05fr) minmax(0, 0.95fr); gap: 56px; } }
+    .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
+    .chip {
+      display: inline-flex; align-items: center; gap: 7px;
+      font-family: var(--display); font-size: 0.74rem; font-weight: 600; letter-spacing: 0.05em; text-transform: uppercase;
+      color: #7dd3fc; background: var(--accent-soft); border: 1px solid var(--accent-border);
+      padding: 6px 12px; border-radius: 999px;
+    }
+    .chip svg { width: 13px; height: 13px; }
+    .hero h1 {
+      font-size: clamp(2.4rem, 6vw, 3.9rem); line-height: 1.04; margin: 0 0 14px;
+      letter-spacing: -0.03em; font-weight: 800; color: #f8fafc;
+    }
+    .hero h1 .mono { font-family: var(--mono); font-weight: 800; }
+    .tagline {
+      font-family: var(--display); font-size: clamp(1.15rem, 2.6vw, 1.5rem);
+      color: #7dd3fc; font-weight: 700; margin: 0 0 20px; letter-spacing: -0.01em;
+    }
+    @supports (-webkit-background-clip: text) {
+      .hero h1 {
+        background: linear-gradient(180deg, #f8fafc 35%, #94a3b8);
+        -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+      }
+      .tagline {
+        background: linear-gradient(120deg, #7dd3fc, #a5b4fc);
+        -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+      }
+    }
+    .hero p.lead { font-size: 1.12rem; color: var(--muted); max-width: 640px; margin: 0 0 32px; }
+    .hero-cta { display: flex; flex-wrap: wrap; gap: 14px; }
+
+    .terminal {
+      background: var(--code-bg); border: 1px solid var(--border); border-radius: 12px;
+      overflow: hidden; box-shadow: 0 24px 60px -30px rgba(0, 0, 0, 0.8), 0 0 80px -40px rgba(56, 189, 248, 0.35);
+      max-width: 720px;
+    }
+    .terminal .bar { display: flex; align-items: center; gap: 7px; padding: 11px 15px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+    .terminal .bar span:not(.label) { width: 11px; height: 11px; border-radius: 50%; background: #35415a; }
+    .terminal .bar span:nth-child(1) { background: #ef6a5f; }
+    .terminal .bar span:nth-child(2) { background: #f5bd4f; }
+    .terminal .bar span:nth-child(3) { background: #61c554; }
+    .terminal .bar .label { margin-left: 8px; font-family: var(--mono); font-size: 0.75rem; color: var(--dim); }
+    .terminal pre { margin: 0; padding: 18px 20px; overflow-x: auto; font-size: 0.86rem; line-height: 1.7; }
+    #hero-term { white-space: pre-wrap; overflow-wrap: anywhere; }
+    .terminal .c { color: var(--dim); }
+    .terminal .p { color: var(--accent); }
+    .terminal .o { color: var(--muted); }
+    .cursor {
+      display: inline-block; width: 0.55em; height: 1.05em; margin-left: 2px;
+      vertical-align: text-bottom; background: var(--accent); border-radius: 1px;
+      animation: blink 1s step-end infinite;
+    }
+    @keyframes blink { 50% { opacity: 0; } }
+
+    /* ── Sections ──────────────────────── */
+    section.block { padding: 64px 0; border-top: 1px solid var(--border); }
+    .sec-head { margin-bottom: 40px; }
+    .sec-head h2 { font-family: var(--display); font-size: clamp(1.6rem, 3.4vw, 2.1rem); margin: 0 0 10px; letter-spacing: -0.02em; font-weight: 700; }
+    .sec-head p { color: var(--muted); margin: 0; max-width: 640px; font-size: 1.03rem; }
+    .kicker {
+      display: flex; align-items: center; gap: 10px;
+      color: var(--accent); font-family: var(--display); font-size: 0.82rem; font-weight: 700;
+      letter-spacing: 0.08em; text-transform: uppercase; margin-bottom: 10px;
+    }
+    .kicker::before { content: ""; width: 22px; height: 2px; border-radius: 2px; background: var(--grad); }
+
+    /* ── Cards (shared gradient-border treatment) ── */
+    .feat, .plat, .recipe, .cmd-group, .req {
+      border: 1px solid transparent; border-radius: 13px;
+      background:
+        linear-gradient(180deg, var(--panel), var(--bg-2)) padding-box,
+        linear-gradient(160deg, var(--border), var(--border)) border-box;
+      transition: transform .18s ease, box-shadow .18s ease;
+    }
+    .feat:hover, .plat:hover, .recipe:hover, .cmd-group:hover, .req:hover {
+      background:
+        linear-gradient(180deg, var(--panel), var(--bg-2)) padding-box,
+        linear-gradient(160deg, rgba(56, 189, 248, 0.75), rgba(129, 140, 248, 0.75)) border-box;
+      transform: translateY(-3px);
+      box-shadow: 0 16px 40px -16px rgba(56, 189, 248, 0.25);
+    }
+
+    /* ── Features ──────────────────────── */
+    .feat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+    .feat { padding: 22px; }
+    .feat .ico {
+      width: 38px; height: 38px; border-radius: 9px; display: grid; place-items: center;
+      background: var(--accent-soft); border: 1px solid var(--accent-border); color: var(--accent);
+      margin-bottom: 14px; transition: color .18s ease, border-color .18s ease;
+    }
+    .feat:hover .ico { color: #7dd3fc; border-color: rgba(56, 189, 248, 0.55); }
+    .feat .ico svg { width: 20px; height: 20px; }
+    .feat h3 { font-family: var(--display); margin: 0 0 7px; font-size: 1.06rem; letter-spacing: -0.01em; }
+    .feat p { margin: 0; color: var(--muted); font-size: 0.94rem; }
+    .feat p code { color: var(--text); background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.86em; }
+    /* Mild bento: first two flagship cards span wide on large screens. */
+    @media (min-width: 1000px) {
+      .feat-grid { grid-template-columns: repeat(6, 1fr); }
+      .feat { grid-column: span 2; }
+      .feat:nth-child(-n+2) { grid-column: span 3; padding: 26px 28px; }
+      .feat:nth-child(-n+2) .ico { width: 44px; height: 44px; border-radius: 11px; }
+      .feat:nth-child(-n+2) .ico svg { width: 23px; height: 23px; }
+      .feat:nth-child(-n+2) h3 { font-size: 1.18rem; }
+    }
+
+    /* ── Install ───────────────────────── */
+    .platforms { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; margin-bottom: 30px; }
+    .plat { padding: 18px 18px 16px; }
+    .plat .os { display: flex; align-items: center; gap: 9px; font-family: var(--display); font-weight: 600; margin-bottom: 4px; }
+    .plat .os svg { width: 20px; height: 20px; color: var(--accent); }
+    .plat .arch { color: var(--dim); font-size: 0.85rem; margin-bottom: 12px; }
+    .plat .artifact { font-family: var(--mono); font-size: 0.82rem; color: var(--accent); background: var(--code-bg); border: 1px solid var(--border); border-radius: 7px; padding: 8px 10px; display: block; word-break: break-all; }
+
+    .codeblock {
+      background: var(--code-bg); border: 1px solid var(--border); border-radius: 12px;
+      overflow: hidden; margin: 0 0 18px;
+    }
+    .codeblock .head { display: flex; align-items: center; justify-content: space-between; padding: 10px 15px; border-bottom: 1px solid var(--border); background: rgba(255,255,255,0.02); }
+    .codeblock .head .t { font-family: var(--mono); font-size: 0.78rem; color: var(--dim); }
+    .codeblock .head .tag { font-size: 0.7rem; color: var(--accent); border: 1px solid var(--accent-border); background: var(--accent-soft); padding: 2px 9px; border-radius: 999px; letter-spacing: 0.03em; }
+    .codeblock pre { margin: 0; padding: 16px 18px; overflow-x: auto; font-size: 0.85rem; line-height: 1.65; }
+    .codeblock pre .c { color: var(--dim); }
+    .codeblock pre .p { color: var(--accent); }
+    .note { color: var(--dim); font-size: 0.9rem; }
+    .note code { color: var(--muted); background: var(--code-bg); padding: 1px 5px; border-radius: 4px; }
+
+    /* ── Copy button ───────────────────── */
+    .code-wrap { position: relative; }
+    .copy {
+      position: absolute; top: 8px; right: 8px;
+      display: inline-flex; align-items: center; justify-content: center;
+      width: 32px; height: 32px; padding: 0;
+      background: rgba(15, 23, 42, 0.72); border: 1px solid var(--border); border-radius: 8px;
+      color: var(--muted); cursor: pointer; opacity: 0.45;
+      transition: opacity .15s ease, color .15s ease, border-color .15s ease, background .15s ease;
+      -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px);
+    }
+    .code-wrap:hover .copy, .copy:focus-visible { opacity: 1; }
+    .copy:hover { color: var(--accent); border-color: var(--accent-border); background: var(--code-bg); }
+    .copy:focus-visible { outline: 2px solid var(--accent-border); outline-offset: 2px; }
+    .copy svg { width: 15px; height: 15px; }
+    .copy.copied { color: #61c554; border-color: rgba(97, 197, 84, 0.45); opacity: 1; }
+    .copy.err { color: #ef6a5f; border-color: rgba(239, 106, 95, 0.45); opacity: 1; }
+
+    .install-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; }
+    /* min-width: 0 — else the codeblock's unbreakable release URL sets the
+       grid item's automatic minimum and overflows small viewports. */
+    .install-cols > div { min-width: 0; }
+    @media (max-width: 760px) { .install-cols { grid-template-columns: 1fr; } }
+    .install-cols h3 { font-family: var(--display); font-size: 1.1rem; margin: 0 0 14px; letter-spacing: -0.01em; }
+    .install-cols h3 .num { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+
+    /* ── Quick start recipes ───────────── */
+    .recipes { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @media (max-width: 820px) { .recipes { grid-template-columns: 1fr; } }
+    .recipe { overflow: hidden; }
+    .recipe .rhead { padding: 15px 18px 12px; border-bottom: 1px solid var(--border); }
+    .recipe .rhead h3 { font-family: var(--display); margin: 0 0 3px; font-size: 1.02rem; }
+    .recipe .rhead p { margin: 0; color: var(--dim); font-size: 0.86rem; }
+    .recipe pre { margin: 0; padding: 15px 18px; overflow-x: auto; font-size: 0.82rem; line-height: 1.7; background: var(--code-bg); }
+    .recipe pre .c { color: var(--dim); }
+    .recipe pre .p { color: var(--accent); }
+
+    /* ── Commands ──────────────────────── */
+    .cmd-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
+    .cmd-group { padding: 20px 22px; }
+    .cmd-group h3 { font-family: var(--display); margin: 0 0 14px; font-size: 0.82rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); }
+    .cmd-group ul { list-style: none; margin: 0; padding: 0; }
+    .cmd-group li { padding: 7px 0; border-bottom: 1px solid rgba(30,45,71,0.6); font-size: 0.92rem; }
+    .cmd-group li:last-child { border-bottom: none; }
+    .cmd-group li code { color: var(--accent); font-size: 0.86rem; }
+    .cmd-group li span { color: var(--muted); }
+
+    /* ── Demo callout ──────────────────── */
+    .demo-card {
+      position: relative; overflow: hidden;
+      display: flex; align-items: center; justify-content: space-between; gap: 28px; flex-wrap: wrap;
+      border: 1px solid transparent; border-radius: 16px; padding: 34px 36px;
+      /* Top layer is translucent, so an opaque middle layer must block the
+         border-box gradient everywhere except the 1px border ring. */
+      background:
+        linear-gradient(120deg, rgba(56, 189, 248, 0.10), rgba(129, 140, 248, 0.05)) padding-box,
+        linear-gradient(180deg, var(--bg-2), var(--bg-2)) padding-box,
+        linear-gradient(120deg, rgba(56, 189, 248, 0.55), rgba(129, 140, 248, 0.55)) border-box;
+    }
+    .demo-card::before {
+      content: ""; position: absolute; inset: 0; pointer-events: none;
+      background-image: radial-gradient(rgba(148, 163, 184, 0.13) 1px, transparent 1px);
+      background-size: 22px 22px;
+      -webkit-mask-image: radial-gradient(ellipse 60% 120% at 100% 50%, black, transparent 70%);
+      mask-image: radial-gradient(ellipse 60% 120% at 100% 50%, black, transparent 70%);
+    }
+    .demo-card > * { position: relative; }
+    .demo-card .txt { max-width: 560px; }
+    .demo-card h2 { font-family: var(--display); margin: 0 0 8px; font-size: 1.7rem; letter-spacing: -0.02em; }
+    .demo-card p { margin: 0; color: var(--muted); font-size: 1.02rem; }
+    .demo-card .glyph {
+      width: 92px; height: 92px; flex: none; border-radius: 18px; display: grid; place-items: center;
+      background: var(--code-bg); border: 1px solid var(--accent-border); color: var(--accent);
+    }
+    .demo-card .glyph::after {
+      content: ""; position: absolute; inset: -1px; border-radius: 18px;
+      border: 1px solid var(--accent-border);
+      animation: pulse 2.6s ease-out infinite;
+    }
+    @keyframes pulse {
+      0% { transform: scale(1); opacity: 0.9; }
+      70%, 100% { transform: scale(1.25); opacity: 0; }
+    }
+    .demo-card .glyph svg { width: 46px; height: 46px; }
+
+    /* ── Requirements strip ────────────── */
+    .req-strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+    .req { padding: 18px 20px; }
+    .req h4 { font-family: var(--display); margin: 0 0 6px; font-size: 0.95rem; color: var(--accent); }
+    .req p { margin: 0; color: var(--muted); font-size: 0.9rem; }
+    .req p code { color: var(--text); background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: 0.85em; }
+
+    /* ── Footer ────────────────────────── */
+    footer { border-top: 1px solid var(--border); padding: 44px 0 56px; }
+    .foot-grid { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 30px; }
+    .foot-brand { max-width: 340px; }
+    .foot-brand .brand { margin-bottom: 10px; }
+    .foot-brand p { color: var(--dim); font-size: 0.9rem; margin: 0; }
+    .foot-cols { display: flex; gap: 56px; flex-wrap: wrap; }
+    .foot-col h5 { font-family: var(--display); margin: 0 0 12px; font-size: 0.78rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+    .foot-col a { display: block; color: var(--dim); font-size: 0.9rem; padding: 4px 0; }
+    .foot-col a:hover { color: var(--accent); text-decoration: none; }
+    .foot-bottom { margin-top: 36px; padding-top: 20px; border-top: 1px solid var(--border); color: var(--dim); font-size: 0.85rem; }
+    .foot-bottom code { color: var(--muted); }
+
+    /* ── Scroll reveal ─────────────────── */
+    /* Gated on html.js (stamped in <head>) so no-JS users never see hidden
+       content, and on no-preference so reduced-motion users don't either.
+       Animation (not transition) so the entrance leaves no lingering
+       transform that would fight the cards' hover lift. */
+    @media (prefers-reduced-motion: no-preference) {
+      html.js :is(.sec-head, .feat, .plat, .recipe, .cmd-group, .req, .demo-card, .install-cols > div):not(.in) { opacity: 0; }
+      html.js :is(.sec-head, .feat, .plat, .recipe, .cmd-group, .req, .demo-card, .install-cols > div).in {
+        animation: rise .55s ease backwards;
+        animation-delay: var(--d, 0ms);
+      }
+    }
+    @keyframes rise { from { opacity: 0; transform: translateY(18px); } }
+
+    /* ── Reduced motion: kill all animation ── */
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { animation: none !important; transition: none !important; }
+      html { scroll-behavior: auto; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- ══ NAV ══ -->
+  <header class="nav">
+    <div class="nav-inner">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="14" fill="#0b1220" stroke="#38bdf8" stroke-width="2.5"/><g stroke="#38bdf8" stroke-width="4" fill="none" stroke-linecap="round"><ellipse cx="32" cy="19" rx="14" ry="6"/><path d="M18 19v14c0 3.3 6.3 6 14 6s14-2.7 14-6V19"/></g><path d="M20 45l6 5-6 5" stroke="#e2e8f0" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect x="31" y="52" width="13" height="4" rx="1" fill="#e2e8f0"/></svg>
+        <code>pg_sandbox</code>
+      </div>
+      <nav class="nav-links">
+        <a href="#features" class="hide-sm">Features</a>
+        <a href="#install">Install</a>
+        <a href="#quickstart" class="hide-sm">Quick start</a>
+        <a href="#commands" class="hide-sm">Commands</a>
+        <a href="#demo">Demo</a>
+        <a class="gh" href="https://github.com/guriandoro/postgresql_sandbox" aria-label="GitHub repository">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill-rule="evenodd" d="M12 0C5.37 0 0 5.37 0 12c0 5.31 3.435 9.795 8.205 11.385.6.105.825-.255.825-.57 0-.285-.015-1.23-.015-2.235-3.015.555-3.795-.735-4.035-1.41-.135-.345-.72-1.41-1.23-1.695-.42-.225-1.02-.78-.015-.795.945-.015 1.62.87 1.845 1.23 1.08 1.815 2.805 1.305 3.495.99.105-.78.42-1.305.765-1.605-2.67-.3-5.46-1.335-5.46-5.925 0-1.305.465-2.385 1.23-3.225-.12-.3-.54-1.53.12-3.18 0 0 1.005-.315 3.3 1.23.96-.27 1.98-.405 3-.405s2.04.135 3 .405c2.295-1.56 3.3-1.23 3.3-1.23.66 1.65.24 2.88.12 3.18.765.84 1.23 1.905 1.23 3.225 0 4.605-2.805 5.625-5.475 5.925.435.375.81 1.095.81 2.22 0 1.605-.015 2.895-.015 3.3 0 .315.225.69.825.57A12.02 12.02 0 0 0 24 12c0-6.63-5.37-12-12-12z"/></svg>
+          <span>GitHub</span>
+        </a>
+      </nav>
+    </div>
+    <span class="progress" aria-hidden="true"></span>
+  </header>
+
+  <!-- ══ HERO ══ -->
+  <section class="hero">
+    <div class="wrap hero-grid">
+      <div class="hero-copy">
+        <div class="chips">
+          <span class="chip"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v14c0 1.66 3.58 3 8 3s8-1.34 8-3V5"/><path d="M4 12c0 1.66 3.58 3 8 3s8-1.34 8-3"/></svg>PostgreSQL</span>
+          <span class="chip">macOS &amp; Linux</span>
+          <span class="chip">Single static binary</span>
+        </div>
+        <h1><span class="mono">pg_sandbox</span></h1>
+        <p class="tagline">disposable PostgreSQL, on demand</p>
+        <p class="lead">
+          A command-line tool that provisions, manages, and tears down local PostgreSQL
+          sandbox instances for development, testing, and bug reproduction. It ships as a
+          single static binary with no runtime dependencies beyond the PostgreSQL binaries
+          you point it at.
+        </p>
+        <div class="hero-cta">
+          <a class="btn btn-primary" href="#install">Install
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+          </a>
+          <a class="btn btn-ghost" href="#demo">See the demo walkthrough</a>
+          <a class="btn btn-ghost" href="https://github.com/guriandoro/postgresql_sandbox">View on GitHub</a>
+        </div>
+      </div>
+
+      <div class="terminal">
+        <div class="bar"><span></span><span></span><span></span><span class="label">pg_sandbox — bash</span></div>
+        <pre id="hero-term" data-copy="export PGS_BIN_DIR=/opt/postgresql/18.4
+pg_sandbox deploy -s pg18
+pg_sandbox status -s pg18
+pg_sandbox run -s pg18 -- pgbench -i
+pg_sandbox destroy -s pg18 --force"><span class="c"># point at an existing PostgreSQL install, then spin one up</span>
+<span class="p">$</span> export PGS_BIN_DIR=/opt/postgresql/18.4
+<span class="p">$</span> pg_sandbox deploy -s pg18
+<span class="p">$</span> pg_sandbox use -s pg18            <span class="c"># open psql</span>
+<span class="p">$</span> pg_sandbox run -s pg18 -- pgbench -i
+<span class="p">$</span> pg_sandbox destroy -s pg18 --force</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ FEATURES ══ -->
+  <section class="block" id="features">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker">What it does</div>
+        <h2>A lifecycle orchestrator for local PostgreSQL</h2>
+        <p>Not a database driver, server, or HA system — a tool to stand instances up and tear them down cleanly. Every invocation is a short-lived process; there is no daemon.</p>
+      </div>
+      <div class="feat-grid">
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2 3 14h9l-1 8 10-12h-9l1-8Z"/></svg></div>
+          <h3>One-command instances</h3>
+          <p>Stand up an isolated PostgreSQL instance with a single <code>deploy</code>. Ports are auto-allocated; connect with <code>use</code> or run any utility with <code>run</code>.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></div>
+          <h3>Replicated topologies</h3>
+          <p>Stand up physical streaming replication and logical pub/sub with <code>--replicate-from</code>, <code>publish</code>, and <code>subscribe</code>.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></div>
+          <h3>Managed clusters</h3>
+          <p>Provision a primary + N standbys (or publisher + N subscribers) in one <code>cluster deploy</code>, with shared manifest metadata and a consolidated status view.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/><circle cx="12" cy="12" r="3"/></svg></div>
+          <h3>Live state reporting</h3>
+          <p>Ask any sandbox whether it's running, primary or standby, its replication lag and subscriptions — as text or <code>--json</code>.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M3 12h18"/><path d="M3 18h18"/></svg></div>
+          <h3>Host-wide overview</h3>
+          <p><code>global_status</code> lists every sandbox on the machine at a glance, in text or JSON for piping into <code>jq</code>.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/><path d="M9 15h6"/><path d="M9 11h2"/></svg></div>
+          <h3>pg_gather reports</h3>
+          <p>Generate a <code>pg_gather</code> HTML report from a captured <code>out.txt</code> in a throwaway sandbox that's cleaned up automatically on success.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m2 2 8 8"/><path d="m22 2-8 8"/><path d="M12 12v9"/><path d="M8 21h8"/><circle cx="12" cy="7" r="3"/></svg></div>
+          <h3>Build from source</h3>
+          <p>Compile any PostgreSQL version with <code>build &lt;version&gt;</code> — optional <code>--with-icu</code> / <code>--with-openssl</code> and debug builds via <code>PGS_BUILD_DEBUG</code>.</p>
+        </div>
+        <div class="feat">
+          <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M8 4v16"/><path d="m14 9-3 3 3 3"/></svg></div>
+          <h3>Layered configuration</h3>
+          <p>Resolve every value through a documented chain — CLI flag &gt; <code>PGS_*</code> env var &gt; sandbox config &gt; global config &gt; default. Inspect exactly where each came from with <code>config show</code>.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ INSTALL ══ -->
+  <section class="block" id="install">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker">Install</div>
+        <h2>Grab a pre-built binary — or build from source</h2>
+        <p>Pre-built binaries are attached to each GitHub Release. Pick the artifact matching your platform; a <code>SHA256SUMS</code> file is published alongside each release for checksum verification.</p>
+      </div>
+
+      <div class="platforms">
+        <div class="plat">
+          <div class="os">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43z"/><path d="M20.93 17.14c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z"/></svg>
+            macOS
+          </div>
+          <div class="arch">Apple Silicon (arm64)</div>
+          <code class="artifact">pg_sandbox-darwin-arm64</code>
+        </div>
+        <div class="plat">
+          <div class="os">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M16.365 1.43c0 1.14-.493 2.27-1.177 3.08-.744.9-1.99 1.57-2.987 1.57-.12 0-.23-.02-.3-.03-.01-.06-.04-.22-.04-.39 0-1.15.572-2.27 1.206-2.98.804-.94 2.142-1.64 3.248-1.68.03.13.05.28.05.43z"/><path d="M20.93 17.14c-.03.07-.463 1.58-1.518 3.12-.945 1.34-1.94 2.71-3.43 2.71-1.517 0-1.9-.88-3.63-.88-1.698 0-2.302.91-3.67.91-1.377 0-2.332-1.26-3.428-2.8-1.287-1.82-2.323-4.63-2.323-7.28 0-4.28 2.797-6.55 5.552-6.55 1.448 0 2.675.95 3.6.95.865 0 2.222-1.01 3.902-1.01.613 0 2.886.06 4.374 2.19-.13.09-2.383 1.37-2.383 4.19 0 3.26 2.854 4.42 2.955 4.45z"/></svg>
+            macOS
+          </div>
+          <div class="arch">Intel (amd64)</div>
+          <code class="artifact">pg_sandbox-darwin-amd64</code>
+        </div>
+        <div class="plat">
+          <div class="os">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5c-2.4 0-3.9 1.9-3.9 4.4 0 1.2-.2 1.9-.9 2.9-1 1.4-2 3-2 5.1 0 1.4.5 2.4 1 3.2.4.6.3 1.2 0 1.8-.3.6-.7 1.2-.3 1.8.5.7 1.7.6 2.9.6h6.4c1.2 0 2.4.1 2.9-.6.4-.6 0-1.2-.3-1.8-.3-.6-.4-1.2 0-1.8.5-.8 1-1.8 1-3.2 0-2.1-1-3.7-2-5.1-.7-1-.9-1.7-.9-2.9 0-2.5-1.5-4.4-3.9-4.4Z"/><path d="M8.8 14.2c0-1.9 1.3-3.2 3.2-3.2s3.2 1.3 3.2 3.2c0 2.4-1 5.6-3.2 5.6s-3.2-3.2-3.2-5.6Z"/><path d="M10.9 8.8c.6.7 1.6.7 2.2 0"/><path d="M9 21.8c-.7.9-1.8 1.4-2.9 1.2M15 21.8c.7.9 1.8 1.4 2.9 1.2"/><circle cx="10.5" cy="7" r=".55" fill="currentColor" stroke="none"/><circle cx="13.5" cy="7" r=".55" fill="currentColor" stroke="none"/></svg>
+            Linux
+          </div>
+          <div class="arch">x86_64 (amd64)</div>
+          <code class="artifact">pg_sandbox-linux-amd64</code>
+        </div>
+        <div class="plat">
+          <div class="os">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.5c-2.4 0-3.9 1.9-3.9 4.4 0 1.2-.2 1.9-.9 2.9-1 1.4-2 3-2 5.1 0 1.4.5 2.4 1 3.2.4.6.3 1.2 0 1.8-.3.6-.7 1.2-.3 1.8.5.7 1.7.6 2.9.6h6.4c1.2 0 2.4.1 2.9-.6.4-.6 0-1.2-.3-1.8-.3-.6-.4-1.2 0-1.8.5-.8 1-1.8 1-3.2 0-2.1-1-3.7-2-5.1-.7-1-.9-1.7-.9-2.9 0-2.5-1.5-4.4-3.9-4.4Z"/><path d="M8.8 14.2c0-1.9 1.3-3.2 3.2-3.2s3.2 1.3 3.2 3.2c0 2.4-1 5.6-3.2 5.6s-3.2-3.2-3.2-5.6Z"/><path d="M10.9 8.8c.6.7 1.6.7 2.2 0"/><path d="M9 21.8c-.7.9-1.8 1.4-2.9 1.2M15 21.8c.7.9 1.8 1.4 2.9 1.2"/><circle cx="10.5" cy="7" r=".55" fill="currentColor" stroke="none"/><circle cx="13.5" cy="7" r=".55" fill="currentColor" stroke="none"/></svg>
+            Linux
+          </div>
+          <div class="arch">ARM64 · Graviton, RPi, ARM VMs</div>
+          <code class="artifact">pg_sandbox-linux-arm64</code>
+        </div>
+      </div>
+
+      <div class="install-cols">
+        <div>
+          <h3><span class="num">1</span>Download &amp; install</h3>
+          <div class="codeblock">
+            <div class="head"><span class="t">install the Linux x86_64 binary into /usr/local/bin</span><span class="tag">pre-built</span></div>
+            <pre><span class="p">curl</span> -L -o /usr/local/bin/pg_sandbox \
+  https://github.com/guriandoro/postgresql_sandbox/releases/latest/download/pg_sandbox-linux-amd64
+<span class="p">chmod</span> +x /usr/local/bin/pg_sandbox</pre>
+          </div>
+          <p class="note">Pre-built binaries have no Go requirement. <code>CGO_ENABLED=0</code> on the cross-compile path means the Linux artifacts have no glibc dependency and run on any reasonably-recent kernel.</p>
+        </div>
+        <div>
+          <h3><span class="num">2</span>Build from source</h3>
+          <div class="codeblock">
+            <div class="head"><span class="t">requires Go 1.22 or newer</span><span class="tag">source</span></div>
+            <pre><span class="c"># local-arch binary into ./bin/pg_sandbox</span>
+<span class="p">make</span> build
+
+<span class="c"># all four release binaries into ./bin/</span>
+<span class="p">make</span> build-all
+
+<span class="c"># or, without GNU make:</span>
+<span class="p">./scripts/build.sh</span></pre>
+          </div>
+          <p class="note">Binaries are stripped (<code>-ldflags="-s -w"</code>) and stamped with the current version + commit — <code>pg_sandbox --version</code> shows both.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ REQUIREMENTS ══ -->
+  <section class="block" id="requirements">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker">Requirements</div>
+        <h2>What you need on the machine</h2>
+        <p><code>pg_sandbox</code> does not bundle PostgreSQL — it points at an existing install and trusts that install's own version semantics.</p>
+      </div>
+      <div class="req-strip">
+        <div class="req">
+          <h4>PostgreSQL binaries</h4>
+          <p><code>initdb</code>, <code>pg_ctl</code>, <code>psql</code>, <code>pg_basebackup</code>, <code>pg_dump</code> reachable on disk — pointed at via <code>--bin-dir</code> or <code>PGS_BIN_DIR</code>.</p>
+        </div>
+        <div class="req">
+          <h4>macOS or Linux</h4>
+          <p>Targets <code>amd64</code> and <code>arm64</code>. Windows is not supported.</p>
+        </div>
+        <div class="req">
+          <h4>Go 1.22+</h4>
+          <p>Only for building from source — pre-built release binaries carry no Go requirement.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ QUICK START ══ -->
+  <section class="block" id="quickstart">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker">Quick start</div>
+        <h2>End-to-end recipes</h2>
+        <p>Each recipe assumes you've pointed at an install root once per shell session: <code>export PGS_BIN_DIR=/opt/postgresql/18.4</code>. A bare <code>-s &lt;name&gt;</code> resolves under the sandbox root, so it names the same sandbox from any directory.</p>
+      </div>
+      <div class="recipes">
+        <div class="recipe">
+          <div class="rhead"><h3>A single sandbox</h3><p>deploy · connect · run · tear down</p></div>
+          <pre><span class="c"># deploy a standalone instance</span>
+<span class="p">pg_sandbox</span> deploy -s pg18
+
+<span class="c"># connect with psql</span>
+<span class="p">pg_sandbox</span> use -s pg18
+
+<span class="c"># run any utility (auto-injected flags)</span>
+<span class="p">pg_sandbox</span> run -s pg18 -- pgbench -i
+
+<span class="c"># stop and tear down</span>
+<span class="p">pg_sandbox</span> destroy -s pg18 --force</pre>
+        </div>
+        <div class="recipe">
+          <div class="rhead"><h3>Physical streaming replication</h3><p>primary + async standby</p></div>
+          <pre><span class="c"># primary</span>
+<span class="p">pg_sandbox</span> deploy -s primary
+
+<span class="c"># async standby attached to it</span>
+<span class="p">pg_sandbox</span> deploy -s standby1 \
+    --replicate-from primary \
+    --slot primary_standby1_slot
+
+<span class="c"># promote standby1 if primary dies</span>
+<span class="p">pg_sandbox</span> promote -s standby1</pre>
+        </div>
+        <div class="recipe">
+          <div class="rhead"><h3>Logical pub/sub</h3><p>publisher + subscriber</p></div>
+          <pre><span class="c"># publisher</span>
+<span class="p">pg_sandbox</span> deploy -s pub
+<span class="p">pg_sandbox</span> publish -s pub \
+    --pub-name my_pub --all-tables
+
+<span class="c"># subscriber (deployed already subscribed)</span>
+<span class="p">pg_sandbox</span> deploy -s sub \
+    --subscribe-to pub \
+    --pub-name my_pub --copy-schema</pre>
+        </div>
+        <div class="recipe">
+          <div class="rhead"><h3>A managed cluster</h3><p>1 primary + 2 standbys</p></div>
+          <pre><span class="c"># deploy the whole cluster at once</span>
+<span class="p">pg_sandbox</span> cluster deploy -s mycluster \
+    -N 2 --sync-count 1
+
+<span class="c"># consolidated status</span>
+<span class="p">pg_sandbox</span> cluster status -s mycluster
+
+<span class="c"># tear down everything in one shot</span>
+<span class="p">pg_sandbox</span> cluster destroy -s mycluster --force</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ COMMANDS ══ -->
+  <section class="block" id="commands">
+    <div class="wrap">
+      <div class="sec-head">
+        <div class="kicker">Reference</div>
+        <h2>The command set</h2>
+        <p>Run <code>pg_sandbox help &lt;command&gt;</code> (or <code>pg_sandbox &lt;command&gt; --help</code>) for full usage, flags, and examples on any single command.</p>
+      </div>
+      <div class="cmd-grid">
+        <div class="cmd-group">
+          <h3>Lifecycle</h3>
+          <ul>
+            <li><code>deploy</code> <span>— create a new sandbox</span></li>
+            <li><code>destroy</code> <span>— tear down a sandbox</span></li>
+            <li><code>start</code> / <code>stop</code> / <code>restart</code> <span>— control PostgreSQL</span></li>
+            <li><code>status</code> <span>— running state + replication info</span></li>
+            <li><code>use</code> <span>— open psql against a sandbox</span></li>
+            <li><code>run &lt;bin&gt;</code> <span>— run any PG utility</span></li>
+            <li><code>promote</code> <span>— standby → standalone primary</span></li>
+          </ul>
+        </div>
+        <div class="cmd-group">
+          <h3>Configuration</h3>
+          <ul>
+            <li><code>config show</code> <span>— effective config + source</span></li>
+            <li><code>config get &lt;KEY&gt;</code> <span>— read one value</span></li>
+            <li><code>config set KEY=VAL</code> <span>— mutate atomically</span></li>
+            <li><code>config validate</code> <span>— check the config</span></li>
+            <li><code>config migrate</code> <span>— convert legacy .env</span></li>
+          </ul>
+        </div>
+        <div class="cmd-group">
+          <h3>Replication</h3>
+          <ul>
+            <li><code>publish</code> <span>— create a publication</span></li>
+            <li><code>subscribe</code> <span>— create a subscription</span></li>
+          </ul>
+        </div>
+        <div class="cmd-group">
+          <h3>Cluster orchestration</h3>
+          <ul>
+            <li><code>cluster deploy</code> <span>— primary + N standbys</span></li>
+            <li><code>cluster status</code> <span>— consolidated view</span></li>
+            <li><code>cluster destroy</code> <span>— tear the cluster down</span></li>
+          </ul>
+        </div>
+        <div class="cmd-group">
+          <h3>Cross-host &amp; reporting</h3>
+          <ul>
+            <li><code>global_status</code> <span>— list every sandbox</span></li>
+            <li><code>report --input</code> <span>— pg_gather HTML report</span></li>
+          </ul>
+        </div>
+        <div class="cmd-group">
+          <h3>Source build &amp; maintenance</h3>
+          <ul>
+            <li><code>build &lt;version&gt;</code> <span>— compile PG from source</span></li>
+            <li><code>cleanup-install-versions</code> <span>— prune unused installs</span></li>
+            <li><code>help [&lt;command&gt;]</code> <span>— built-in help</span></li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ DEMO ══ -->
+  <section class="block" id="demo">
+    <div class="wrap">
+      <div class="demo-card">
+        <div class="txt">
+          <div class="kicker">See it in motion</div>
+          <h2>The demo walkthrough</h2>
+          <p>A slide-by-slide walkthrough — spin up any installed PG version in seconds, wire replication, and generate a report — every command verified working end-to-end against a real install.</p>
+          <div style="margin-top:22px;">
+            <a class="btn btn-primary" href="pg_sandbox_demo.html">Open the demo
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7"/><path d="M7 7h10v10"/></svg>
+            </a>
+          </div>
+        </div>
+        <div class="glyph">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="m10 8 4 2.5L10 13Z" fill="currentColor"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ══ FOOTER ══ -->
+  <footer>
+    <div class="wrap">
+      <div class="foot-grid">
+        <div class="foot-brand">
+          <div class="brand">
+            <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect x="2" y="2" width="60" height="60" rx="14" fill="#0b1220" stroke="#38bdf8" stroke-width="2.5"/><g stroke="#38bdf8" stroke-width="4" fill="none" stroke-linecap="round"><ellipse cx="32" cy="19" rx="14" ry="6"/><path d="M18 19v14c0 3.3 6.3 6 14 6s14-2.7 14-6V19"/></g><path d="M20 45l6 5-6 5" stroke="#e2e8f0" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/><rect x="31" y="52" width="13" height="4" rx="1" fill="#e2e8f0"/></svg>
+            <code>pg_sandbox</code>
+          </div>
+          <p>Disposable PostgreSQL, on demand. The canonical functional contract lives in <code>SPEC.md</code>.</p>
+        </div>
+        <div class="foot-cols">
+          <div class="foot-col">
+            <h5>Documentation</h5>
+            <a href="https://github.com/guriandoro/postgresql_sandbox/blob/master/SPEC.md">SPEC.md — the contract</a>
+            <a href="https://github.com/guriandoro/postgresql_sandbox/blob/master/docs/commands.md">Command reference</a>
+            <a href="https://github.com/guriandoro/postgresql_sandbox/blob/master/docs/environment.md">Environment variables</a>
+            <a href="https://github.com/guriandoro/postgresql_sandbox/blob/master/docs/exit-codes.md">Exit codes</a>
+            <a href="https://github.com/guriandoro/postgresql_sandbox/blob/master/docs/examples.md">Examples</a>
+          </div>
+          <div class="foot-col">
+            <h5>Project</h5>
+            <a href="https://github.com/guriandoro/postgresql_sandbox">Repository</a>
+            <a href="https://github.com/guriandoro/postgresql_sandbox/releases/latest">Latest release</a>
+            <a href="#install">Install</a>
+            <a href="#demo">Demo walkthrough</a>
+          </div>
+        </div>
+      </div>
+      <div class="foot-bottom">
+        Runs on macOS &amp; Linux · <code>amd64</code> / <code>arm64</code> · a single static binary with no runtime dependencies beyond the PostgreSQL binaries you point it at.
+      </div>
+    </div>
+  </footer>
+
+  <script>
+    (function () {
+      var COPY = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+      var CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>';
+
+      // Render the block as text, then drop the leading `$ ` shell prompt from
+      // each line so the clipboard holds runnable commands (comments kept —
+      // the shell ignores them, so a whole recipe pastes and runs top-to-bottom).
+      function clean(pre) {
+        return pre.innerText
+          .split('\n')
+          .map(function (l) { return l.replace(/^\s*\$\s?/, ''); })
+          .join('\n')
+          .replace(/\s+$/, '');
+      }
+
+      function copyText(text) {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          return navigator.clipboard.writeText(text);
+        }
+        // Fallback for file:// / non-secure contexts where the async API is absent.
+        return new Promise(function (resolve, reject) {
+          try {
+            var ta = document.createElement('textarea');
+            ta.value = text;
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.focus();
+            ta.select();
+            var ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            ok ? resolve() : reject(new Error('execCommand failed'));
+          } catch (e) { reject(e); }
+        });
+      }
+
+      var pres = document.querySelectorAll('.terminal pre, .codeblock pre, .recipe pre');
+      Array.prototype.forEach.call(pres, function (pre) {
+        var wrap = document.createElement('div');
+        wrap.className = 'code-wrap';
+        pre.parentNode.insertBefore(wrap, pre);
+        wrap.appendChild(pre);
+
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'copy';
+        btn.setAttribute('aria-label', 'Copy to clipboard');
+        btn.innerHTML = COPY;
+        wrap.appendChild(btn);
+
+        var timer;
+        btn.addEventListener('click', function () {
+          // The animated hero terminal declares its canonical copy text via
+          // data-copy so a mid-animation copy still yields the full commands.
+          copyText(pre.dataset.copy || clean(pre)).then(function () {
+            clearTimeout(timer);
+            btn.classList.remove('err');
+            btn.classList.add('copied');
+            btn.innerHTML = CHECK;
+            btn.setAttribute('aria-label', 'Copied');
+            timer = setTimeout(function () {
+              btn.classList.remove('copied');
+              btn.innerHTML = COPY;
+              btn.setAttribute('aria-label', 'Copy to clipboard');
+            }, 1600);
+          }).catch(function () {
+            clearTimeout(timer);
+            btn.classList.add('err');
+            timer = setTimeout(function () { btn.classList.remove('err'); }, 1600);
+          });
+        });
+      });
+    })();
+
+    (function () {
+      var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      var hasIO = 'IntersectionObserver' in window;
+
+      /* ── Scroll progress bar ── */
+      var prog = document.querySelector('.nav .progress');
+      if (prog) {
+        var ticking = false;
+        var updProg = function () {
+          ticking = false;
+          var max = document.documentElement.scrollHeight - window.innerHeight;
+          prog.style.transform = 'scaleX(' + (max > 0 ? Math.min(1, window.scrollY / max) : 0) + ')';
+        };
+        window.addEventListener('scroll', function () {
+          if (!ticking) { ticking = true; requestAnimationFrame(updProg); }
+        }, { passive: true });
+        window.addEventListener('resize', updProg);
+        updProg();
+      }
+
+      /* ── Active-section nav highlighting ── */
+      var navLinks = {};
+      Array.prototype.forEach.call(document.querySelectorAll('.nav-links a[href^="#"]'), function (a) {
+        navLinks[a.getAttribute('href').slice(1)] = a;
+      });
+      var watched = [document.querySelector('.hero')]
+        .concat(Array.prototype.slice.call(document.querySelectorAll('section[id]')))
+        .filter(Boolean);
+      if (hasIO && watched.length) {
+        var navIO = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (!e.isIntersecting) return;
+            // Sections without a nav link (hero, requirements) clear the highlight.
+            for (var id in navLinks) navLinks[id].classList.toggle('active', id === e.target.id);
+          });
+        }, { rootMargin: '-35% 0px -60% 0px' });
+        watched.forEach(function (s) { navIO.observe(s); });
+      }
+
+      /* ── Scroll reveal ── */
+      var targets = document.querySelectorAll('.sec-head, .feat, .plat, .recipe, .cmd-group, .req, .demo-card, .install-cols > div');
+      if (reduce || !hasIO) {
+        Array.prototype.forEach.call(targets, function (t) { t.classList.add('in'); });
+      } else {
+        Array.prototype.forEach.call(targets, function (el) {
+          var i = Array.prototype.indexOf.call(el.parentNode.children, el);
+          el.style.setProperty('--d', (i % 4) * 70 + 'ms');
+        });
+        var revIO = new IntersectionObserver(function (entries) {
+          entries.forEach(function (e) {
+            if (e.isIntersecting) { e.target.classList.add('in'); revIO.unobserve(e.target); }
+          });
+        }, { threshold: 0.12, rootMargin: '0px 0px -4% 0px' });
+        Array.prototype.forEach.call(targets, function (t) { revIO.observe(t); });
+      }
+
+      /* ── Self-typing hero terminal ── */
+      // The static <pre> content is the fallback: reduced-motion, no-JS, and
+      // pre-IntersectionObserver browsers keep it untouched.
+      var pre = document.getElementById('hero-term');
+      if (!pre || reduce || !hasIO) return;
+
+      // Command/output lines mirror the tool's real formats (see
+      // internal/sandbox/deploy.go, status.go RenderText, destroy.go).
+      var SCRIPT = [
+        { t: 'c',   s: '# point at an existing PostgreSQL install, then spin one up' },
+        { t: 'cmd', s: 'export PGS_BIN_DIR=/opt/postgresql/18.4' },
+        { t: 'cmd', s: 'pg_sandbox deploy -s pg18' },
+        { t: 'o',   s: 'level=INFO msg="deployed sandbox" name="pg18" host="127.0.0.1" port=65432' },
+        { t: 'cmd', s: 'pg_sandbox status -s pg18' },
+        { t: 'o',   s: 'name=pg18' },
+        { t: 'o',   s: 'state=running' },
+        { t: 'o',   s: 'role=primary' },
+        { t: 'cmd', s: 'pg_sandbox run -s pg18 -- pgbench -i' },
+        { t: 'o',   s: 'done in 0.18 s (create tables 0.01 s, generate 0.12 s, vacuum 0.03 s).' },
+        { t: 'cmd', s: 'pg_sandbox destroy -s pg18 --force' },
+        { t: 'o',   s: 'level=INFO msg="destroyed" name="pg18"' }
+      ];
+
+      var cursor = document.createElement('span');
+      cursor.className = 'cursor';
+
+      function appendLine(item, full) {
+        if (item.t === 'cmd') {
+          var p = document.createElement('span');
+          p.className = 'p';
+          p.textContent = '$';
+          pre.insertBefore(p, cursor);
+          var txt = document.createTextNode(' ' + (full ? item.s : ''));
+          pre.insertBefore(txt, cursor);
+          return txt;
+        }
+        var sp = document.createElement('span');
+        sp.className = item.t === 'c' ? 'c' : 'o';
+        sp.textContent = item.s;
+        pre.insertBefore(sp, cursor);
+        return null;
+      }
+
+      function newline() { pre.insertBefore(document.createTextNode('\n'), cursor); }
+
+      function reset() {
+        pre.textContent = '';
+        pre.appendChild(cursor);
+      }
+
+      // Render the fully-typed script once and pin the box to that height,
+      // so neither typing nor line wrapping ever shifts the layout below.
+      function lockHeight() {
+        reset();
+        SCRIPT.forEach(function (item) { appendLine(item, true); newline(); });
+        pre.style.minHeight = pre.offsetHeight + 'px';
+      }
+
+      function typeChars(node, s, j, done) {
+        if (j >= s.length) { done(); return; }
+        node.data += s.charAt(j);
+        setTimeout(function () { typeChars(node, s, j + 1, done); }, 22 + Math.random() * 34);
+      }
+
+      function step(i) {
+        if (i >= SCRIPT.length) {
+          setTimeout(function () { reset(); setTimeout(function () { step(0); }, 500); }, 4500);
+          return;
+        }
+        var item = SCRIPT[i];
+        if (item.t === 'cmd') {
+          var txt = appendLine(item, false);
+          typeChars(txt, item.s, 0, function () {
+            newline();
+            setTimeout(function () { step(i + 1); }, 380);
+          });
+        } else {
+          appendLine(item, true);
+          newline();
+          setTimeout(function () { step(i + 1); }, item.t === 'c' ? 500 : 260);
+        }
+      }
+
+      var started = false;
+      var termIO = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (!e.isIntersecting || started) return;
+          started = true;
+          termIO.disconnect();
+          lockHeight();
+          reset();
+          setTimeout(function () { step(0); }, 350);
+        });
+      }, { threshold: 0.3 });
+      termIO.observe(pre);
+    })();
+  </script>
+
+</body>
+</html>
