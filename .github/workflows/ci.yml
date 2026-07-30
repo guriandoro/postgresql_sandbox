@@ -21,7 +21,14 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          # 'stable' tracks the latest supported Go. Do NOT pin to 1.22:
+          # it is EOL, and its macOS linker omits the LC_UUID load command
+          # that current macos-latest dyld requires, so cgo/net-importing
+          # test binaries abort at launch on the macOS runner (Linux is
+          # unaffected). Fixed upstream in Go 1.23. See the CI history:
+          # green through 2b53512, red from 6ba4db4 once the runner image
+          # moved to an LC_UUID-enforcing macOS.
+          go-version: 'stable'
           check-latest: true
           cache: true
 
