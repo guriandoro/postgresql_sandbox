@@ -65,21 +65,18 @@ import (
 // before `--` need their own end-of-options handling on top of this
 // helper.
 //
-// LIMITATIONS (intentional — caller is responsible):
-//   - Only BOOLEAN flags. A flag that takes a value (e.g. `--root
-//     /path`) requires its value to appear immediately after it, so
-//     reordering would break the pair. Don't put value-taking flag
-//     names in `knownBoolFlags`. Production callers should pass
-//     `boolFlagNames(fs)` to derive the list from a FlagSet whose
-//     flags have already been registered (boolFlagNames needs the
-//     registrations, not Parse — and in fact must run before Parse,
-//     since the reorder happens on argv on the way INTO Parse).
-//     That guarantees this caveat automatically (BoolVar flags are
-//     bool; StringVar/IntVar/etc. are not). Tests may still pass a
-//     hand-written bare-name list directly.
+// Value-taking flags are handled separately by reorderValueFlags and
+// parseSubcommandArgs runs value reorder before bool reorder so
+// invocations like `build 17.9 -b /opt/postgresql` work.
 //
-// The helper is intentionally narrow: it fixes the positional-before-
-// bool-flag UX on a per-subcommand basis without changing the global
+// LIMITATIONS (intentional — caller is responsible):
+//   - reorderBoolFlags only promotes BOOLEAN flags. Value-taking
+//     flags belong in reorderValueFlags via valueFlagNames(fs).
+//   - Only subcommands that call parseSubcommandArgs get both
+//     reorders; others still require flags before positionals.
+//
+// The helpers are intentionally narrow: they fix the positional-before-
+// flag UX on a per-subcommand basis without changing the global
 // CLI surface (no rewriting of os.Args, no global pre-parse pass).
 func reorderBoolFlags(argv []string, knownBoolFlags []string) []string {
 	known := make(map[string]bool, len(knownBoolFlags))
@@ -112,17 +109,9 @@ func reorderBoolFlags(argv []string, knownBoolFlags []string) []string {
 // any trailing `=…` suffix) is in `known`. A bare word with no
 // leading dash (e.g. `force`) is not a flag and never matches.
 func isKnownBoolFlagToken(tok string, known map[string]bool) bool {
-	// Must start with a dash to be a flag at all.
-	if !strings.HasPrefix(tok, "-") {
+	name := bareFlagName(tok)
+	if name == "" {
 		return false
-	}
-	// Strip the leading `--` or `-`. Go's `flag` package treats both
-	// the same, so we do too.
-	name := strings.TrimPrefix(tok, "-")
-	name = strings.TrimPrefix(name, "-")
-	// Drop any `=value` suffix; Go's flag accepts `--force=true`.
-	if eq := strings.IndexByte(name, '='); eq >= 0 {
-		name = name[:eq]
 	}
 	return known[name]
 }
@@ -146,11 +135,97 @@ func boolFlagNames(fs *flag.FlagSet) []string {
 	return names
 }
 
-// parseSubcommandArgs is the canonical wrapper that reorders bool
-// flags in `args` to the front of the slice (so positionals before
-// bool flags don't make `flag.Parse` stop early) and then calls
-// fs.Parse. Subcommands that mix positional args with BoolVar flags
-// should call this instead of fs.Parse directly.
+// reorderValueFlags moves any token in `argv` that names a known
+// value-taking flag to the front of the returned slice, together with
+// its value when the value is a separate token. Positionals keep
+// their relative order and follow the promoted flag groups.
+//
+// Inline `--flag=value` forms are promoted as a single token. For
+// bare `--flag` / `-f` forms the immediately following token is
+// consumed as the value unless it is `--`.
+func reorderValueFlags(argv []string, knownValueFlags []string) []string {
+	known := make(map[string]bool, len(knownValueFlags))
+	for _, f := range knownValueFlags {
+		known[f] = true
+	}
+
+	flags := make([]string, 0, len(argv))
+	positionals := make([]string, 0, len(argv))
+	for i := 0; i < len(argv); i++ {
+		tok := argv[i]
+		if tok == "--" {
+			out := append(flags, positionals...)
+			out = append(out, argv[i:]...)
+			return out
+		}
+		if isKnownValueFlagToken(tok, known) {
+			flags = append(flags, tok)
+			if !valueFlagHasInlineValue(tok) && i+1 < len(argv) && argv[i+1] != "--" {
+				i++
+				flags = append(flags, argv[i])
+			}
+			continue
+		}
+		positionals = append(positionals, tok)
+	}
+	return append(flags, positionals...)
+}
+
+// isKnownValueFlagToken reports whether tok names a known value flag.
+func isKnownValueFlagToken(tok string, known map[string]bool) bool {
+	name := bareFlagName(tok)
+	if name == "" {
+		return false
+	}
+	return known[name]
+}
+
+// valueFlagHasInlineValue reports whether tok uses `--name=value` form.
+func valueFlagHasInlineValue(tok string) bool {
+	name := bareFlagName(tok)
+	if name == "" {
+		return false
+	}
+	// bareFlagName strips =value; compare original stripped prefix.
+	if !strings.HasPrefix(tok, "-") {
+		return false
+	}
+	rest := strings.TrimPrefix(tok, "-")
+	rest = strings.TrimPrefix(rest, "-")
+	return strings.Contains(rest, "=")
+}
+
+// bareFlagName returns the flag name from tok, or "" if tok is not
+// flag-shaped. Strips one or two leading dashes and any =value suffix.
+func bareFlagName(tok string) string {
+	if !strings.HasPrefix(tok, "-") {
+		return ""
+	}
+	name := strings.TrimPrefix(tok, "-")
+	name = strings.TrimPrefix(name, "-")
+	if eq := strings.IndexByte(name, '='); eq >= 0 {
+		name = name[:eq]
+	}
+	return name
+}
+
+// valueFlagNames returns bare names of every non-boolean flag on fs.
+func valueFlagNames(fs *flag.FlagSet) []string {
+	var names []string
+	fs.VisitAll(func(f *flag.Flag) {
+		if bf, ok := f.Value.(interface{ IsBoolFlag() bool }); ok && bf.IsBoolFlag() {
+			return
+		}
+		names = append(names, f.Name)
+	})
+	return names
+}
+
+// parseSubcommandArgs is the canonical wrapper that reorders value-
+// and bool-flags in `args` to the front of the slice (so positionals
+// before flags don't make `flag.Parse` stop early) and then calls
+// fs.Parse. Subcommands that mix positional args with flags should
+// call this instead of fs.Parse directly.
 //
 // Why a wrapper instead of "remember to call reorderBoolFlags then
 // fs.Parse"? The ordering is load-bearing: boolFlagNames must run
@@ -166,6 +241,7 @@ func boolFlagNames(fs *flag.FlagSet) []string {
 // enumeration to keep in sync, and inserting a new BoolVar between
 // `fs.BoolVar(...)` lines and this call is the only supported shape.
 func parseSubcommandArgs(fs *flag.FlagSet, args []string) error {
+	args = reorderValueFlags(args, valueFlagNames(fs))
 	args = reorderBoolFlags(args, boolFlagNames(fs))
 	return fs.Parse(args)
 }

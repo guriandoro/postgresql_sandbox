@@ -65,6 +65,15 @@ func TestRunBuild_debugQuietMutex(t *testing.T) {
 	}
 }
 
+func TestRunBuild_versionThenBinDirNotTreatedAsSecondVersion(t *testing.T) {
+	var stderr bytes.Buffer
+	rc := runBuild([]string{"99.99", "-b", "/opt/postgresql"}, nil, &stderr)
+	_ = rc
+	if strings.Contains(stderr.String(), "only one version may be built at a time") {
+		t.Errorf("-b after version regressed to positional; stderr=%q", stderr.String())
+	}
+}
+
 func TestRunBuild_versionThenForceParsesAsFlagThenPositional(t *testing.T) {
 	// The headline reorder contract from argv.go: a positional
 	// version followed by a bool flag (`build 18.4 --force`) must
